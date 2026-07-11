@@ -108,9 +108,9 @@ uvx ppt-master native-enhance-pptx apply <project_path>
 Native preset shape authoring (one registry-backed fragment on stdout):
 
 ```bash
-python3 scripts/preset_shape_svg.py list --search arrow
-python3 scripts/preset_shape_svg.py describe rightArrow
-python3 scripts/preset_shape_svg.py render rightArrow --id process-arrow --frame 120 180 240 96 --fill '#2563EB'
+uvx ppt-master preset-shape-svg list --search arrow
+uvx ppt-master preset-shape-svg describe rightArrow
+uvx ppt-master preset-shape-svg render rightArrow --id process-arrow --frame 120 180 240 96 --fill '#2563EB'
 ```
 
 The helper never writes a page or project file. Select one exact semantic stock-shape match, inspect the emitted fragment, and insert it into the hand-authored SVG with the normal patch workflow. Keep ordinary rectangles, ellipses, freeform geometry, charts, icons, and ambiguous silhouettes as regular SVG. See [`references/native-shape-authoring.md`](../references/native-shape-authoring.md) for the selection and metadata contract.
