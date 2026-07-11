@@ -53,14 +53,24 @@ else:
 
 try:
     from svg_to_pptx.drawingml.utils import (
+        IDENTITY_MATRIX as _IDENTITY_MATRIX,
+        matrix_multiply as _matrix_multiply,
+        parse_transform_matrix as _parse_transform_matrix,
         parse_font_family as _parse_export_font_family,
         parse_inline_style as _parse_inline_style,
         parse_svg_color as _parse_export_color,
+        rect_to_dml_xfrm as _rect_to_dml_xfrm,
+        validate_dml_shape_matrix as _validate_dml_shape_matrix,
     )
 except ImportError:
+    _IDENTITY_MATRIX = None
+    _matrix_multiply = None
+    _parse_transform_matrix = None
     _parse_export_font_family = None
     _parse_inline_style = None
     _parse_export_color = None
+    _rect_to_dml_xfrm = None
+    _validate_dml_shape_matrix = None
 
 try:
     from svg_to_pptx.drawingml.converter import (
@@ -68,6 +78,33 @@ try:
     )
 except ImportError:
     _collect_unsupported_visuals = None
+
+try:
+    from svg_to_pptx.drawingml.elements import (
+        validate_preset_geometry_metadata as _validate_preset_geometry_metadata,
+    )
+except ImportError:
+    _validate_preset_geometry_metadata = None
+
+try:
+    from pptx_to_svg.preset_authoring import (
+        AUTHORING_ATTR as _AUTHORING_ATTR,
+        validate_authored_preset_tree as _validate_authored_preset_tree,
+    )
+except ImportError:
+    _AUTHORING_ATTR = 'data-pptx-authoring'
+    _validate_authored_preset_tree = None
+
+try:
+    from pptx_shapes import (
+        CONNECTOR_PRESET_TYPES as _CONNECTOR_PRESET_TYPES,
+        resolve_preset_preview_hash as _resolve_preset_preview_hash,
+        svg_preset_preview_fingerprint as _svg_preset_preview_fingerprint,
+    )
+except ImportError:
+    _CONNECTOR_PRESET_TYPES = frozenset()
+    _resolve_preset_preview_hash = None
+    _svg_preset_preview_fingerprint = None
 
 try:
     from svg_to_pptx.native_objects import (
@@ -456,6 +493,12 @@ class SVGQualityChecker:
             # produce misleading errors on a broken document.
             root = self._parse_xml_root(content, result)
             if root is not None:
+                if root.get('transform'):
+                    result['errors'].append(
+                        'Root <svg> transform is unsupported; apply transforms '
+                        'to child elements or groups'
+                    )
+
                 # 1. Check viewBox
                 self._check_viewbox(root, result, expected_format)
 
@@ -485,6 +528,10 @@ class SVGQualityChecker:
 
                 # 7b. Reject visual elements the native converter cannot dispatch.
                 self._check_unsupported_visual_elements(root, result)
+
+                # 7c. Fail closed on invalid PPTX preset/adjustment metadata.
+                self._check_preset_geometry_metadata(root, result)
+                self._check_preset_geometry_transforms(root, result)
 
                 # 8. Check object-level animation anchor quality.
                 self._check_animation_group_ids(root, result)
@@ -1263,6 +1310,172 @@ class SVGQualityChecker:
             f"Unsupported visual SVG element(s) for native PPTX export: "
             f"{preview}{suffix}"
         )
+
+    def _check_preset_geometry_metadata(
+        self,
+        root: ET.Element,
+        result: Dict,
+    ) -> None:
+        """Validate round-trip preset metadata with the exporter's parser."""
+        marked = [
+            elem
+            for elem in root.iter()
+            if (
+                elem.get('data-pptx-prst') is not None
+                or elem.get('data-pptx-frame') is not None
+                or elem.get('data-pptx-geometry-status') is not None
+                or elem.get('data-pptx-geometry-reason') is not None
+                or elem.get('data-pptx-geometry-kind') is not None
+                or elem.get('data-pptx-custgeom') is not None
+                or elem.get('data-pptx-preview-sha256') is not None
+                or elem.get('data-pptx-shape-id') is not None
+                or elem.get('data-pptx-shape-scope') is not None
+                or elem.get('data-pptx-shape-style') is not None
+                or elem.get(_AUTHORING_ATTR) is not None
+                or any(attr.startswith('data-pptx-av-') for attr in elem.attrib)
+            )
+        ]
+        if not marked:
+            return
+        if _validate_preset_geometry_metadata is None:
+            result['errors'].append(
+                'Unable to import PPTX preset metadata validator; '
+                'cannot verify native shape restoration'
+            )
+            return
+
+        issues = set()
+        for elem in marked:
+            tag = _local_name(elem)
+            elem_id = elem.get('id')
+            label = f'<{tag} id="{elem_id}">' if elem_id else f'<{tag}>'
+            for error in _validate_preset_geometry_metadata(elem):
+                issues.add(f'{label} has invalid PPTX shape metadata: {error}')
+        if _validate_authored_preset_tree is None:
+            if any(
+                elem.get(_AUTHORING_ATTR) is not None
+                for elem in root.iter()
+            ):
+                issues.add(
+                    'Unable to import authored PPTX preset validator'
+                )
+        else:
+            for error in _validate_authored_preset_tree(root):
+                issues.add(f'Invalid authored PPTX preset: {error}')
+        if (
+            _svg_preset_preview_fingerprint is None
+            or _resolve_preset_preview_hash is None
+        ):
+            issues.add('Unable to import PPTX preset preview fingerprint validator')
+        else:
+            for elem in root.iter():
+                if (
+                    _local_name(elem) != 'g'
+                    or elem.get('data-pptx-object') not in {'shape', 'connector'}
+                    or elem.get('data-pptx-prst') is None
+                ):
+                    continue
+                try:
+                    expected = _resolve_preset_preview_hash(elem)
+                except ValueError as exc:
+                    elem_id = elem.get('id') or '(no id)'
+                    issues.add(
+                        f'<g id="{elem_id}"> has an invalid PPTX preset '
+                        f'preview contract: {exc}'
+                    )
+                    continue
+                if expected is None:
+                    continue
+                actual = _svg_preset_preview_fingerprint(elem)
+                if actual != expected:
+                    elem_id = elem.get('id') or '(no id)'
+                    issues.add(
+                        f'<g id="{elem_id}"> has a stale PPTX preset preview; '
+                        'update the native carrier or restore the generated detail paths'
+                    )
+        result['errors'].extend(sorted(issues))
+
+    def _check_preset_geometry_transforms(
+        self,
+        root: ET.Element,
+        result: Dict,
+    ) -> None:
+        """Reject preset transforms that DrawingML cannot represent exactly."""
+        helpers = (
+            _IDENTITY_MATRIX,
+            _matrix_multiply,
+            _parse_transform_matrix,
+            _rect_to_dml_xfrm,
+            _validate_dml_shape_matrix,
+        )
+        if any(helper is None for helper in helpers):
+            return
+
+        relevant: set[ET.Element] = set()
+
+        def mark_relevant(element: ET.Element) -> bool:
+            found = element.get('data-pptx-prst') is not None
+            for child in element:
+                found = mark_relevant(child) or found
+            if found:
+                relevant.add(element)
+            return found
+
+        mark_relevant(root)
+        issues = set()
+
+        def visit(element: ET.Element, parent_matrix) -> None:
+            if element not in relevant:
+                return
+            matrix = parent_matrix
+            transform = element.get('transform')
+            if transform:
+                try:
+                    local_matrix = _parse_transform_matrix(transform)
+                    matrix = _matrix_multiply(parent_matrix, local_matrix)
+                except ValueError as exc:
+                    issues.add(
+                        f'<{_local_name(element)}> has invalid preset '
+                        f'transform: {exc}'
+                    )
+                    return
+            if element.get('data-pptx-prst') is not None:
+                try:
+                    raw_frame = element.get('data-pptx-frame')
+                    if raw_frame:
+                        frame = tuple(
+                            float(part)
+                            for part in re.split(r'[\s,]+', raw_frame.strip())
+                        )
+                        if len(frame) != 4:
+                            raise ValueError(
+                                'data-pptx-frame must contain four numbers'
+                            )
+                        preset = element.get('data-pptx-prst') or ''
+                        _rect_to_dml_xfrm(
+                            frame[0],
+                            frame[1],
+                            frame[2],
+                            frame[3],
+                            matrix,
+                            preserve_degenerate_axes=(
+                                element.get('data-pptx-object') == 'connector'
+                                or preset in _CONNECTOR_PRESET_TYPES
+                            ),
+                        )
+                    else:
+                        _validate_dml_shape_matrix(matrix)
+                except ValueError as exc:
+                    elem_id = element.get('id') or '(no id)'
+                    issues.add(
+                        f'<{_local_name(element)} id="{elem_id}"> has '
+                        f'unsupported preset transform: {exc}'
+                    )
+            for child in element:
+                visit(child, matrix)
+
+        visit(root, _IDENTITY_MATRIX)
+        result['errors'].extend(sorted(issues))
 
     def _check_animation_group_ids(self, root: ET.Element, result: Dict):
         """Warn when visible top-level groups cannot be customized."""
