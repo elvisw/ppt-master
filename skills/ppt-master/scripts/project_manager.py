@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""PPT Master project management helpers.
+"""
+PPT Master - Project Management Tool
+
+Stable CLI entry point for project creation, source import, validation, and
+page-context diagnostics. Implementation lives in ``project_management/``.
 
 Usage:
     uvx ppt-master project init <project_name> [--format ppt169] [--dir <path>]
@@ -14,18 +18,8 @@ Usage:
 
 from __future__ import annotations
 
-import argparse
-import filecmp
-import json
-import os
-import re
-import shutil
-import subprocess
 import sys
-import tempfile
-from datetime import datetime
 from pathlib import Path
-from urllib.parse import urlparse
 
 from console_encoding import configure_utf8_stdio
 
@@ -76,6 +70,8 @@ IMAGE_ASSET_SUFFIXES = BITMAP_IMAGE_SUFFIXES | {
     ".emf", ".wmf", ".svg",
 }
 
+from attribution_guard import require_skill_integrity  # noqa: E402
+from console_encoding import configure_utf8_stdio  # noqa: E402
 
 configure_utf8_stdio()
 
@@ -1231,7 +1227,6 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         print(f"[ERROR] {exc}")
         return 1
-
-
 if __name__ == "__main__":
+    require_skill_integrity()
     raise SystemExit(main())

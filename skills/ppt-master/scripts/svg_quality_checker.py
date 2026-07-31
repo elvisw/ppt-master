@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""
-PPT Master - SVG Quality Check Tool
+"""PPT Master - SVG Quality Check Tool
 
-Checks whether SVG files comply with project technical specifications.
+Stable CLI entry point and compatibility import surface for SVG validation.
+Implementation lives in ``svg_quality/``.
 
 Usage:
     uv run scripts/svg_quality_checker.py <svg_file>
@@ -10,48 +10,29 @@ Usage:
     uv run scripts/svg_quality_checker.py --all examples
 """
 
-import copy
 import sys
-import re
-import json
-import html
-import math
-import hashlib
 from pathlib import Path
-from typing import List, Dict, Tuple
-from collections import Counter, defaultdict
-from urllib.parse import unquote, urlsplit
-from xml.etree import ElementTree as ET
 
-from console_encoding import configure_utf8_stdio
-from native_payloads import NativePayloadError, hydrate_native_payload_refs
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+
+from attribution_guard import require_skill_integrity  # noqa: E402
+from console_encoding import configure_utf8_stdio  # noqa: E402
 
 configure_utf8_stdio()
 
-try:
-    from project_utils import CANVAS_FORMATS, validate_communication_trace
-except ImportError:
-    print("Warning: Unable to import project_utils")
-    CANVAS_FORMATS = {}
-    validate_communication_trace = None
-
-try:
-    from pptx_effects import (
-        EFFECT_REASON_ATTR as _EFFECT_REASON_ATTR,
-        EFFECT_STATUS_ATTR as _EFFECT_STATUS_ATTR,
-        project_effect_status_errors as _project_effect_status_errors,
-    )
-except ImportError:
-    _EFFECT_REASON_ATTR = 'data-pptx-effect-reason'
-    _EFFECT_STATUS_ATTR = 'data-pptx-effect-status'
-    _project_effect_status_errors = None
-
-from svg_to_pptx.canvas_contract import (
-    CanvasContractError,
-    parse_project_svg_root,
-    parse_project_viewbox,
+from svg_quality.checker import (  # noqa: E402
+    CANVAS_FORMATS,
+    FONT_SIZE_ANCHOR_TOLERANCE_PX,
+    HEX_VALUE_RE,
+    IMAGE_DOWNSIZE_WARN_MIN_BYTES,
+    IMAGE_DOWNSIZE_WARN_RATIO,
+    SPARSE_UNDECLARED_FONT_SIZE_MAX_OCCURRENCES,
+    SVG_NS,
+    XLINK_NS,
+    SVGQualityChecker,
 )
-
 try:
     from project_specs import (
         parse_spec_lock as _parse_spec_lock,
@@ -8317,4 +8298,5 @@ def main() -> None:
 
 
 if __name__ == '__main__':
+    require_skill_integrity()
     main()
