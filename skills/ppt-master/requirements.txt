@@ -34,19 +34,14 @@ uharfbuzz>=0.50.0
 edge-tts>=7.2.8
 
 # ─────────────────────────────────────────────────────────────
-# Office compatibility dependencies (choose one, CairoSVG preferred)
-# Office 兼容模式依赖（二选一，优先使用 cairosvg）
+# Office compatibility dependencies / Office 兼容模式依赖
 # ─────────────────────────────────────────────────────────────
 # Converts SVG to PNG fallback images for Office LTSC 2021 etc.
 # 用于将 SVG 转换为 PNG 后备图片，确保 Office LTSC 2021 等版本正常显示
 #
-# Option A / 方案 A: CairoSVG (recommended / 推荐, ~25MB, full gradient/filter support)
-#   uv add cairosvg
-#   macOS: brew install cairo
-#
-# Option B / 方案 B: svglib (lightweight / 轻量, ~5MB, some gradients may be lost)
-svglib>=1.5.0
-reportlab>=4.0.0
+# Install one of:
+#   uv add cairosvg     # recommended / 推荐, full gradient/filter support
+#   uv add svglib reportlab  # lightweight / 轻量, some gradients may be lost
 
 # ─────────────────────────────────────────────────────────────
 # PDF to Markdown tool / PDF 转 Markdown 工具 (skills/ppt-master/scripts/source_to_md/pdf_to_md.py)
