@@ -116,23 +116,22 @@ effects and PowerPoint interfaces loaded only when triggered.
 
 ## Visualization Templates
 
-The `charts/` directory contains the registered visualization templates. For backward compatibility, the directory name remains `charts/`, but its scope includes charts, infographics, process diagrams, relationship diagrams, strategic frameworks, and system architecture diagrams:
+Page-local Shape-first references are catalog families, not reusable template
+kinds:
 
-- KPI Cards
-- Bar Chart / Stacked Bar Chart
-- Line Chart / Dual-Axis Line Chart
-- Donut Chart
-- Radar Chart
-- Funnel Chart
-- Matrix (2x2)
-- Timeline
-- Gantt Chart
-- Process Flow
-- Org Chart
-- Layered Architecture / Module Composition / Hub with Described Spokes / Pipeline with Stages / Client-Server Flow
+| Family | Owns | Directory | Index |
+|---|---|---|---|
+| Chart | Value-driven geometry (33) | [`charts/`](./charts/) | [`charts_index.json`](./charts/charts_index.json) |
+| Table | Row × column fact grid (6) | [`tables/`](./tables/) | [`tables_index.json`](./tables/tables_index.json) |
 
-- **Library index (single source of truth)**: [charts/charts_index.json](./charts/charts_index.json)
-- **Directory overview**: [charts/README.md](./charts/README.md)
+[`VISUALIZATION_TEMPLATE_AUTHORING.md`](./VISUALIZATION_TEMPLATE_AUTHORING.md)
+is the shared authoring contract. Each index owns family membership and
+selection rules.
+
+Qualitative Structure is a Slide-local Executor method rather than a catalog:
+Default and Quick both derive its relationship model and compose shapes for the
+current page. Only [`layouts/`](./layouts/) owns reusable Master/Layout, page
+types, slots, and placeholders.
 
 ## Icon Library
 

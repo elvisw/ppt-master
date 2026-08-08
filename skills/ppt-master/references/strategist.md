@@ -56,7 +56,7 @@ Do not force communication intent into one catalog label; Stage 1 records compos
 | Reference | Preserve the selected direction or role; adapt its realization to context. |
 | Permission / default | An allowed candidate/source boundary or preference; Strategist may leave it unused, with no quota. |
 
-**Authority chain — materials → Strategist preparation → realization.** User inputs set materials/acquisition bounds. Strategist owns sufficiency, gap-filling, and selection: roster/content, resources, chart/layout keys, fonts, palette anchors, the icon library/stroke plus curated project pool, and crop bans. Fact research may precede confirmation; AI/web/slice follows final confirmation plus completed §VIII/lock; icons are synced/validated during authoring without page assignment. Before Executor, each resource has a path and terminal/`Needs-Manual` state. Executor owns geometry, composition, hierarchy, spacing, treatment, and per-page choice among prepared icons; it never searches, generates, syncs, invents, or substitutes resources. Missing material/reselection returns upstream. Specificity defines freedom; References flex realization, never selection.
+**Authority chain — materials → Strategist preparation → realization.** User inputs set materials/acquisition bounds. Strategist owns sufficiency, gap-filling, and selection: roster/content, resources, page-local visualization/Layout references, fonts, palette anchors, the icon library/stroke plus curated project pool, and crop bans. Fact research may precede confirmation; AI/web/slice follows final confirmation plus completed §VIII/lock; icons are synced/validated during authoring without page assignment. Before Executor, each resource has a path and terminal/`Needs-Manual` state. Executor owns geometry, composition, hierarchy, spacing, treatment, and per-page choice among prepared icons; it never searches, generates, syncs, invents, or substitutes resources. Missing material/reselection returns upstream. Specificity defines freedom; References flex realization, never selection.
 
 Explicit *must*, *only*, *exactly*, *verbatim*, *do not*, or `no-crop` wording may strengthen only the named property into the appropriate Literal or Semantic requirement. Accepting an AI recommendation keeps the field's default type; it does not promote a Reference or Permission into a Literal requirement.
 
@@ -309,17 +309,20 @@ the effective outcome. Suggestions remain non-binding and never activate the
 custom stage; only an explicit motion requirement or an enabled outcome may
 require visible lifecycle-state preparation.
 
-Review planned pages through two lenses:
+Classify by information model, never source PowerPoint object type:
 
-| Lens | Content shapes |
+| Model | Planning action |
 |---|---|
-| Numeric / data | comparisons, trends, proportions, KPIs, financials, rankings, distributions, funnels |
-| Structural information | rosters, agendas, principles, phases, journeys, capability maps, OKR cascades, roadmaps, strategic frameworks |
+| Qualitative `order`, `link`, `parent`, `membership`, `contrast`, or `overlap` | Preserve units, relationship, and reading path as free §IX prose; no catalog key |
+| Values/dates/durations determine geometry | Chart; recall is optional |
+| Row header × column header addresses each fact | Table; recall is optional |
 
-**Reference — not a constraint**: use catalog recall when it would help. Its CLI accepts 3–8 distinct English content-shape tags; a page already planned as a custom visualization or table needs no recall. Run:
+**Mandatory — relationship handoff**: keep every qualitative relationship in §IX free prose; never serialize grammar atoms, coordinates, or named models. Executor makes the per-page Structure decision at runtime.
+
+**Reference — not a constraint**: recall Chart/Table with 3–8 English tags when useful; add `--family chart|table` only when certain. Skip custom objects and qualitative composition.
 
 ```bash
-uvx ppt-master chart-recall recall \
+uvx ppt-master visualization-recall recall \
   --page P03 \
   --tag "time series" \
   --tag "three metrics" \
@@ -327,28 +330,29 @@ uvx ppt-master chart-recall recall \
   --limit 6
 ```
 
-The command returns a bounded shortlist plus `no-template-match`. Read it unfiltered; `tail` / `head` / `grep` can hide ranked candidates. `confidence` is lexical only. At `high` / `medium`, keep no-match after candidate review. At `low` / `none`, use a fitting candidate directly; otherwise rerun once with `--semantic-fallback` before no-match. Do not open a second index.
+The command returns a bounded shortlist plus `no-template-match`. Read it unfiltered; `tail` / `head` / `grep` can hide ranked candidates. `confidence` is lexical only. At `high` / `medium`, keep no-match after candidate review. At `low` / `none`, use a fitting candidate directly; otherwise rerun once with `--semantic-fallback` before no-match. Do not open any family index separately.
 
 **Selection**:
 
-1. Choose the most relevant candidate as a reference for that page. It does not lock the final visualization type or geometry and never applies to another page without its own row.
-2. Retain `no-template-match` when no reference fits. Choose a custom visualization, table, diagram/layout, or permitted image from the content semantics, communication job, and editability need. Record the choice only in §IX; never serialize `no-template-match` into §VII.
-3. Validate all selected keys before writing the lock:
+1. Choose at most one flexible Chart/Table `family/key` per page; keep children and qualitative relationships in §IX.
+2. If none fits, keep `no-template-match` and plan the fallback only in §IX; never serialize no-match.
+3. Validate every selected canonical reference before the lock:
 
 ```bash
-uvx ppt-master chart-recall validate <key> [<key> ...]
+uvx ppt-master visualization-recall validate \
+  <family>/<key> [<family>/<key> ...]
 ```
 
-A failed validation must be corrected with a recalled key. `no-template-match` is not a key and never appears in `page_charts`.
+Correct failed selections by recall; `no-template-match` never enters `page_visualizations`.
 
-**Section VII selection list**: when a reference is selected, write `Page | Template | Usage`; Usage is one short page-local purpose, not geometry. Omit §VII when none is selected, and never add path, summary, runners-up, `no-template-match`, or `n/a`. §IX remains authoritative.
+**Section VII selection list**: write `Page | Family | Template | Usage` for each `chart|table` reference; Usage is semantic purpose. Omit empty/no-match detail. Qualitative composition stays in §IX; only Layout/Deck owns reusable PowerPoint structure.
 
-**Native-ready boundary**: For every independent data chart or pure text-grid table, add `Native-ready: yes|no` to its §IX page block. Choose `yes` only when the confirmed requirement or artifact afterlife benefits from an editable native data object; otherwise keep the designed SVG with `no`. Conceptual rows and incidental sparklines, KPI trends, or insets omit the field; Executor never promotes them.
+**Native-ready boundary**: Give every independent data chart and pure text-grid table in §IX `Visualization` a unique page-local semantic `kebab-case` key, then write one `Native-ready` map: `<key>=yes|no; ...`. Use `yes` only when an editable native object benefits the confirmed requirement/afterlife. Qualitative shape compositions and incidental microvisuals stay unlisted.
 
 ```markdown
-| Page | Template | Usage |
-| --- | --- | --- |
-| P03 | line_chart | Compare the source metrics over time |
+| Page | Family | Template | Usage |
+| --- | --- | --- | --- |
+| P03 | chart | line_chart | Compare the source metrics over time |
 ```
 
 **Native-geometry candidate detail**: Add `Native shape suggestion` to the
@@ -469,7 +473,7 @@ final Stage 2 `false`, explicit objects-off, or explicit all-motion-off; only th
 includes transitions.
 
 1. With Generate Step 4's retained complete final-confirmation state, read `${SKILL_DIR}/templates/design_spec_reference.md`.
-2. Compose the whole Design Spec in active context before touching the target path. Create `design_spec.md` once from the schema marker through §X; do not copy a scaffold into the project or patch placeholder fields. Record production mechanics in §I, including one effective outcome plus provenance for Speaker Notes, Custom Animations, and Narration Audio. Resolve them from latest explicit user instruction → matching final Stage 2 proactive value → workflow default `enabled` / `disabled` / `disabled`; Narration Audio enabled requires Speaker Notes enabled without rewriting the raw proactive evidence, and a dependency-driven notes outcome records that provenance. In §IX, create the complete ordered roster; each entry carries layout, title, core message, **Audience move**, complete preferred wording, applicable capability recommendations, visualization/image references, sourced `Fact IDs`, and `Data class: scenario` for invented demo data. After Gate 1 plus conditional refine approval, roster ids/count/order and semantic content are authoritative; non-literal wording, block texture, layout, cover/closing composition, capability recommendations, and image/chart patterns remain References unless promoted.
+2. Compose the whole Design Spec in active context before touching the target path. Create `design_spec.md` once from the schema marker through §X; do not copy a scaffold into the project or patch placeholder fields. Record production mechanics in §I, including one effective outcome plus provenance for Speaker Notes, Custom Animations, and Narration Audio. Resolve them from latest explicit user instruction → matching final Stage 2 proactive value → workflow default `enabled` / `disabled` / `disabled`; Narration Audio enabled requires Speaker Notes enabled without rewriting the raw proactive evidence, and a dependency-driven notes outcome records that provenance. In §IX, create the complete ordered roster; each entry carries layout, title, core message, **Audience move**, complete preferred wording, applicable capability recommendations, visualization/image references, sourced `Fact IDs`, and `Data class: scenario` for invented demo data. After Gate 1 plus conditional refine approval, roster ids/count/order and semantic content are authoritative; non-literal wording, block texture, layout, cover/closing composition, capability recommendations, and image/visualization patterns remain References unless promoted.
 3. Compare `design_spec.md` against the final confirmation field by field. Repair every omission or deviation before entering an enabled refine-spec review or authoring `spec_lock.md`.
 4. If enabled, run [`refine-spec`](../workflows/stages/refine-spec.md) after Gate 1; edit only that Design Spec and create no lock before explicit approval.
 5. Read `${SKILL_DIR}/templates/spec_lock_reference.md`; create the lock once or resynchronize stale derived state from the approved Design Spec and context. Retain identity/refinements and stable roles/routing; omit unnamed page-local values, do not reopen evidence, and make no new recommendation.
@@ -492,7 +496,7 @@ includes transitions.
 
 ⛔ **GATE 2 — lock context fidelity.** After Gate 1 closes, author machine-relevant anchors/routing into `spec_lock.md`. The lock may normalize syntax and add justified recurring roles, but must not change identity, discard a refinement, introduce a direction, or become a field copy/allowlist. On contradiction, return to Gate 1 using retained confirmation by default or the approved revised Design Spec after refinement; fresh recovery reads persisted final evidence once only when active state is absent.
 
-**Execution lock content**: `spec_lock.md` compactly carries communication, stable color/type anchors, icons, images, page rhythm, chart choices, and route-specific PowerPoint structure. Name every recurring typography role; a planned short non-structural Hero/Display size may stay omitted only while the same value appears at most twice, and its third occurrence requires a named role. Never re-derive a confirmed anchor. New locks keep `font_family` as the body/default compatibility stack and also write explicit `title_family` + `body_family`; every additional recurring Design Spec role projects to `<role>_family`. Collapsing distinct Design Spec stacks into `font_family`, or dropping an extra role, fails Gate 2. Keep core fonts/palette roles stable; page authoring varies treatment and may add sparse local garnish. Project every placed §VIII image's source, layout suggestion, and crop policy; omit unplaced sheets and planning provenance. Free-design, brand-only, and `template_reuse_scope: style` use `pptx_structure.mode: flat`; the template module owns structured mappings. Executor context policy lives in [executor-base.md](executor-base.md) §2.1. Repair from Gate 2's active decision authority, then re-author affected lock rows.
+**Execution lock content**: `spec_lock.md` compactly carries communication, stable color/type anchors, icons, images, page rhythm, Chart/Table references, and route-specific PowerPoint structure; qualitative relationships stay only in §IX. Name every recurring typography role; a planned short non-structural Hero/Display size may stay omitted only while the same value appears at most twice, and its third occurrence requires a named role. Never re-derive a confirmed anchor. New locks keep `font_family` as the body/default compatibility stack and also write explicit `title_family` + `body_family`; every additional recurring Design Spec role projects to `<role>_family`. Collapsing distinct Design Spec stacks into `font_family`, or dropping an extra role, fails Gate 2. Keep core fonts/palette roles stable; page authoring varies treatment and may add sparse local garnish. Project every placed §VIII image's source, layout suggestion, and crop policy; omit unplaced sheets and planning provenance. Free-design, brand-only, and `template_reuse_scope: style` use `pptx_structure.mode: flat`; the template module owns structured mappings. Executor context policy lives in [executor-base.md](executor-base.md) §2.1. Repair from Gate 2's active decision authority, then re-author affected lock rows.
 
 **Contextual extension**: derived paint or sparse local font/color garnish may stay in one SVG while non-structural and non-recurring. New base/semantic colors, structural/recurring fonts, resources, or recurring cross-page identity patterns require upstream repair; a page-local §VIII preferred image pattern follows [`executor-image.md`](./executor-image.md) and may change during realization. Executor never reverse-projects a local choice as planning fact. Promote recurring garnish upstream before reuse, read back and validate the affected planning fragments, and never add values to silence a comparison.
 
@@ -500,14 +504,14 @@ includes transitions.
    - **Custom behavior is concise and executable**: For confirmed `custom` mode or visual style, project one resolved `mode_behavior` / `visual_style_behavior` sentence or short paragraph. When the direction actually combines or borrows catalog entries, also project the exact, comma-separated `mode_references` / `visual_style_references`; omit the field for a genuinely novel direction and never fabricate a nearby reference. Preserve the confirmed direction, reference locked role names such as `colors.primary` when needed, and omit selection history, contradictions, precedence explanations, or other Design Spec provenance. Executor reads these fields from the retained lock and loads every referenced catalog entry once per valid context.
    - **page_rhythm is mandatory**: Based on the page list in §IX Content Outline, assign each page one of `anchor` / `dense` / `breathing`. This is what breaks the uniform "every page is a card grid" feel. New locks may not omit the section; consumer omission behavior is owned by [`executor-base.md`](executor-base.md) §2.1.
    - **Fact IDs and scenario labels are mandatory when applicable**: Read any `sources/*.facts.json`. For each §IX page, list the stable IDs actually used; never cite an ID whose claim is absent from the page. Mark invented KPIs/targets/internal ratios as `Data class: scenario` and state which values are scenario data. Executor carries external sources into notes/footnotes and renders a visible scenario label for scenario figures.
-   - **Rhythm follows narrative, not quota**: `breathing` pages mark natural pauses — chapter transitions, standalone emphasis (hero quote / big number), SCQA bridges. Dense decks may legitimately be all `dense`. **Do NOT invent filler pages** ("Thank you", empty dividers) to pad rhythm — every `breathing` page must say something independent. Consumption mode biases the overall lean (`presentation` toward more `anchor` / `breathing`, `text` toward `dense`; see §6.1) — a bias, never a quota.
+   - **Mandatory — whole-roster rhythm check**: During the same §IX composition, compare neighbors and section arcs to judge whether chapter entries visibly reset, extended same-density runs are intentional, repeated dominant geometry carries a continuity job, each section follows a mode-fitting progression—including framework → explanation/evidence → judgment/action when it serves the objective—and a genuine ending lowers information load. Repair the existing roster, `Layout`, and `page_rhythm` choices in place. This is judgment, not quota; preserve intentional continuity, legitimately all-`dense` material, and 1:1/literal order. Do not invent filler pages to manufacture rhythm; a `breathing` page marks a meaningful pause—chapter transition, standalone emphasis, or SCQA bridge—and must stand alone. Create no field, lock row, artifact, or second review/execution pass.
    - **Cover impact is mandatory**: In `design_spec.md §IX`, give `P01` one concrete hook from the source's strongest claim, metaphor, number, moment, or conflict plus a recommended composition. The hook binds; Executor may adapt the composition to prepared assets and explicit constraints. With no suitable image, recommend a native-SVG hook instead of a generic title treatment. Beautify / template-fill preservation paths are exempt.
    - **Cover rhythm lock**: `P01` remains `anchor`. Default away from generic content-page templates; a card grid, agenda, or equal-weight columns remains valid when content, user direction, or the template makes it the clearest cover.
    - **Closing impact (only when the deck closes)**: For a genuine conclusion / CTA / final takeaway, name the binding takeaway plus a recommended composition; Executor may adapt the latter. Do not default to an information-empty "Thank you", contact-only slide, or cover reprise; an explicit contact/event CTA may serve the purpose. **Do NOT invent a closing page to satisfy this**. Preservation paths are exempt.
    - **pptx_structure is mandatory**: Free-design, brand-only, and `template_reuse_scope: style` routes write `mode: flat`; a style-reference route may also record `template_reuse_scope: style` but omits every structure mapping and `template_adherence`. `template_reuse_scope: mirror|layout` writes `mode: structured` plus `template_adherence: strict|adaptive`. Do not write legacy `baseline`, `template`, `preserve`, `layout_strategy`, or Layout-kind rows into a new project.
    - **Flat-route boundary**: With `mode: flat`, omit `pptx_masters`, `pptx_layouts`, `page_pptx_layouts`, and `page_layouts`. Do not plan native Master/Layout families or reusable placeholder slots. Every generated SVG object remains Slide-local: omit root Master/Layout identity, `data-pptx-layer`, and `data-pptx-placeholder*` metadata. Export materializes one clean project-owned Master plus one Blank Layout from the current color/typography lock, removes stock content placeholders/Layout inventory, and retains only the standard date/footer/slide-number capability hooks.
    - **Structured template route**: When [`strategist-template.md`](./strategist-template.md) is active and reuse is `mirror|layout`, follow its complete Master/Layout/slot/prototype mapping rules.
-   - **page_charts**: project each §VII row's `Page` and `Template` as `P<NN>: <template_key>`; Usage stays in the Design Spec. This is a page-local reference, not a type/geometry lock. Omit no-match pages and the empty section.
+   - **page_visualizations**: project at most one §VII `P<NN>: <chart|table>/<key>` per page. Usage/children/qualitative relationships stay in the Design Spec; omit empty/no-match. It locks no geometry/native output. New locks never write legacy `page_charts`.
 
 ---
 

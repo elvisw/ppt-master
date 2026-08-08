@@ -72,6 +72,11 @@ Use `-o` only when a specific output file/directory is required; with multiple
 inputs or directory inputs, `-o` is an output directory. Backend converter details are documented in
 [`scripts/docs/conversion.md`](../scripts/docs/conversion.md).
 
+**Source-image orientation trigger**: Before Step 2, follow
+[`conversion.md`](../scripts/docs/conversion.md) § Image Orientation Review when
+the user requests correction, converted text asks for rotated viewing, or a
+downloaded asset is visibly sideways. Do not launch its legacy HTML tool.
+
 After reading direct and converted content, assess factual sufficiency:
 
 | Material state | Action |
@@ -528,13 +533,21 @@ Keep the core's shared visual-quality defaults and `svg-effects.md` §6.1 Visual
 | Deterministic trigger | Additional references |
 |---|---|
 | `pptx_structure.mode: structured` | `executor-structured.md` + `pptx-structure-interface.md` |
-| Any data chart/table, including mini or inset charts and sparklines | `executor-chart.md` |
-| Preset pattern or supported native chart/table | `native-data-interface.md` before drawing |
+| Selected §VII / `page_visualizations` Chart/Table `family/key`, or a legacy `page_charts` row resolving to a live Chart/Table SVG | `executor-visualization.md` + the selected Chart/Table branch |
+| Actual value-driven geometry, including mini/inset charts and sparklines | `executor-chart.md` |
+| Mandatory per-page Structure decision from §IX is `yes` | `executor-structure.md` before any geometry for the first applicable page |
+| Actual row × column fact grid | `executor-table.md` |
+| Used preset pattern fill, or independent Chart/Table with §IX `<object-key>=yes` | `native-data-interface.md` before that object |
 | `spec_lock.md images` / §VIII has an image/formula row, or the template has bundled images | `executor-image.md` + `image-layout-spec.md` + `image-layout-patterns.md` + `svg-image-embedding.md` |
 | At least one placed image has `Status: Sourced` | `executor-web-image.md` after the image branch |
 | All SVG pages and SVG quality gates are complete, and the effective Speaker Notes outcome in `design_spec.md §I` is enabled | `executor-notes.md` before generating speaker notes |
 
-No branch is loaded by analogy. Evaluate these triggers from `spec_lock.md`, §VII/§VIII, the selected style, and the current page plan.
+No branch is loaded by analogy. For each page, after §IX content/communication
+but before geometry, apply [`executor-base.md`](../references/executor-base.md)'s
+mandatory Structure decision. `no` stays on base; before the first `yes`, read
+`executor-structure.md` completely and reuse it until file/context invalidation.
+Create no catalog/lock/artifact. Chart/Table selection neither replaces this
+decision nor locks geometry/native readiness.
 
 **Design Parameter Confirmation (Mandatory)**: before the first SVG, output key design parameters from the spec (canvas dimensions, color scheme, font plan, body font size). See executor-base.md §2.
 
@@ -549,7 +562,12 @@ uvx ppt-master svg-editor <project_path> --live --daemon
 - **Do NOT read or apply submitted annotations during generation.** Users may annotate at any time, but Executor proceeds without touching them. The window to apply annotations opens only after Step 7 completes — see [`workflows/stages/live-preview.md`](stages/live-preview.md).
 - The editor also supports **staged direct edits** (text content + SVG element attributes previewed immediately, then written to `svg_output/` only when the user clicks **Apply changes**; `Ctrl+Z` / Undo drops staged edits) alongside annotation; re-export stays chat-driven. Full scope and editor details: see [`workflows/stages/live-preview.md`](stages/live-preview.md) Notes.
 
-**Conditional reference reads**: Follow `executor-structured.md` for template Design Spec/prototypes and `executor-chart.md` for chart SVGs. Read each selected full reference once per valid context; reread only after a known change or context invalidation. Flat routes skip template reads. Summaries and sidecars never replace full SVGs.
+**Conditional reference reads**: `executor-structured.md` owns template specs
+and prototypes. `executor-visualization.md` resolves a selected canonical or
+legacy value; read only its returned SVG plus applicable family branches. Read
+each full reference once per valid context and reread only after change/context
+invalidation. Flat routes skip template reads; never substitute summaries,
+sidecars, or guessed family paths.
 
 > Image facts: trust the latest `analysis/image_analysis.csv` from the Step 4 inventory read or the Step 5 post-acquisition refresh. If `images/` changed since, re-run `uvx ppt-master analyze-images <project_path>/images` before layout; if the folder is empty, use no image inventory and ignore a stale CSV.
 
@@ -611,7 +629,7 @@ gate-signal: method=<rule resolved, or none> | page-local=<count> | not-exercise
 ```bash
 uvx ppt-master svg-quality-check <project_path> --stage final --json
 ```
-- **MUST**: Before this gate, every chart/table whose Design Spec §IX page block says `Native-ready: yes` already has its own draw-time marker plus JSON metadata. Rows marked `no` and incidental microvisuals remain ordinary SVG. For legacy specs only, a matching §VII value may supply the decision when §IX has no field.
+- **MUST**: Before this gate, every §IX `Native-ready` entry `<object-key>=yes` already has one matching draw-time marker group and JSON metadata child; `=no` and incidental microvisuals remain ordinary SVG. A legacy bare `yes|no` is readable only when that page has exactly one eligible object; it never derives from §VII.
 - Run the command unfiltered—do not pipe it through `tail`, `head`, `grep`, or another output truncator. One invocation already scans every page and reports the complete issue set.
 - On failure, review all `blocking` errors and all advisory warnings from that run before editing. Choose which warnings merit work, fix every blocking error and the selected warnings in one consolidated edit pass, then perform one verification rerun. If it still fails, its complete output begins the next batch cycle; never run the checker between individual fixes or use repeated invocations to discover one next issue at a time. If terminal output is truncated, extract only `categories.blocking.issues` and, when needed, `categories.introduced.issues` from the report written by that same run.
 - Every `warning` is advisory and non-blocking: do not return the page for mandatory modification, do not auto-normalize user-authored compatible syntax, and do not require an acknowledgement/disposition line. Recommendation warnings identify the generated-SVG default; fidelity/quality warnings may be reported when material, but the existing input may ship unchanged. If a condition must be corrected before release, the checker must classify it as an `error`, not a `warning`.

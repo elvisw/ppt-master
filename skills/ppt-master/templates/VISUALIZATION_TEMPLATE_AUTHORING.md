@@ -1,17 +1,37 @@
-# Chart Template Authoring Guide
+# Visualization Template Authoring Guide
 
-`templates/charts/` 的模板负责可视化结构、数据编码和信息关系，不负责最终项目风格。模板必须保持源码可读、独立可渲染，并允许 Executor 根据项目 Design Spec 与 `spec_lock.md` 重做字体、配色和装饰。
+这是供维护者审阅的中文指南，因此放在两个 Visualization catalog 的共同父目录，
+而不是归某一个 family 所有。`templates/charts/` 和 `templates/tables/` 共同组成
+page-local Visualization 模板库；模板负责数据编码或单元格关系，不负责最终项目
+风格。模板必须保持源码可读、独立可渲染，并允许 Executor 根据项目 Design Spec
+与 `spec_lock.md` 重做字体、配色和装饰。
+
+| Family | 定义 | 判定边界 |
+|---|---|---|
+| `chart` | Value-driven visualization | 数值、类别、时间、权重或持续时间决定 mark 的位置、长度、面积、角度、字号或连接宽度 |
+| `table` | Row × column fact grid | 行头与列头共同寻址一个单元格事实；合并、对齐和边界保持该交点关系 |
+
+**Hard rule — Structure is a method, not a catalog**: 定性顺序、层级、角色、
+分区和关系由 [`executor-structure.md`](../references/executor-structure.md) 在当前页面
+现场构形，不登记固定 `structure/<key>`、SVG roster 或 index。Default 和 Quick 都先
+判断页面真实信息模型；需要定性拓扑时都必须采用这套 Structure 方法。删除 catalog
+只删除固定示例，不删除 Quick 或 Default 的 Structure 能力。
+
+**Hard rule — Visualization is not Layout**: Chart/Table 模板和运行时 Structure
+都不拥有 `data-pptx-master`、`data-pptx-layout`、`data-pptx-layer` 或
+`data-pptx-placeholder`。跨页 Master/Layout、page type、slot geometry 和
+placeholder 合同仍只属于 [`layouts/`](./layouts/) workspace。
 
 ## 0. 上游规范
 
-**Hard rule**: 本指南只定义 Chart 模板库的结构与中性预览合同。通用 SVG 语法、效果、原生数据接口和 PowerPoint 结构分别由以下权威文件定义：
+**Hard rule**: 本指南只定义 Chart/Table 两个 catalog family 的结构与中性预览合同。通用 SVG 语法、效果、原生数据接口和 PowerPoint 结构分别由以下权威文件定义：
 
 | 合同 | 权威文件 |
 |---|---|
-| 通用 SVG | [`shared-standards.md`](../../references/shared-standards.md) |
-| 效果与兼容输入 | [`svg-effects.md`](../../references/svg-effects.md) |
-| Native Chart/Table | [`native-data-interface.md`](../../references/native-data-interface.md) |
-| 画布格式 | [`canvas-formats.md`](../../references/canvas-formats.md) |
+| 通用 SVG | [`shared-standards.md`](../references/shared-standards.md) |
+| 效果与兼容输入 | [`svg-effects.md`](../references/svg-effects.md) |
+| Native Chart/Table | [`native-data-interface.md`](../references/native-data-interface.md) |
+| 画布格式 | [`canvas-formats.md`](../references/canvas-formats.md) |
 
 **Forbidden — second SVG specification**: 不在本指南复述或放宽上游语法。发生冲突时以上游权威文件为准。
 
@@ -19,19 +39,29 @@
 
 ## 1. 所有权边界
 
-### 1.1 模板与项目
+### 1.1 作者合同与项目消费
 
-| Chart 模板拥有 | 项目拥有 |
+以下所有权只约束库内单个模板工件的维护，不把该工件变成项目页面的布局锁：
+
+| 单个 Visualization 模板的作者合同 | 项目页面决策拥有 |
 |---|---|
-| 可视化类型与数据到图形的映射 | 项目字体与字号体系 |
-| 节点、连接、轴、系列和标签关系 | 项目调色板与品牌色 |
-| 可视化类型、构图骨架和阅读顺序 | 实际分组、框架数量、项目数量与容量适配 |
+| 该工件的 family 与相应信息模型 | 最终采用的页面级结构、类型与几何 |
+| 该工件内的数据映射或单元格关系 | 项目字体、字号、调色板与品牌色 |
+| 该工件的示例骨架和阅读顺序 | 实际分组、框架数量、项目数量、组合方式与容量适配 |
 | 必要的状态与语义区分 | 页面背景、页头、页脚和品牌 chrome |
 | 独立预览所需的中性样式 | 最终强调策略与页面级视觉层级 |
 
-**Hard rule**: Executor 适配模板时保留可视化类型、信息关系和数据准确性；最终视觉必须来自当前项目，而不是继承模板的示例审美。
+**Hard rule — authoring integrity**: 维护某个库模板时必须保持该模板自身的
+family 与信息模型：Chart 的 value mapping、Table 的 row × column fact grid。
+若修改结果属于定性关系拓扑，不新增第三类模板，而由 runtime Structure 方法构建；
+若仍属于另一 catalog family，应登记到正确 family，不能保留错误标签。最终视觉样式
+仍来自使用它的项目，而不是模板的示例审美。
 
-**Reference — not a constraint**: 模板的分组、框架数、项目数和示例容量用于展示结构，不是项目上限。Executor 可按实际内容调整，但不能改变已选可视化类型、关系或数据语义。
+**Hard rule — flexible project reference**: Executor 选中的 `family/key` 仍只是
+flexible page-local reference。Default 的 §IX 或 Quick 的页面决策拥有最终结构；
+选中引用不会锁死页面的可视化类型、几何、分组数、项目数或组合方式，Executor
+可按已确认的页面意图适配、重组或替换。项目若实际采用某一信息模型，必须保持
+其真实数据与关系准确；仅有引用本身不构成页面结构权威。
 
 ### 1.2 保留判断
 
@@ -44,11 +74,16 @@
 | 只让示例显得更精致、立体、品牌化或“高级” | 作为简化候选；通过文本与前后渲染核对后再删除 |
 | 只对某个项目风格成立 | 交给 Executor 重建 |
 
-**Default — structure first (may override when semantics require it)**: 优先使用清楚的线、面、标签和留白。装饰不能成为理解结构的前提。
+**Default — information first (may override when semantics require it)**: 优先使用清楚的线、面、标签和留白。装饰不能成为理解信息的前提。
 
 ### 1.3 保真优先
 
 **Hard rule — fidelity before slimming**: 模板瘦身不得改写或删除原有可见标题、标签、说明、数值、单位、状态、来源、顺序、容量和关系。占位内容保持原文；只有明确重复的信息可以删除，并记录理由。
+
+**Explicit migration exception**: 经明确批准的 family/key 合并、重组或退役可以用
+中性占位内容重建 canonical SVG，或移除不再存活的工件；这不是普通模板瘦身。
+迁移必须在 §8 记录 catalog 边界和仍可读取的 legacy 语义。未列入批准迁移的模板
+仍受上一条逐字保真约束。
 
 **Hard rule — structural frames survive**: 框线、底色、分隔、标签页或面板只要表达真实的信息单元、父子层级、阶段范围、绘图区或输出区，就属于结构。可以减少叠加效果，但不得为了 token 数字把有效层级压平。
 
@@ -165,7 +200,7 @@
 
 ---
 
-## 5. 结构与边界
+## 5. SVG 分组与边界
 
 ### 5.1 语义分组
 
@@ -174,11 +209,14 @@
 | 顶层组 | 典型内容 |
 |---|---|
 | `header` | 标题与副标题 |
-| `chart-area` / replacement carrier | 轴、数据系列、标签、必要 metadata |
+| `chart-area` / replacement carrier | Chart 的轴、数据系列、标签、必要 metadata |
 | `legend` | 系列或状态说明 |
-| `card-1` / `feature-card-1` | 一个完整信息单元 |
-| `timeline-track` | 时间轴与阶段标签 |
-| `milestone-cards` | 同一结构的一组里程碑卡片 |
+| `table-area` / replacement carrier | Table 的行、列、单元格和必要 metadata |
+| `table-notes` | 来源、口径或脚注 |
+
+**Forbidden — workspace metadata**: 两个 catalog family 都不得写入
+Master/Layout/placeholder 所有权标记。运行时 Structure 即使占满整个
+`1280×720` 画布也仍是 Slide-local 构形，不会因此成为 Layout workspace。
 
 ### 5.2 `data-pptx-bounds`
 
@@ -211,7 +249,6 @@
 | 基础节点/容器 | `<rect>`、`<circle>`、`<ellipse>` |
 | 直线关系/分隔/引线 | `<line>` |
 | 预设可精确表达的弯折/曲线关系 | 完整 compact authored `bentConnector*` / `curvedConnector*` `<g>`；端点不附着 |
-| 标准块箭头/流程节点 | 仅在 preset 精确匹配时使用完整 compact authored-preset `<g>` |
 | 单一预设不能表达、但封闭形状可组合的对象 | 优先用 `shape_boolean_svg.py` 物化 Merge Shapes 结果 |
 | 图元、预设、Boolean 都不能表达的数据/语义/锁定风格几何 | `<path>`、`<polygon>`、`<polyline>` |
 | 数据图表 | 默认 Shape fallback；符合条件时附带 native replacement marker |
@@ -220,7 +257,7 @@
 
 ---
 
-## 6. 数据图表合同
+## 6. Chart 与 Native Data 合同
 
 ### 6.1 绘图区标记
 
@@ -232,9 +269,14 @@
 
 Pie、Donut、Radar 使用对应中心和半径格式。该注释是工具输入，不得作为“清理注释”删除。
 
+Catalog 模板本身只有一个主 Chart，可保留上述 unscoped marker 与
+`id="chartArea"`。Executor 在项目页面组合多个已验证 Chart 对象时，改用
+[`executor-chart.md`](../references/executor-chart.md) 定义的 semantic object key
+和 scoped marker；不能在同一 SVG 中复制多个 `chartArea` id。
+
 ### 6.2 Native Chart/Table
 
-**Hard rule**: 只有 [`native-data-interface.md`](../../references/native-data-interface.md) 支持的真实数据图表或纯文本表格使用 replacement marker。JSON metadata 与可见 fallback 必须表达同一份数据。
+**Hard rule**: 只有 [`native-data-interface.md`](../references/native-data-interface.md) 支持的真实 Chart 或纯文本 Table 使用 replacement marker。JSON metadata 与可见 fallback 必须表达同一份数据。运行时构建的 Structure 永远不使用 Chart/Table replacement marker。
 
 ```xml
 <g id="line-chart"
@@ -275,9 +317,16 @@ Pie、Donut、Radar 使用对应中心和半径格式。该注释是工具输入
 
 **Forbidden — placeholder storytelling**: 不写长篇营销文案、部门归属、真实品牌或无法复用的项目背景。
 
-### 7.2 `charts_index.json`
+### 7.2 Family indexes
 
-新增模板必须登记 `<key>.summary`：
+新增模板只登记到其 owning family index：
+
+| Family | Directory | Index object |
+|---|---|---|
+| `chart` | `charts/` | `charts_index.json` → `charts` |
+| `table` | `tables/` | `tables_index.json` → `tables` |
+
+每个 `<key>.summary` 使用相同的选择句合同：
 
 ```json
 "line_chart": {
@@ -285,96 +334,62 @@ Pie、Donut、Radar 使用对应中心和半径格式。该注释是工具输入
 }
 ```
 
-**Hard rule**: `summary` 是选型句，使用 `Pick for ... Skip if ...`，不是视觉描述；`key` 与文件名一致，`meta.total` 与 catalog 数量一致。
+**Hard rule**: `summary` 是选型句，使用 `Pick for ... Skip if ...`，不是视觉描述；`key` 与同 family 文件名一致，`meta.total` 与该 family catalog 数量一致。不要建立跨 family 的第二份成员清单。
 
 ---
 
 ## 8. 迁移边界
 
-本指南是新建和修改模板的目标合同。当前目录中的 76 个 SVG 均已纳入该合同；后续不得以历史文件为由恢复无语义装饰，也不得把中性化误解为删除结构边界。
+本指南是新建和修改 Chart/Table 模板的目标合同。当前两个 catalog family 共
+39 个 SVG：Chart 33 个、Table 6 个。各 live index 是成员清单的唯一权威；
+Structure 不再有固定 SVG roster、index 或 canonical key。
 
-**Current reference set**:
+**Hard rule — topology is generated, not recalled**: 从来源 deck 吸收的是 Shape
+grammar 和构形思维，而不是页面示例清单。先还原顺序、层级、分组、分区、连接、
+交叠等真实关系，再由 `executor-structure.md` 使用区域、节点、主轴、连接、标签与
+装饰等角色现场组合。Default 在 §IX 描述该关系，Quick 在当前上下文作同一判断；
+两条路径都不依赖 `structure/<key>` 或固定 SVG，不能因 Quick 跳过 §VII/lock 就跳过
+Structure 载体判断。
 
-| 模板 | 覆盖结构 |
+**Canonical Table set**:
+
+| Canonical key | 核心信息关系 |
 |---|---|
-| `timeline.svg` | 时间、状态和里程碑卡片 |
-| `kpi_cards.svg` | KPI 值、单位与趋势 |
-| `labeled_card.svg` | 2×2 标签卡片结构 |
-| `icon_grid.svg` | 2×3 图标槽与能力卡片 |
-| `line_chart.svg` | 双系列折线与 native chart metadata |
-| `pipeline_with_stages.svg` | 分阶段管线、贯通流程和输出链 |
-| `layered_architecture.svg` | 分层架构、能力输出和底座 |
-| `stacked_area_chart.svg` | 累计面积、图例和统计卡片 |
-| `heatmap_chart.svg` | 时间×日期矩阵、连续色阶和统计侧栏 |
-| `bubble_chart.svg` | 三变量气泡、象限、系列清单和尺寸图例 |
-| `quadrant_text_bullets.svg` | 二轴四象限、分区说明和行动标签 |
-| `financial_statement_table.svg` | 财务层级、数值列和强调合计行 |
-| `box_plot_chart.svg` | 五数分布、异常值、图例和统计摘要 |
-| `dual_axis_line_chart.svg` | 双轴序列、阶段带和数据标注 |
-| `stacked_bar_chart.svg` | 堆叠分类、总量标签和洞察侧栏 |
-| `segmented_wheel.svg` | 中心主题、等权扇区和配对说明卡 |
-| `sankey_chart.svg` | 零损耗流向、节点层级和流量编码 |
-| `roadmap_vertical.svg` | 纵向里程碑、状态轨道和目标侧栏 |
-| `snake_flow.svg` | 多行蛇形长流程、顺序节点和配对里程碑卡 |
-| `concentric_circles.svg` | 同心优先级、资源占比和分层说明卡 |
-| `scatter_chart.svg` | 双系列散点、回归趋势、置信区间和统计洞察 |
-| `area_chart.svg` | 双系列累计面积、月度趋势和摘要指标 |
-| `chevron_process.svg` | 连续阶段箭头、周期带和阶段交付物 |
-| `radar_chart.svg` | 多维能力对比、系列面积和基准数据表 |
-| `module_composition.svg` | 父模块边界、三级处理链和端到端数据流 |
-| `fishbone_diagram.svg` | 核心问题、六类原因分支和具体成因标签 |
-| `numbered_steps.svg` | 编号步骤、连接顺序、任务卡和阶段时长 |
-| `pareto_chart.svg` | 80/20 分界、降序柱体、累计曲线和行动洞察 |
-| `top_down_tree.svg` | 父子层级、汇报连线和末级节点摘要 |
-| `butterfly_chart.svg` | 共用中轴、双侧镜像系列和对称刻度 |
-| `chevron_chain_with_tail.svg` | 连续箭头阶段、支撑标签和结果汇总尾块 |
-| `gauge_chart.svg` | 单项指标、目标区间、当前值和状态说明 |
-| `gantt_chart.svg` | 任务行、时间跨度、依赖关系和当前时间标记 |
-| `waterfall_chart.svg` | 起始值、增减贡献、连接基线和最终合计 |
-| `hub_inward_arrows.svg` | 外围输入、向心关系和中心结论 |
-| `treemap_chart.svg` | 层级面积编码、分类色块、标签和解释注记 |
-| `hub_spoke.svg` | 中心枢纽、径向连接、能力节点和参考环 |
-| `matrix_2x2.svg` | 双轴象限、点位分布、象限标签和优先级说明 |
-| `process_flow.svg` | 顺序节点、连接关系、阶段时长和状态图例 |
-| `donut_chart.svg` | 环形占比、中心总值、系列图例和摘要指标 |
-| `grouped_bar_chart.svg` | 多系列并列柱、共用分类轴和系列图例 |
-| `pyramid_isometric.svg` | 分层金字塔、等距深度面和层级说明 |
-| `progress_bar_chart.svg` | 多项进度、目标标记、当前值和状态分组 |
-| `basic_table.svg` | 表头、数据行、对齐列和状态单元格 |
-| `mind_map.svg` | 中心主题、放射分支、二级节点和分支骨架 |
-| `comparison_columns.svg` | 并列方案列、价格层级、功能清单和推荐状态 |
-| `bullet_chart.svg` | 定性区间、实际值、目标线和多指标对照 |
-| `comparison_table.svg` | 多方案表头、横向属性行和结果强调 |
-| `client_server_flow.svg` | 客户端与服务端分区、请求响应和交互方向 |
-| `dumbbell_chart.svg` | 双状态端点、变化连线、差值和项目排序 |
-| `pyramid_chart.svg` | 递进层级、分层容量和层级说明 |
-| `vertical_pillars.svg` | 并列支柱、分类标题、要点列表和底部结论 |
-| `journey_map.svg` | 阶段轨道、用户行动、情绪曲线和痛点卡片 |
-| `consulting_table.svg` | 分层行列、指标数值、数据条和重点结论 |
-| `pros_cons_chart.svg` | 正反双栏、判断轴、论据列表和建议结论 |
-| `project_schedule_table.svg` | 任务表格、负责人、状态和横向排期 |
-| `horizontal_bar_chart.svg` | 长标签排名、横向数值条和洞察侧栏 |
-| `funnel_chart.svg` | 递减阶段、转化率、流失关系和摘要指标 |
-| `isometric_stairs.svg` | 递进台阶、阶段标签、空间顺序和接地基线 |
-| `pie_chart.svg` | 单层占比、扇区标签、图例和总量摘要 |
-| `circular_stages.svg` | 环形阶段、循环方向、阶段说明和中心主题 |
-| `team_roster.svg` | 成员卡片、头像槽、姓名职务和简介容量 |
-| `harvey_balls_table.svg` | 评价行列、分级圆点、评分图例和汇总状态 |
-| `column_chart.svg` | 单系列分类柱、数值标签、坐标轴和基准线 |
-| `arc_anchored_list.svg` | 弧线主轴、锚点节点、顺序条目和配对说明 |
-| `vertical_list.svg` | 纵向轨道、顺序节点、内容卡片和阶段状态 |
-| `sunburst_chart.svg` | 多层环形层级、父子占比、叶子图例和解释面板 |
-| `agenda_list.svg` | 编号议程、条目说明、时长信息和纵向导轨 |
-| `stock_chart.svg` | OHLC 蜡烛、日期轴、价格区间和指标摘要 |
-| `feature_matrix_table.svg` | 功能行、产品列、二元状态和方案对照 |
-| `histogram_chart.svg` | 连续分箱、频数柱、统计标记和分布解释 |
-| `venn_diagram.svg` | 集合边界、交集区域、关系标签和结论说明 |
-| `quadrant_bubble_scatter.svg` | 双轴象限、气泡位置、尺寸编码和项目标签 |
-| `bar_of_pie_chart.svg` | 主饼占比、长尾聚合、堆叠条明细和连接关系 |
-| `pie_of_pie_chart.svg` | 主饼占比、长尾聚合、次级饼明细和连接关系 |
-| `word_cloud.svg` | 词项权重、字号编码、主题分布和关键词层级 |
+| `record_table` | 每行一条记录、每列一个稳定字段 |
+| `metric_table` | 实体与 KPI 的交点承载度量、变化、状态或 cell 内微图形 |
+| `comparison_matrix` | 行维度与列方案的交点承载文本、精确值或异构事实 |
+| `feature_matrix` | 能力与方案的交点承载支持、不支持、部分支持或例外状态 |
+| `rating_matrix` | 评价维度与方案的交点使用同一套序数等级 |
+| `hierarchical_table` | 分组或缩进行、明细与小计/总计形成层级网格 |
 
-**Hard rule**: 修改任一模板时先冻结可见文本、数据和结构层级，再简化确认无语义的效果、补齐直属根 bounds，并完成文本差异、独立渲染与双路线验证。未经明确说明的文本删除、改写或结构边界丢失都会阻断变更。不要仅为追求 catalog 一次性整齐而批量重写。
+**Hard rule — semantic family before physical object**: PowerPoint 中的物理
+Table 对象不自动属于 `table` family。只有行头与列头的交点可寻址为一个事实时才是
+Table；日期或持续时间决定 `x`/`width` 的排期是 `chart/gantt_chart`；阶段与泳道只
+表达定性活动位置时由 runtime Structure 构建。
+
+**Canonical catalog aliases**:
+
+| Canonical reference | Legacy bare keys |
+|---|---|
+| `table/record_table` | `basic_table` |
+| `table/metric_table` | `consulting_table` |
+| `table/comparison_matrix` | `comparison_table` |
+| `table/feature_matrix` | `feature_matrix_table` |
+| `table/rating_matrix` | `harvey_balls_table` |
+| `table/hierarchical_table` | `financial_statement_table` |
+| `chart/gantt_chart` | `project_schedule_table` |
+
+新文档、§VII 和 `page_visualizations` 只写 canonical `chart|table/<key>`。表中 Alias
+只服务旧 `page_charts` 读取，不是新模板命名候选；旧的 family-qualified key 不获得
+兼容特权。此前 36 个 canonical Structure bare key 只在旧 `page_charts` 读取时保留为
+`legacy-structure-intent`：它没有 canonical SVG、path 或 reference，不参与 recall，
+也不能写入新 §VII/lock。消费方把该意图投影为定性关系提示，再交给 runtime Structure
+构形；不得把它伪装成仍存活的模板。
+
+**Hard rule**: 修改一个仍属 canonical 的模板时先冻结可见文本、数据和结构层级，
+再简化确认无语义的效果、补齐直属根 bounds，并完成文本差异、独立渲染与双路线
+验证。经本节明确登记的 catalog 合并/退役不要求保留旧示例文案；除此之外，未经
+说明的文本删除、改写或结构边界丢失都会阻断变更。
 
 ---
 
@@ -397,9 +412,11 @@ Pie、Donut、Radar 使用对应中心和半径格式。该注释是工具输入
 - [ ] 颜色差异确实表达 series、state、positive/negative 等语义。
 - [ ] 标题、副标题和来源只用于展示必要结构或容量。
 
-### 9.3 数据与 PowerPoint
+### 9.3 Family 与 PowerPoint
 
-- [ ] 数据图表保留准确 `chart-plot-area` 标记。
+- [ ] Family 判定正确：Chart 为 value-driven、Table 为 row × column fact grid；定性拓扑退出 catalog 并由 runtime Structure 构建。
+- [ ] Chart/Table 模板不含 Master/Layout/layer/placeholder ownership metadata。
+- [ ] Calculator-supported Chart 保留准确 `chart-plot-area` 标记。
 - [ ] Eligible Chart/Table 的 metadata 与可见 fallback 数据一致。
 - [ ] 默认 Shape-first 导出通过。
 - [ ] 存在 replacement marker 时，显式 native Chart/Table 导出通过。
@@ -407,8 +424,8 @@ Pie、Donut、Radar 使用对应中心和半径格式。该注释是工具输入
 
 ### 9.4 Catalog
 
-- [ ] 新模板已登记 `charts_index.json`。
-- [ ] 修改 key/summary 后通过 `chart_recall.py validate` 和 recall 烟测。
+- [ ] 新模板只登记到 owning family index，index object、`meta.total` 与 SVG roster 一致。
+- [ ] 修改 key/summary 后通过 `visualization_recall.py validate` 和 recall 烟测。
 - [ ] 前后可见文本差异已审阅，非重复内容没有意外丢失或改写。
 - [ ] 前后渲染对比确认结构仍可读。
 - [ ] 记录 bytes/tokens 变化，但不以牺牲源码可读性换取数字。
@@ -420,55 +437,15 @@ Pie、Donut、Radar 使用对应中心和半径格式。该注释是工具输入
 ```bash
 # 单文件 SVG 合同
 uvx ppt-master svg-quality-check \
-  skills/ppt-master/templates/charts/<key>.svg
+  skills/ppt-master/templates/<family-directory>/<key>.svg
 
-# Catalog key
-uvx ppt-master chart-recall validate <key>
+# Canonical family/key
+uvx ppt-master visualization-recall validate \
+  <family>/<key>
 
 # 可安全压缩的页面坐标（默认 dry-run）
 uvx ppt-master compact-svg-coordinates \
-  skills/ppt-master/templates/charts/<key>.svg
+  skills/ppt-master/templates/<family-directory>/<key>.svg
 ```
 
 **Validation**: 修改后至少完成 XML 解析、独立 SVG 渲染、Checker、默认 Shape-first 导出，以及 marker 模板的 native Chart/Table 导出。
-
----
-
-## 11. 结构图式兼容索引
-
-本节保留旧引用锚点，但所有图式都受 §1 所有权边界约束。
-
-### 11.1 Attached Section Tab
-
-**Reference — not a constraint**: 半圆标签只在“标签从属于当前信息块”是结构信息时使用。颜色、圆角和高度由项目适配；它不是卡片的默认装饰。
-
-**Forbidden — cover hack**: 不把“全圆角矩形 + 同色覆盖矩形”作为两个未合并对象叠放来伪造单侧圆角。需要时优先以封闭的圆角矩形和矩形为 operands，通过 `shape_boolean_svg.py` 物化 Union 结果；只有 Boolean 仍不能忠实表达时才手写可编辑 path。
-
-### 11.2 Nested Card Border
-
-**Default — single boundary (may override when hierarchy requires two levels)**: 中性模板优先一层描边或留白。浅色外框 + 内层白卡属于旧视觉配方，不再作为共享模板默认；只有外层与内层表达两个真实层级时才保留。
-
-### 11.3 Card Grid
-
-卡片网格表达并列关系和容量，不决定最终卡片风格：
-
-| 结构 | 典型容量 | 参考画布分配 |
-|---|---|---|
-| 2×2 | 4 个平行方面/KPI | `560×255`，横向间距约 40 |
-| 2×3 | 6 个能力/服务 | `370×260`，横向间距约 25 |
-| 1×3 | 3 个平行支柱 | 每列约 `400×540` |
-| 1×4 | 4 个紧凑指标 | 每列约 `280×250` |
-
-**Hard rule**: `page_rhythm: breathing` 不因 catalog 示例自动变成卡片网格；最终结构仍服从页面内容和项目节奏。
-
-### 11.5 Diagonal Relationship Arrow
-
-**Hard rule**: 倾斜虚线箭头只表达跨象限迁移、影响或建议方向，并配一条简短关系标签。颜色与标签外观由项目决定。
-
-### 11.6 Ground Anchor
-
-**Default — omit (may override when depth is semantic)**: 接地椭圆是深度装饰，不属于中性模板默认。只有物体与地面/层级的空间关系本身有意义时保留；不得为了“漂浮感”普遍添加。
-
-### 11.7 Bidirectional Interaction Arrows
-
-**Hard rule**: 双向关系使用两条方向明确的线，每条线都有动作标签。请求/响应的颜色只需可区分，最终映射由项目调色板决定。
