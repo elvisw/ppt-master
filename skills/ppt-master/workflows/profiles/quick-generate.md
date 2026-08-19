@@ -13,6 +13,10 @@ description: One-pass Generate profile for agent-decided preparation, direct SVG
 strategy/confirmation, or directs the agent to proceed to SVG and export.
 Page count alone never activates or blocks this profile.
 
+**Hard rule — Quick paths**: Apply the entry-time `SKILL_DIR` anchor to every
+linked or abbreviated package path below. Expand it inside each tool call;
+never change CWD or inherit a prior shell working directory.
+
 ---
 
 ## 1. Profile Boundary
@@ -248,15 +252,15 @@ Before resolving the one-pass design, read this fixed planning-capability batch
 in one pass:
 
 ```
-Read references/canvas-formats.md
-Read references/image-layout-spec.md
-Read references/image-layout-patterns.md
-Read references/modes/_index.md
-Read references/visual-styles/_index.md
-Read references/image-renderings/_index.md
-Read templates/icons/README.md
-Read templates/charts/charts_index.json
-Read templates/tables/tables_index.json
+Read ${SKILL_DIR}/references/canvas-formats.md
+Read ${SKILL_DIR}/references/image-layout-spec.md
+Read ${SKILL_DIR}/references/image-layout-patterns.md
+Read ${SKILL_DIR}/references/modes/_index.md
+Read ${SKILL_DIR}/references/visual-styles/_index.md
+Read ${SKILL_DIR}/references/image-renderings/_index.md
+Read ${SKILL_DIR}/templates/icons/README.md
+Read ${SKILL_DIR}/templates/charts/chart-vocabulary.md
+Read ${SKILL_DIR}/templates/tables/table-vocabulary.md
 ```
 
 This batch is the complete capability map for planning, not a usage checklist:
@@ -348,7 +352,7 @@ or easier syntax never skips it.
 
 **Hard rule**: Credentials do not decide image need or the initial carrier plan. Do not inspect backend configuration or probe a provider before planning. Web acquisition retains zero-config providers; actual AI generation capability is resolved only during resource preparation, where the declared Quick no-AI replan below owns automated exhaustion.
 
-**Default — visual grounding before a zero-image deck (may override when the user forbids images or charts / native SVG fully carry the visual burden)**: When the audience must recognize, experience, compare, or choose an externally verifiable subject, place, product, or setting, plan supplied/extracted or web images. Prepare AI imagery proactively where invented or deliberately stylized expression materially improves a planned visual job; this may be a complete image or transparent elements composed with other page carriers. This is a semantic decision, not an image-count quota.
+**Default — visual grounding before a zero-image deck (may override when the full-roster carrier review finds no useful image job)**: Honor an explicit no-image requirement. When the audience must recognize, experience, compare, or choose an externally verifiable subject, place, product, or setting, plan supplied/extracted or web images. Prepare AI imagery proactively where invented or deliberately stylized expression materially improves a planned visual job; this may be a complete image or transparent elements composed with other page carriers. A zero-image result remains valid when no image job improves communication. This is a semantic decision, not an image-count quota.
 
 **Mandatory — materialize a selected composable illustration family**: When
 the carrier resolution selects one, resolve the family before SVG authoring.
@@ -365,24 +369,26 @@ with SVG icons to the page and deck fit under
 [`image-generator.md`](../../references/image-generator.md) §4.3; apply no
 coverage quota and never treat the slices as SVG inventory.
 
-**Mandatory — proactive AI decorative lettering**: During that same one-pass
+**Mandatory — proactive decorative-lettering capability scan**: During that same one-pass
 carrier resolution, when the user has not forbidden AI, scan the frozen roster
-for display strings anywhere in the deck. Exactly two questions decide
-eligibility: is that wording stable, and would an artistic treatment
-communicate better than native type?
-Page role, string length, line count, and kind of noun never filter candidates —
+for display strings anywhere in the deck. Two questions expose candidates: is
+that wording stable, and could an artistic treatment plausibly communicate
+better than native type? Passing both exposes a possible AI visual job; it does
+not select lettering or add AI by itself. Page role, string length, line count,
+kind of noun, and resolved style never pre-filter candidates —
 a cover hook, chapter word, place or product name, dish or exhibit name, year,
 hero number, pull quote, or recurring motif word all qualify when both answers
 are yes. Read any such list as examples, never as the set of allowed cases; a
 two-character mark, an eight-character phrase, and a two-line lockup are equally
 valid, and a phrase is never trimmed toward one or two characters to feel more
 "wordmark-like". Set over photography or a busy field is often exactly where
-native type reads pasted-on. Eligibility is wide but use stays selective: build
-one small coherent set for the deck rather than lettering every heading, and
-keep a native title wherever the page needs a searchable, selectable, or
-outline-visible heading, with the lettering as its display layer.
-If a suitable set exists, prepare it without
-a separate request: preserve the exact approved strings, use one ordinary AI
+native type reads pasted-on. Compare every candidate inside the complete page
+and deck carrier mix, then select any coherent set whose treatment wins that
+fit; selecting none remains valid and needs no skip explanation or coverage
+quota. For every selected mark, keep a native title wherever the page needs a
+searchable, selectable, or outline-visible heading, with the lettering as its
+display layer. Prepare the selected set without a separate request: preserve
+the exact approved strings, use one ordinary AI
 item for a single mark or group compatible marks through Illustration Sheets
 and transparent slices. Let the intended character and treatment guide grouping.
 Give the model the marks' role, placement/background relationship, relative
@@ -394,10 +400,9 @@ and an editable title are not mutually exclusive:
 one page may carry the wordmark as its display layer while its subtitle, chrome,
 and body stay native text, so a wish to keep that wording editable is answered
 by the native layer rather than by dropping the lettering. AI permission is not
-coverage: never invent or alter copy, or create lettering merely
-to justify AI usage. Once an existing string passes both eligibility questions,
-skip it only when the user forbade AI; do not add another disqualifier. Actual
-generation capability is resolved during resource preparation, not eligibility.
+coverage: never invent or alter copy, or create lettering merely to justify AI
+usage. Actual generation capability is resolved during resource preparation,
+after selection rather than during candidate discovery.
 
 | Communication job | Available carrier |
 |---|---|
@@ -420,14 +425,16 @@ This carrier menu does not satisfy or replace the per-page Structure decision in
 Resolving one visual style, `Illus.` propensity, or generated-image rendering resolves how imagery **looks**; it resolves the source for no page. A named place, building, product, artwork, person, or other externally verifiable subject stays a web/supplied candidate no matter how illustrative the deck looks. When such a subject is deliberately not shown as itself, state that choice and its reason in the final report rather than leaving it implicit.
 
 **Mandatory — complete Chart/Table capability review**: During that same
-carrier resolution, compare every page's information model against every
-`Pick` / `Skip` rule in the two already-loaded live registries. The registries
-expose the possibility space; they are neither usage quotas nor whitelists. Do
-not select a catalog reference for qualitative shape composition. Choose at
-most one primary Chart/Table `family/key` for a page, validate it with
-`visualization_recall.py validate`, and keep its short purpose only in active
-context. Retain `no-template-match` when none fits. The reference remains
-flexible: it does not lock final type, geometry, style, or native output.
+carrier resolution, compare every page's information model against every entry
+in the already-loaded Chart and Table expression vocabularies. These
+complete capability maps expose what exists; their descriptions do not rank
+candidates or replace judgment from the actual information, and they are
+neither usage quotas nor whitelists. Do not select a catalog reference for
+qualitative shape composition. Choose at most one primary Chart/Table
+`family/key` for a page, validate it with `visualization_recall.py validate`,
+and keep its short purpose only in active context. Retain `no-template-match`
+when none fits. The reference remains flexible: it does not lock final type,
+geometry, style, or native output.
 Describe an embedded child Chart/Table and every qualitative relationship in
 the page's active decision rather than selecting another primary reference.
 Actual information models determine the loaded execution branches. Give every independent
@@ -448,7 +455,7 @@ Prepare only the resource paths needed by the decided pages:
 | Web image | Follow `image-base.md` + `image-searcher.md`; keep query/status data and `image_sources.json`, including any required on-slide attribution |
 | Composable illustration / illustrated-icon / lettering slice | Generate or obtain the parent sheet, run `slice_images.py --trim --alpha --bg KEY_HEX_FROM_PROMPT --strict-alpha`, and place only outputs from a successful strict cut. Slices remain under `images/` and may serve several pages; each lettering sheet still names every exact stable string assigned to it |
 | Registered reconstruction group | Follow `image-generator.md` §4.4; keep full-canvas members registered with `crop=no-crop`, and materialize every required shared-plate member as an independent picture object |
-| Visualization | Keep Chart values, Table cell topology, and chosen treatment in active context; load the applicable Chart/Table authority in §3 and write native replacement metadata only for an independently selected native-ready object |
+| Visualization | Keep Chart values, Table cell topology, and chosen treatment in active context; load the applicable Chart/Table authority in §3 and write native replacement metadata for every supported chart and pure text grid, which are native-ready by default |
 
 **Hard rule — planned slice closure**: Every placeable-element sheet carries `slice_grid` plus comma-separated `slice_names` in `image_prompts.json`. Deterministically enumerate those basenames and require every `images/<name>.png` after an exit-0 `slice_images.py --strict-alpha` run before SVG authoring; a `Generated` parent sheet never satisfies its named outputs. A nonzero slice run returns the parent to image preparation: correct only an evidenced key/tolerance mismatch, then enlarge cells or split incompatible shape families and regenerate when content reaches a cell edge. Repeating the same failing grid is not recovery. An explicitly selected manual path retains the marker, sets the affected item to `Needs-Manual` with `last_error`, and blocks Quick SVG/export until every named output is supplied and validated. Exhausted automated AI generation or dependent slicing instead follows the no-AI replan below; never retain an unresolved AI/slice row merely to continue.
 
@@ -495,6 +502,7 @@ not route among them one file at a time:
 [`shared-standards-core.md`](../../references/shared-standards-core.md),
 [`svg-effects.md`](../../references/svg-effects.md),
 [`native-shape-authoring.md`](../../references/native-shape-authoring.md),
+[`preset-shape-vocabulary.md`](../../references/preset-shape-vocabulary.md),
 [`semantic-svg.md`](../../references/semantic-svg.md),
 and [`executor-structure.md`](../../references/executor-structure.md). Retain
 only the mode/style detail files selected during one-pass design resolution and
@@ -517,8 +525,8 @@ Reread only after a known file change or context invalidation.
 `Structure=yes` result can apply its qualitative topology grammar.
 `native-shape-authoring.md` independently owns contour selection and compound
 page geometry for both Structure results. Reuse both throughout the valid
-execution context; before P01, complete its unfiltered full-registry discovery,
-then reread only after a known file change or context invalidation.
+execution context; before P01, read the complete preset vocabulary once, then
+reread only after a known file change or context invalidation.
 
 **Mandatory — per-image-page composition decision**: For every page with one
 or more images, after its content and communication move are
@@ -562,15 +570,13 @@ This decision is mandatory on every page and cannot be satisfied by the
 capability menu, visualization recall, template geometry, or a later check.
 
 **Mandatory — independent per-page geometry move**: after the Structure result
-and any applicable topology resolve, but before choosing any contour, run the
-page-local direct `recommend --compact --limit 6` invocation defined by
-[`native-shape-authoring.md`](../../references/native-shape-authoring.md) from
-the actual job, then invoke `describe --compact` directly only for serious
-candidates. Registry discovery followed by direct `describe` without
-`recommend` does not satisfy this recall. Apply §2.1 to the transient geometry
-job, actual content, resolved style, and complete native vocabulary before
-writing coordinates. It owns the exact-fit geometry gate, independent
-relationship / carrier fit,
+and any applicable topology resolve, apply
+[`native-shape-authoring.md`](../../references/native-shape-authoring.md) §2.1
+to the transient geometry job, actual content, resolved style, and complete
+loaded native vocabulary before writing coordinates. Select through direct
+semantic comparison; use `describe --compact` only when objective geometry
+facts could change a serious candidate decision. This move owns the exact-fit
+geometry gate, independent relationship / carrier fit,
 contour-family / exact-result choice, reader effect for a generic or undrawn
 result, running actual-geometry signature, and materialization boundary. A
 primitive remains valid when it wins this comparison; there is no preset quota.
@@ -584,7 +590,7 @@ context and never change the Structure result.
 | Any actual row × column fact grid | [`executor-table.md`](../../references/executor-table.md) |
 | Any mathematical notation that may require native math | [`native-formula.md`](../../references/native-formula.md) before choosing ordinary text, inline native math, or block native math |
 | Any external or same-deck click hyperlink | [`native-hyperlinks.md`](../../references/native-hyperlinks.md) before authoring its inline or whole-object SVG anchor |
-| A used preset pattern fill, or one independent Chart/Table object selected as native-ready in active context | [`native-data-interface.md`](../../references/native-data-interface.md) before drawing that object |
+| A used preset pattern fill, or one independent Chart/Table object resolved as `<object-key>=yes` in active context | [`native-data-interface.md`](../../references/native-data-interface.md) before drawing that object |
 | Any data-driven chart geometry | [`verify-charts.md`](../stages/verify-charts.md) after the complete roster and before the one final checker |
 
 Chart/Table reference and final information model are independent loading
@@ -743,11 +749,11 @@ or lock.
 
 - [x] All required source/resource preparation is complete
 - [x] The fixed planning-capability batch was read before the roster, and every selected detail source was read
-- [x] The complete native preset registry was read unfiltered before P01; every page entering ordinary contour selection ran job-derived `recommend` before choosing a contour and described only serious candidates
+- [x] The complete 187-name native preset vocabulary was read before P01; each page chose from that full capability surface, with objective candidate details inspected only when needed
 - [x] Every page considered suitable carrier combinations without a coverage quota or single-carrier assumption
-- [x] The proactive decorative-lettering scan ran before capability resolution; every exact string passing both eligibility questions entered an AI item or lettering sheet/slice job unless the user forbade AI
+- [x] The proactive decorative-lettering capability scan ran before carrier selection; every selected lettering job entered an AI item or lettering sheet/slice job, and zero selected jobs remained valid
 - [x] Every page not bound to literal supplied geometry carried its geometry job into authoring, resolved each drawn contour from its exact family and job, retained the reader effect for any generic or undrawn result, and compared its actual geometry signature before the next page; repetition served the same page job / relationship or continuity motif
-- [x] Image need was decided independently of credentials; any zero-image deck is backed by an explicit no-image requirement or a roster whose visual burden is fully carried by charts / native SVG
+- [x] Image need was decided independently of credentials; any zero-image deck followed a complete roster review in which no image job improved communication or the selected non-image carriers fully carried it
 - [x] Every `slice_names` output exists after an exit-0 strict-alpha run, and no page whose chosen composition depends on a slice was authored or exported without it
 - [x] Every image-bearing page made its one pre-geometry composition decision
 - [x] Every image decided its own source from that page's subject and job — not inherited from the resolved visual style — and every externally verifiable subject deliberately not shown as itself was stated with its reason

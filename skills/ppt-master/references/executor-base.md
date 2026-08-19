@@ -10,7 +10,7 @@ Always-loaded Executor authority for flat SVG page authoring and behavior shared
 | Any selected Chart/Table `family/key` reference, or a legacy `page_charts` row that resolves to a live Chart/Table SVG | [`executor-visualization.md`](./executor-visualization.md), then the resolver-returned Chart/Table branch |
 | Any value-driven geometry, including a chart-family reference, mini chart, sparkline, inset, or small multiple | [`executor-chart.md`](./executor-chart.md) |
 | Any semantic cell grid, including a table-family reference | [`executor-table.md`](./executor-table.md) |
-| A page will use a preset pattern fill or an independent object is explicitly selected as native-ready | [`native-data-interface.md`](./native-data-interface.md) before emitting the pattern or replacement metadata |
+| A page uses a preset pattern fill, or an independent Chart/Table object is resolved as `<object-key>=yes` | [`native-data-interface.md`](./native-data-interface.md) before emitting the pattern or replacement metadata |
 | Any image | [`executor-image.md`](./executor-image.md) + [`image-layout-spec.md`](./image-layout-spec.md) + [`image-layout-patterns.md`](./image-layout-patterns.md) + [`svg-image-embedding.md`](./svg-image-embedding.md) |
 | Any nontrivial mathematical expression | [`native-formula.md`](./native-formula.md) |
 | Any external or same-deck click hyperlink | [`native-hyperlinks.md`](./native-hyperlinks.md) |
@@ -120,7 +120,7 @@ Apply the content-vs-expression contract above within the selected reading mode.
 - **Prepared decorative lettering**: When the approved plan selects stable artistic lettering as part of the visual, place its prepared AI/slice file as an image asset and keep the ordinary editable title/subtitle in separate native text frames. Do not recreate the asset with layered glyph copies or native WordArt; when the plan keeps that wording as native text and prepares no lettering asset, use ordinary `<text>` without inventing a missing image.
 - **Outside-band recovery**: for structural text, reflow geometry and use the declared role band locally. For a sparse display occurrence, keep the unitless value and verify that its deck-wide count remains at most two. Never flatten a justified distinction or add a role merely to silence the checker. Mirror pages preserve exact source typography as inherited input.
 - Images MUST reference files listed under `images`; no invented filenames
-- For math, load [`native-formula.md`](./native-formula.md): simple notation stays text; one-line structural prose uses inline; matrices, multiline derivations, or standalone high structure use block. Keep exact LaTeX plus preview; never use an image.
+- For math, load [`native-formula.md`](./native-formula.md): simple notation stays text; one-line structural prose uses inline only when its native-height envelope fits the reserved row/module space; matrices, multiline derivations, standalone high structure, or vertically expanding math without that clearance use block. Keep exact LaTeX plus preview; never use an image.
 
 Return upstream before any derived/accent identity becomes recurring or structural, or when an undeclared display size reaches its third occurrence, then update the retained context under §2.1. Local garnish, same-role `±2`px adjustments, and at most two sparse display-size occurrences need no lock row. Never expand the lock to silence a comparison. New icon acquisition, images, structural fonts, role anchors, and resources keep their preparation/role rules.
 
@@ -197,10 +197,11 @@ materialize that contour with Boolean semantics, and use freeform last. Block
 arrows, chevrons, banners / ribbons, callouts, flowchart nodes, stars, and other
 Office symbols use `preset_shape_svg.py`, not plain paths or fake rectangles.
 
-Before the first page, complete [`native-shape-authoring.md`](./native-shape-authoring.md)'s
-unfiltered full-registry discovery. Decide every page-fit contour and its
-simplest exact authoring form directly from the page content and visual system;
-no Design Spec construction selection or material inventory gates this choice.
+Before the first page, read
+[`preset-shape-vocabulary.md`](./preset-shape-vocabulary.md) completely. Decide
+every page-fit contour and its simplest exact authoring form directly from the
+page content and visual system; no Design Spec construction selection, scorer,
+or material inventory gates this choice.
 
 **Mandatory — independent per-page geometry move**: after the Structure result
 and any applicable topology resolve, apply

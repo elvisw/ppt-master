@@ -70,7 +70,9 @@ uvx ppt-master project validate <project_path>
 # Icon selection — copy chosen library icons into <project>/icons/ (missing names reported + non-zero = re-pick)
 uvx ppt-master icon-sync <project_path> <lib/name> [<lib/name>...]
 
-# Sounds
+# Sounds — after a concrete cue job, read the complete vocabulary:
+# skills/ppt-master/templates/sounds/sound-vocabulary.md
+# list is optional exact filtering
 uvx ppt-master sound-sync list [--query term]
 uvx ppt-master sound-sync <project_path> <namespace>/<id>...
 

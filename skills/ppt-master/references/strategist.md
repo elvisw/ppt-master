@@ -182,7 +182,7 @@ The base icon style is one single-select identity, not a material whitelist:
 | Option | Approach | Suitable Scenarios |
 |--------|----------|-------------------|
 | **A** | Emoji | Casual, playful, social media |
-| **B** | Built-in generic icon library | Professional scenarios (recommended) |
+| **B** | Built-in generic icon library | Recurring compact semantic cues in one coherent SVG style |
 | **C** | Custom project icons | Supplied, template-carried, or imported assets |
 | **D** | No base icons | Illustration, typography, shapes, or data already carry the compact cues |
 
@@ -307,7 +307,7 @@ owns SVG authoring under [`native-hyperlinks.md`](./native-hyperlinks.md).
 
 **Mandatory — no AI capability preflight**: When `recommend.image_usage` includes `ai`, preserve an explicit user path instruction; otherwise recommend `auto`. Do not inspect backend configuration, check host-tool availability, or probe a provider during planning. Generate Step 5 execution is the first capability check.
 
-**Default — visual grounding before `none` (may override when the user forbids images or charts / native SVG fully carry the visual burden)**: First decide whether the audience must recognize, experience, compare, or choose an externally verifiable subject, place, product, or setting. When yes, propose `provided` / `web`; propose `ai` when invented or deliberately stylized expression materially improves a planned visual job. Treat `none` as a positive whole-deck conclusion. Mixed sources may serve different page roles. The three Stage-2 style directions never settle source: a rendering candidate resolves how imagery looks, never whether a real subject must appear as itself.
+**Default — visual grounding before `none` (may override when the full-roster carrier review finds no useful image job)**: Honor an explicit no-image requirement. First decide whether the audience must recognize, experience, compare, or choose an externally verifiable subject, place, product, or setting. When yes, propose `provided` / `web`; propose `ai` when invented or deliberately stylized expression materially improves a planned visual job. Treat `none` as a positive whole-deck conclusion when no image source owns a meaningful communication job. Mixed sources may serve different page roles. The three Stage-2 style directions never settle source: a rendering candidate resolves how imagery looks, never whether a real subject must appear as itself.
 
 **Default — consider proactive illustrated icons without creating another
 confirmation field**: Before each Stage-2 `recommend.image_usage`, consider
@@ -316,21 +316,23 @@ illustrated cue family. This may support an `ai` recommendation, but it is not
 an automatic source trigger or coverage quota. Resource grouping remains a
 fit-driven decision under [`strategist-image.md`](./strategist-image.md).
 
-**Mandatory — assess proactive decorative lettering without making eligibility
-an automatic source trigger**: Before each Stage-2 `recommend.image_usage`,
-scan the complete planned roster for exact stable display strings whose
-artistic treatment could communicate better than native type. Page role,
-character count, word count, line count, and kind of noun never filter
-candidates: a complete long or
+**Mandatory — scan proactive decorative-lettering capability without making
+candidates an automatic source trigger**: Before each Stage-2
+`recommend.image_usage`, scan the complete planned roster for exact stable
+display strings whose artistic treatment could plausibly communicate better
+than native type. Page role, character count, word count, line count, kind of
+noun, and proposed style never pre-filter candidates: a complete long or
 multi-line title is as eligible as a short mark. Never invent, rewrite,
-shorten, or split copy to make generation easier. An eligible string is one
-possible AI visual job, not a mechanical reason to add
-`ai`. The second eligibility question already decides whether lettering
-strengthens communication: when its answer is yes, lettering may be the sole
-intended AI job and may support an AI recommendation stated in
-`image_notes.value`; when either answer is no, native editable text remains
-valid. The absence of another AI-image job never forces lettering. Explicit
-no-AI or editable-only requirements win. Execution follows
+shorten, or split copy to make generation easier. Passing both discovery
+questions exposes one possible AI visual job, not a selected resource or a
+mechanical reason to add `ai`. During page-carrier planning, compare those
+candidates with native type and the complete deck mix; select only the marks
+whose treatment wins that fit. Zero selected marks remains valid and needs no
+skip explanation or coverage quota. A selected mark may be the sole intended
+AI job and may support an AI recommendation stated in `image_notes.value`;
+when either discovery answer is no, native editable text remains valid. The
+absence of another AI-image job never forces lettering. Explicit no-AI or
+editable-only requirements win. Execution follows
 [`image-generator.md`](./image-generator.md) §7.
 
 **Recommendation output**: Write `recommend.image_usage` as one source id or an array for mixed sources. Put the intended communication jobs of each proposed source, authoritative assets, preferred/avoided imagery, and placeholder tolerance in `image_notes.value`. When `ai` is proposed, explain in editable natural language how generated visuals are expected to contribute and mention any materially anticipated illustration, illustrated-icon, or lettering role. Keep the note an open strategy—not an enum, carrier allowlist, page-by-page assignment, count, or resource manifest; name exact pages/assets only when already authoritative or required. `none` is exclusive. Decks built around real-world recognition or choice, including travel itineraries, lean `provided` / `web`; generic human-scale topics such as family life, education, wellness, or children lean `ai` when no supplied asset carries the story and invented or stylized expression serves it. Regulated investor decks, B2B finance reports, and data-only dashboards remain eligible for `none` by judgment.
@@ -341,9 +343,10 @@ no-AI or editable-only requirements win. Execution follows
 
 1. Before authoring Stage-2 directions, load the workflow's complete fixed
    planning-capability batch. It includes this module, the image-layout
-   authorities, all compact choice indexes, the icon-library contract, and the
-   complete Chart/Table registries. After the three whole-direction intents
-   exist and their mode/style/rendering reference ids are frozen, read only
+   authorities, all compact decision maps, the icon-library contract, the
+   complete Chart and Table expression vocabularies. After the
+   three whole-direction intents exist and their mode/style/rendering reference
+   ids are frozen, read only
    those exact detail siblings once and author one complete custom rendering
    inside each direction before deciding whether `recommend.image_usage`
    includes AI.
@@ -411,17 +414,18 @@ Classify by information model, never source PowerPoint object type:
 | Model | Planning action |
 |---|---|
 | Qualitative `order`, `link`, `parent`, `membership`, `contrast`, or `overlap` | Preserve units, relationship, and reading path as free §IX prose; no catalog key |
-| Values/dates/durations determine geometry | Chart; compare the complete loaded chart registry |
-| Row header × column header addresses each fact | Table; compare the complete loaded table registry |
+| Values/dates/durations determine geometry | Chart; compare the complete loaded chart expression vocabulary |
+| Row header × column header addresses each fact | Table; compare the complete loaded Table expression vocabulary |
 
 **Mandatory — relationship handoff**: keep every qualitative relationship in §IX free prose; never serialize grammar atoms, coordinates, or named models. Executor makes the per-page Structure decision at runtime.
 
 **Mandatory — complete Chart/Table capability review**: During the same §IX
-roster composition, compare every page's information model against every
-`Pick` / `Skip` rule in the two already-loaded live registries. The registries
-expose the possibility space; they are neither usage quotas nor whitelists.
-Skip custom objects and qualitative composition. Retain `no-template-match`
-when no registered reference fits.
+roster composition, compare every page's information model against every entry
+in the already-loaded Chart and Table expression vocabularies. These
+complete capability maps expose what can be selected; their descriptions do
+not rank candidates or replace judgment from the actual information. They are
+neither usage quotas nor whitelists. Skip custom objects and qualitative
+composition. Retain `no-template-match` when no registered reference fits.
 
 **Selection**:
 
@@ -434,12 +438,12 @@ uvx ppt-master visualization-recall validate \
   <family>/<key> [<family>/<key> ...]
 ```
 
-Correct failed selections by re-reading the complete registries;
+Correct failed selections by re-reading the complete vocabulary/registry;
 `no-template-match` never enters `page_visualizations`.
 
 **Section VII selection list**: write `Page | Family | Template | Usage` for each `chart|table` reference; Usage is semantic purpose. Omit empty/no-match detail. Qualitative composition stays in §IX; only Layout/Deck owns reusable PowerPoint structure.
 
-**Native-ready boundary**: Give every independent data chart and pure text-grid table in §IX `Visualization` a unique page-local semantic `kebab-case` key, then write one `Native-ready` map: `<key>=yes|no; ...`. Use `yes` only when an editable native object benefits the confirmed requirement/afterlife. Qualitative shape compositions and incidental microvisuals stay unlisted.
+**Native-ready boundary**: Give every independent data chart and pure text-grid table in §IX `Visualization` a unique page-local semantic `kebab-case` key, then write one `Native-ready` map: `<key>=yes|no; ...`. Decide `yes` by default; use `no` only when [`native-data-interface.md`](./native-data-interface.md) §2 cannot express that object. Qualitative shape compositions and incidental microvisuals stay unlisted.
 
 ```markdown
 | Page | Family | Template | Usage |

@@ -317,14 +317,14 @@ Catalog 模板本身只有一个主 Chart，可保留上述 unscoped marker 与
 
 **Forbidden — placeholder storytelling**: 不写长篇营销文案、部门归属、真实品牌或无法复用的项目背景。
 
-### 7.2 Family indexes
+### 7.2 分类索引与规划投影
 
 新增模板只登记到其 owning family index：
 
-| Family | Directory | Index object |
-|---|---|---|
-| `chart` | `charts/` | `charts_index.json` → `charts` |
-| `table` | `tables/` | `tables_index.json` → `tables` |
+| 分类 | 目录 | 机器索引 | 规划词汇表 |
+|---|---|---|---|
+| `chart` | `charts/` | `charts_index.json` → `charts` | `chart-vocabulary.md` |
+| `table` | `tables/` | `tables_index.json` → `tables` | `table-vocabulary.md` |
 
 每个 `<key>.summary` 使用相同的选择句合同：
 
@@ -334,7 +334,13 @@ Catalog 模板本身只有一个主 Chart，可保留上述 unscoped marker 与
 }
 ```
 
-**Hard rule**: `summary` 是选型句，使用 `Pick for ... Skip if ...`，不是视觉描述；`key` 与同 family 文件名一致，`meta.total` 与该 family catalog 数量一致。不要建立跨 family 的第二份成员清单。
+`summary` 保留 `Pick for ... Skip if ...` 句式，供可选的机器召回诊断使用；
+规划主路径不读取这些记录。Chart 与 Table 的规划词汇表必须完整列出各自同一组
+canonical `family/<key>`，只说明信息关系，不写 SVG 实现、布局参数或选择结论。
+
+**Hard rule**: `key` 与同 family 文件名一致，`meta.total` 与该 family catalog
+数量一致；每份 planning vocabulary 与 owning index 的成员集合必须精确一致。
+除此以外不要建立跨 family 的第二份成员清单。
 
 ---
 
