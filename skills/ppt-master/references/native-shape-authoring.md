@@ -12,20 +12,35 @@ only when those constructions fail. Neither helper writes a page. The preset
 helper does not create the shape's own `p:txBody`; keep visible text outside the
 atomic fragment.
 
-**Mandatory — complete registry discovery at authoring entry**: before the
+**Mandatory — semantic registry discovery at authoring entry**: before the
 first newly authored page or template contour in each valid context, run the
-following command unfiltered and retain its complete output (currently 187
-names). This is authoring-time capability discovery, never a Strategist task or
-Design Spec field. Rerun only after context invalidation or a registry change.
+following command unfiltered and retain its complete output. It organizes all
+187 presets by the official Office gallery categories, then adds semantic
+groups, scopes, and one-line intent summaries. This compact index is
+authoring-time capability discovery, never a Strategist task or Design Spec
+field. Rerun only after context invalidation or a registry change.
+
+**Hard rule — direct structured calls**: `${SKILL_DIR}` below is the retained
+absolute Skill root. Invoke each JSON command once per concrete argument set
+and read stdout directly. Do not change CWD, encode executables or flag lists in
+scalar shell strings, batch these calls through shell loops, merge stderr, or
+add a downstream parser when `--compact` exists.
 
 ```bash
-uvx ppt-master preset-shape-svg list
+uvx ppt-master preset-shape-svg list --grouped
 ```
 
-Choose from that full inventory by page job. Use `list --search` only to narrow
-the already-read inventory and `describe <name>` only after identifying a
-candidate; neither replaces the complete initial read. Discovery is prerequisite;
-each page consumes it through §§1–2.1 without a quota.
+The plain `list` command remains a compatibility view of exact registry names;
+it does not replace grouped discovery. For each page entering ordinary contour
+selection, run `recommend --compact --limit 6` from the actual page role and
+applicable relationship, direction, aspect, text capacity, scope, or intent
+terms before choosing a contour, then run `describe <name> --compact` on the
+serious candidates. Grouped discovery followed by direct `describe` does not satisfy
+page-local recall. Those commands supply the full match reasons, intended uses,
+misuse boundaries, adjustments, and key geometry facts omitted from the compact
+entry index. Recommendation is diverse candidate recall, not a whitelist,
+automatic choice, or shape quota; a neutral primitive remains valid when it
+fits best. Each page still resolves the final contour through §§1–2.1.
 
 ## 1. Contour Selection and Materialization Gate
 
@@ -42,8 +57,11 @@ or contrast. Independently resolve page-field / carrier fit from ownership,
 focal hierarchy, boundary strength, and the active deck's edge / opening
 language; `Structure=no` removes only relationship topology. Choose a plain
 primitive, uniform grid, or no drawn carrier only when that lack of inflection
-gives the reader a concrete benefit or avoids a false inference; retain that
-effect in active context. Quick speed, restrained style, readability, equal
+gives the reader a concrete benefit or avoids a false inference. Retain that
+reader effect through authoring. Before that neutral result wins, name the
+strongest fitting native / compound alternative and retain why its inflection
+would add no reader benefit, create a false inference, weaken hierarchy, or
+conflict with the page job. Quick speed, restrained style, readability, equal
 importance, precedent, and shorter syntax alone do not qualify.
 
 **Hard rule — style does not narrow capability**: the active visual system may
@@ -72,38 +90,55 @@ hand-author a freeform merely because an SVG path is convenient.
 `data-pptx-authoring="preset"`. Never add `data-pptx-prst`, frame, adjustment,
 or registry path data by hand. Insert the helper's complete compact `<g>` and
 rerun the helper whenever its geometry, paint, or filter reference changes.
+After selecting two or more objects for one current page or template
+construction, use `render-batch --input -` to validate and emit their
+independent fragments in one stdout round; the batch never chooses those
+objects or their composition.
 
 ---
 
-## 2. Semantic Preset Candidate Guide
+## 2. Semantic Preset Selection
 
-Use this table as navigation, not a shortlist. Match intent against the loaded
-inventory before selecting a neutral primitive or freeform; examples, style,
-and syntax never hide a more specific contour. Style composition examples
-remain vocabulary, not a menu.
+The catalog's top level follows the Office gallery taxonomy: Lines,
+Rectangles, Basic Shapes, Block Arrows, Equation Shapes, Flowchart, Stars and
+Banners, Callouts, and Action Buttons. The bundled semantic layer at
+`scripts/pptx_shapes/data/presetShapeSemantics.json` adds authoring roles and
+use boundaries; it does not redefine the DrawingML registry.
 
-"Automatic" means the Executor applies this gate before drawing. Export never
-scans or upgrades existing geometry.
+Apply this page-local sequence before drawing:
 
-| Visual intent | Candidate presets | Boundary |
+| Pass | Action | Result |
 |---|---|---|
-| Page field, outline, or content carrier | `rect`, `round*Rect`, `snip*Rect`, `plaque`, `bevel`, `frame`, `halfFrame`, `corner`, `foldedCorner`, `homePlate` | Match edge, corner, and opening behavior to ownership, hierarchy, or deck language; keep `rect` when no inflection helps. |
-| Grouping or ownership boundary | `leftBrace`, `rightBrace`, `bracePair`, `leftBracket`, `rightBracket`, `bracketPair` | Use a brace / bracket when one visible boundary must collect or assign content without becoming a filled card. |
-| Literal geometric body | `triangle`, `diamond`, `pentagon`, `hexagon`, `octagon`, `star5` | Use only when the named geometry itself is the intent. |
-| Solid block direction | `rightArrow`, `leftArrow`, `upArrow`, `downArrow`, `leftRightArrow`, `upDownArrow`, `chevron` | Use `<line>` for a thin straight relationship; do not fake a solid directional object with a stroked path. |
-| Standard flowchart node | `flowChartProcess`, `flowChartDecision`, `flowChartInputOutput`, `flowChartTerminator`, `flowChartDocument` | Use only for an actual flowchart; ordinary content cards remain cards. |
-| Stock bent / curved relationship contour | `bentConnector*`, `curvedConnector*` | Prefer when the contour fits and endpoint attachment is not required. The authored object is an unconnected native Connector, so moving nodes does not reroute it. |
-| Stock callout | `wedgeRectCallout`, `wedgeRoundRectCallout`, `wedgeEllipseCallout`, `cloudCallout` | For a brand-specific or custom tail, continue through the Boolean gate; use freeform only if the result still cannot be expressed faithfully. |
-| Stock ribbon or scroll | `ribbon*`, `ellipseRibbon*`, `verticalScroll`, `horizontalScroll` | Select only when the stock contour is visually acceptable. |
-| Standalone math symbol | `mathPlus`, `mathMinus`, `mathMultiply`, `mathDivide`, `mathEqual`, `mathNotEqual` | Use only when the symbol itself is a diagram shape; simple notation remains text, while non-trivial inline or block mathematics follows [`native-formula.md`](./native-formula.md). |
-| Literal Office symbol | `heart`, `sun`, `moon`, `lightningBolt`, `gear6`, `gear9` | Never replace an icon required by `spec_lock.icons`. |
+| Job | State what the object must do for the reader before naming a shape. | Page role plus any real relationship, direction, aspect, text load, or literal scope. |
+| Recall | Run `recommend --compact` with the known criteria. Keep the default `general` scope unless the page truly needs `literal`, `flowchart`, or `navigation`. | A group-diverse candidate set with match reasons and misuse boundaries. |
+| Inspect | Run `describe --compact` for candidates whose contour could fit; compare `intent`, `recommended_for`, `avoid_for`, adjustments, text rectangle, and connection sites. | Evidence for choosing or rejecting each serious candidate. |
+| Select | Choose the contour whose inference and visual character fit the page, including a neutral primitive when neutrality is useful. | One page-fit contour; no syntax decision yet. |
+| Encode | Apply §1's materialization gate. | Ordinary SVG primitive, helper-authored preset, Boolean result, or necessary freeform. |
 
-Narrow and inspect candidates from the already-loaded inventory:
+Example recall and inspection commands:
 
 ```bash
-uvx ppt-master preset-shape-svg list --search arrow
-uvx ppt-master preset-shape-svg describe rightArrow
+uvx ppt-master preset-shape-svg recommend --compact \
+  --role spine --relationship order --directionality horizontal --aspect wide \
+  --limit 6
+uvx ppt-master preset-shape-svg describe chevron --compact
+
+uvx ppt-master preset-shape-svg recommend --compact \
+  --scope flowchart --role node --relationship flow --query decision --limit 6
 ```
+
+**Hard rule — semantic fit, not name association**: a preset name, topic word,
+or metaphor is not evidence of use. Respect `literal_only` and `scope` before
+visual preference. For example, a scroll is not a generic playbook carrier, a
+lightning bolt is not generic price tension, `chartX` / `chartStar` /
+`chartPlus` are partition symbols rather than charts, and a flowchart symbol
+belongs only in an actual flowchart. An action-button preset supplies visual
+geometry only; it never creates an action or hyperlink.
+
+The semantic catalog chooses contours, not syntax. It never requires `rect`,
+`ellipse`, `line`, or any other primitive to pass through the preset helper;
+after selection, the simplest exact authoring form in §1 remains authoritative.
+Export never scans or upgrades existing geometry.
 
 **Shape-first diagram rule**: use `<line>` for straight thin relationships;
 use an exact connector-family preset for a stock bent or curved contour; use a
@@ -116,6 +151,8 @@ owned by the preserve/mirror round-trip contract.
 
 **Forbidden — false native semantics**:
 
+- a catalog entry with `literal_only=true` when the depicted literal concept is
+  absent, or a `flowchart` / `navigation` scope outside that real context;
 - `actionButton*` when navigation or trigger behavior is expected; the helper
   maps its visual preset geometry only and never creates an action or hyperlink;
 - `chartX`, `chartStar`, or `chartPlus` as a substitute for native charts;
@@ -197,8 +234,8 @@ siblings whenever one-object contour semantics are unnecessary.
 
 ## 3. Fragment Generation
 
-One helper invocation owns one selected object; multiple chosen objects may
-render in one tool round as separate outputs.
+`render` emits one selected object. `render-batch` atomically emits multiple
+already-selected objects for one current page or template construction.
 Generated project pages choose each object's solid paint from the current page
 context, using `spec_lock.md` roles as reusable anchors rather than an exhaustive
 palette; `create-template` takes colors from the confirmed brief and template
@@ -234,11 +271,13 @@ Every connector-family preset requires `--object-kind connector`, `--fill none`,
 and a visible stroke. It exports as an unconnected `p:cxnSp`; a connector
 preset can never be authored as an ordinary `shape`.
 
-**Hard rule — stdout-only exception**: the helper prints one deterministic
-`<g>` fragment. Read that output and insert it with the normal page/template
-`apply_patch` edit. Do not redirect it into `svg_output/`, drive it from a batch
-manifest, loop over pages/templates, or let it choose layout. The main Agent
-still authors each complete SVG page and reusable template explicitly.
+**Hard rule — stdout-only exception**: the helper prints one or more
+deterministic `<g>` fragments. Read that output and insert it with the normal
+page/template `apply_patch` edit. A batch JSON array is transient input for
+already-selected objects in the current construction, never a project resource
+or multi-page plan. Do not redirect output into `svg_output/`, loop over
+pages/templates, or let the helper choose layout. The main Agent still authors
+each complete SVG page and reusable template explicitly.
 
 ---
 
