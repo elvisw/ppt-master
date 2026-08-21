@@ -167,7 +167,7 @@ go to `images/`; other referenced source assets go to `templates/assets/`.
 The destination must be empty, and the command does not write
 `templates/design_spec.md`; Template_Designer owns that authored brief.
 
-`template_preview_pptx.py` reads a template workspace, exports every public `templates/*.svg` prototype as one structured review slide, and verifies the resulting Master/Layout package. Canonical definition-only `layout_<layout_key>.svg` prototypes are registered as reusable Layouts through internal carrier slides that are removed before publication; they never increase the review deck's visible slide count. This is an on-demand review action: its default output is `exports/<template_id>_template_preview.pptx`, and that directory need not exist before the command runs. It refuses an existing output unless an intentional re-export passes `--force`. `--visual-only` is an explicit migration aid for legacy SVG rosters: it creates a slide-local visual review deck without validating or claiming a reusable Master/Layout contract. This diagnostic path does not require a project `spec_lock.md`; it may retain generic theme/text defaults inside its clean one-Master/one-Layout shell. New structured templates use the default mode when a review deck is requested.
+`template_preview_pptx.py` reads a template workspace, exports every public `templates/*.svg` prototype as one structured review slide, and verifies the resulting Master/Layout package. In a project root containing Layout and Deck specs, it previews the active Layout roster. Canonical definition-only `layout_<layout_key>.svg` prototypes are registered as reusable Layouts through internal carrier slides that are removed before publication; they never increase the review deck's visible slide count. This is an on-demand review action: its default output is `exports/<template_id>_template_preview.pptx`, and that directory need not exist before the command runs. It refuses an existing output unless an intentional re-export passes `--force`. `--visual-only` is an explicit migration aid for legacy SVG rosters: it creates a slide-local visual review deck without validating or claiming a reusable Master/Layout contract. This diagnostic path does not require a project `spec_lock.md`; it may retain generic theme/text defaults inside its clean one-Master/one-Layout shell. New structured templates use the default mode when a review deck is requested.
 
 Template fill (direct PPTX, no SVG conversion):
 
@@ -275,7 +275,7 @@ uvx ppt-master extract-svg-assets <layered_svg_dir> --icons-dir <icons_dir> --ic
 uvx ppt-master extract-svg-assets <flat_svg_dir> --icons-dir <icons_dir> --icon-namespace imported --reuse-inventory <layered_inventory.json> --inplace --id-prefix flat
 uvx ppt-master extract-svg-pictures "<svg_file>" --select "<group_id>" --resource-root "<workspace>" --images-dir "<picture_assets_dir>" --inplace  # optional create-template normalization: one selected group -> one SVG picture
 uvx ppt-master compact-svg-coordinates <template_workspace>/templates --inplace --keep-native-frames
-uvx ppt-master mirror-template-materialize <import_workspace> <empty_template_workspace>  # Type A mirror only
+uvx ppt-master mirror-template-materialize <import_workspace> <empty_template_workspace>  # Type A mirror only; destination owns no roster
 ```
 
 `extract_svg_assets.py` fingerprints each extracted subtree before generated-ID
