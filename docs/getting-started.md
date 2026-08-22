@@ -6,6 +6,7 @@
 
 The short path to your first deck, how to use everything around it — templates, live preview, animations, narration, voice cloning — and where to look when something goes wrong. Sections follow roughly the order you meet them in a real run. Each is the quick version; follow the **Full guide →** link for depth.
 
+- [Set up the installation and working folders](#set-up-the-installation-and-working-folders)
 - [Start from a template](#start-from-a-template)
 - [Generate your first deck](#generate-your-first-deck)
 - [Live preview & visual edits](#live-preview--visual-edits)
@@ -13,6 +14,32 @@ The short path to your first deck, how to use everything around it — templates
 - [Narration & video](#narration--video)
 - [Use a cloned voice](#use-a-cloned-voice)
 - [When something goes wrong](#when-something-goes-wrong)
+
+---
+
+## Set up the installation and working folders
+
+Before starting the agent, keep these three directories separate:
+
+| Directory | What it is | Where it comes from |
+|---|---|---|
+| **Installed skill directory** | The PPT Master package containing `SKILL.md`, `requirements.txt`, workflows, and scripts | In a full-repository clone or repository ZIP, this is `skills/ppt-master/`; a marketplace/plugin installation or skill-only release ZIP has its own installed or extracted location |
+| **Working folder** | A persistent, writable folder that you open in the agent | For a full-repository clone or repository ZIP, normally the repository root; for skill-only installation, choose your own folder—it does not have to be the installed skill directory |
+| **Active project** | One generation run's sources, authored SVG, reports, backups, and exports | The agent initializes it under `<working-folder>/projects/<generated-project-name>/` and reports the exact path |
+
+Every installation path needs Python 3.10+ and an installed, authenticated agent host that can read and write the working folder and run shell commands. For a full-repository clone or repository ZIP, install dependencies from the repository root:
+
+```bash
+python3 -m pip install -r requirements.txt
+```
+
+For a skill-only installation, first locate the installed or extracted directory that contains the skill's `SKILL.md` and `requirements.txt`, then install from that path:
+
+```bash
+python3 -m pip install -r "<installed-skill-dir>/requirements.txt"
+```
+
+The `npx skills add hugohe3/ppt-master` installation path also requires a working `npx` command, normally supplied with Node.js/npm; the repository does not specify a Node/npm minimum version. A host's own `/plugin install` command does not use that `npx` path. After installation, start the agent in the **working folder**, not in the host-managed skill cache. The execution entry point resolves the installed skill separately. Installation choices are listed in [Quick Start](../README.md#quick-start); runtime discipline is defined in [`SKILL.md`](../skills/ppt-master/SKILL.md).
 
 ---
 
@@ -58,17 +85,17 @@ Full guide → [Templates Guide](./templates-guide.md)
 
 ## Generate your first deck
 
-The whole loop is three steps. Install first — you only need Python; see [Quick Start](../README.md#quick-start).
+Once the environment and working folder above are ready, the whole loop is three steps:
 
-1. **Drop your source material** into `projects/` — a PDF, DOCX, Markdown file, a URL, or just text you'll paste.
-2. **Tell the AI in chat** what to turn into a deck. Stage 1 then lets you confirm the communication contract together with free design or template use; add one exact workspace root when you want template mode and that path preselected:
+1. **Give the agent source material it can read** — a PDF, DOCX, Markdown file, a URL, or text pasted into chat. A folder such as `<working-folder>/inputs/` is fine; you do not need to pre-create the final `projects/<name>/` directory.
+2. **Tell the AI in chat** what to turn into a deck. [Default Generate Step 2](../skills/ppt-master/workflows/generate-pptx.md) or [Quick initialization](../skills/ppt-master/workflows/profiles/quick-generate.md) creates the active project under the working folder's `projects/` directory and reports its exact path. File-based material is imported when present; pasted text stays in the conversation context and needs no import. Default then opens Stage 1 to confirm the communication contract together with free design or template use; Quick skips those confirmation stages. For Default, add one exact workspace root when you want template mode and that path preselected:
    ```
-   You: Make a deck from projects/q3-report/sources/report.pdf
+   You: Make a deck from <path-to-report.pdf>
    You: Turn this text into a deck: <paste your text>
    ```
-3. **Get an editable `.pptx`** at `exports/<name>_<timestamp>.pptx` — real DrawingML shapes, text boxes, and charts you can click and edit in PowerPoint, Keynote, WPS, or LibreOffice.
+3. **Get an editable `.pptx`** at `<active-project>/exports/<project-name>_<timestamp>.pptx` unless you explicitly requested another output path. For a full-repository clone or repository ZIP this is commonly `<repository-root>/projects/<generated-project-name>/exports/...`; for skill-only installation it is `<working-folder>/projects/<generated-project-name>/exports/...`. Use the exact active-project path reported by the agent rather than looking for an unqualified repository-root `exports/`.
 
-Before generation, Stage 1 confirms the communication contract, canvas/format, and free-design/template choice together. The AI then installs any selected workspace; final Stage 2 reads that installed state and confirms page count, the visual system, template application, and production choices. From there it handles content analysis, layout, image acquisition, SVG generation, and export — the core loop everything else builds on. To skip interactive confirmation, see [Quick mode](#quick-mode) below.
+The terms in that flow are not extra folders you must create. **Stage 1** confirms the communication contract—purpose, audience, reading situation, canvas/format—and the free-design/template choice. A **workspace root** is the root directory of an optional reusable Brand, Style, Layout, or Deck package; it is not the active project. The AI installs any selected workspace, then **Stage 2** confirms page count, the visual system, template application, and production choices. From there it handles content analysis, layout, image acquisition, SVG generation, and export. To skip interactive confirmation, see [Quick mode](#quick-mode) below.
 
 ---
 
@@ -90,7 +117,7 @@ A bare template name or style phrase is still only a design brief. Quick keeps
 its lockless flat export, so Layout / Deck prototypes guide the authored pages
 but do not compile into reusable native Master / Layout objects.
 
-It does not skip capabilities: source conversion, research on identified factual gaps, shared aesthetic guidance, image / icon preparation, and native-shape / chart / table authoring still run as needed. Structural formulas are authored directly as native PowerPoint markers rather than prepared as image assets. If a required asset is missing, it still stops and asks you for it instead of substituting unrelated material.
+It does not skip capabilities: source conversion, research on identified factual gaps, shared aesthetic guidance, image / icon preparation, and native-shape / chart / table authoring still run as needed. Structural formulas are authored directly as native PowerPoint markers rather than prepared as image assets. A missing explicitly selected manual asset or other irreplaceable file dependency blocks until you provide it. If automated AI generation or required dependent slicing is exhausted, Quick removes the failed jobs and stale manifest entries, replans with native editable text/SVG or already-prepared non-AI assets, continues the same run, and reports the replacement in its final handoff.
 
 Quick is a one-pass profile, not a shortened resumable workflow. It creates no Strategist record, `design_spec.md`, `spec_lock.md`, or substitute page plan; its content/design/resource decisions exist only in the active AI context. If that context is lost before delivery, start Quick again. Operational manifests, quality reports, postflight, and the cold Python audit log may remain, but they cannot reconstruct why the AI designed the deck that way. The profile reduces interaction and durable planning, not the available presentation toolbox or the intended quality bar.
 
@@ -104,7 +131,7 @@ A browser preview opens at the URL reported by the launcher while the deck is be
 
 - **Watch pages render live** as the AI produces them.
 - **Edit directly, no AI** — select an element to change its text, color, font, or size in the side panel; drag it to reposition, or nudge with the arrow keys (`Shift` = 10px). `Ctrl+Z` undoes. Edits preview instantly and write to `svg_output/` when you click **Apply changes**.
-- **Or annotate for the AI** — click an element, type what you want changed, hit **Submit annotations**, then say "apply my annotations" in chat and the AI rewrites that region and re-exports the PPTX.
+- **Or annotate for the AI** — click an element, type what you want changed, click **Add annotation** to stage it, then click **Apply changes** to write the annotation markers to `svg_output/`. Return to chat and say "apply my annotations"; the AI rewrites that region and re-exports the PPTX.
 
 PPT Master was chat-only by design; visual editing was folded in after enough users asked for it (built on [@WodenJay](https://github.com/WodenJay)'s [PR #85](https://github.com/hugohe3/ppt-master/pull/85)).
 

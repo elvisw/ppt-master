@@ -554,10 +554,12 @@ uses for group-select / group-move. Do not split or merge units to hit a target
 count.
 
 **Chrome stays static.** `data-pptx-layer` and explicit static
-role/placeholder markers are absolute. For marker-free legacy SVGs, chrome-like
-ids (background, header/footer, decor, watermark, page number, nav, logo, rule)
-are skipped; an explicit sidecar entry may override only this name heuristic.
-Keep wrappers and use `effect: none` for static content.
+role/placeholder markers are absolute. The legacy chrome-like ID heuristic
+(background, header/footer, decor, watermark, page number, nav, logo, rule)
+applies only to a top-level group that itself lacks `data-pptx-layer`,
+`data-pptx-role`, and `data-pptx-placeholder` semantics; an explicit sidecar
+entry may override only this name heuristic. Keep wrappers and use
+`effect: none` for static content.
 
 **Fallback for flat SVGs** (no top-level `<g>` wrappers, only raw `<rect>` / `<text>` / `<path>` at the root):
 
@@ -654,7 +656,8 @@ playback instead and does not consume the trace for sound mixing.
 
 ## 9. Implementation References
 
-See [`svg-pipeline.md`](../scripts/docs/svg-pipeline.md),
+See [`pptx_transitions.py`](../scripts/pptx_transitions.py),
+[`svg-pipeline.md`](../scripts/docs/svg-pipeline.md),
 [`pptx-transitions.md`](../scripts/docs/pptx-transitions.md),
 [`pptx-animations.md`](../scripts/docs/pptx-animations.md), and
 [`video-motion-plan.md`](../scripts/docs/video-motion-plan.md).
