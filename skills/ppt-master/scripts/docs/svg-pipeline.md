@@ -368,7 +368,7 @@ template after the layered authoring IR has been reviewed and edited:
 
 ```bash
 uvx ppt-master mirror-template-materialize \
-  <import_workspace> <empty_template_workspace>
+  <import_workspace> <template_workspace>
 ```
 
 The command treats `<import_workspace>/authoring-svg/` as the sole editable
@@ -729,14 +729,14 @@ Requirements:
 Validate SVG technical compliance.
 
 ```bash
-uvx ppt-master svg-quality-check examples/project/svg_output/01_cover.svg
-uvx ppt-master svg-quality-check examples/project/svg_output
-uvx ppt-master svg-quality-check examples/project
-uvx ppt-master svg-quality-check examples/project --stage first-page
-uvx ppt-master svg-quality-check examples/project --stage final --json
-uvx ppt-master svg-quality-check examples/project --format ppt169
-uvx ppt-master svg-quality-check --all examples
-uvx ppt-master svg-quality-check examples/project --export
+uvx ppt-master svg-quality-check projects/project/svg_output/01_cover.svg
+uvx ppt-master svg-quality-check projects/project/svg_output
+uvx ppt-master svg-quality-check projects/project
+uvx ppt-master svg-quality-check projects/project --stage first-page
+uvx ppt-master svg-quality-check projects/project --stage final --json
+uvx ppt-master svg-quality-check projects/project --format ppt169
+uvx ppt-master svg-quality-check --all projects
+uvx ppt-master svg-quality-check projects/project --export
 uvx ppt-master svg-quality-check path/to/template/templates --template-mode
 ```
 
@@ -806,7 +806,7 @@ Use this after SVG generation to inspect existing SVG geometry when manual compa
 ### `flatten_tspan.py`
 
 ```bash
-uvx ppt-master flatten-tspan examples/<project>/svg_output
+uvx ppt-master flatten-tspan projects/<project>/svg_output
 uvx ppt-master flatten-tspan path/to/input.svg path/to/output.svg
 ```
 

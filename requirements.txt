@@ -7,8 +7,7 @@
 # update_repo.py 会对本文件及递归 -r/--requirement 引用树计算指纹。
 #
 # Install / 安装方式：
-#   uv sync                                           # recommended / 推荐 (uv)
-#   uv pip install -r requirements.txt                 # alternative / 备选
-#   pip install -r requirements.txt                    # legacy / 传统 pip
+#   pip install -r requirements.txt                     # from repo root / 仓库根目录
+#   pip install -r skills/ppt-master/requirements.txt   # from anywhere / 任意位置
 #
 -r skills/ppt-master/requirements.txt

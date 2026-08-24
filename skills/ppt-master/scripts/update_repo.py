@@ -167,11 +167,6 @@ def ensure_git_available() -> None:
         raise RuntimeError("Missing executable: git")
 
 
-def ensure_git_checkout() -> None:
-    if not (REPO_ROOT / ".git").exists():
-        raise RuntimeError(non_git_checkout_message())
-
-
 def ensure_uv_available() -> None:
     if shutil.which("uv") is None:
         raise RuntimeError("Missing executable: uv — install from https://docs.astral.sh/uv/getting-started/installation/")
@@ -201,10 +196,10 @@ def get_head_revision() -> str:
 
 def sync_python_dependencies() -> None:
     if not REQUIREMENTS_FILE.exists() and not PYPROJECT_FILE.exists():
-        print("Neither requirements.txt nor pyproject.toml found; skipping Python dependency sync.")
+        print_status("Neither requirements.txt nor pyproject.toml found; skipping Python dependency sync.")
         return
 
-    print("Dependency files changed. Syncing Python dependencies with uv...")
+    print_status("Dependency files changed. Syncing Python dependencies with uv...")
     result = run_command(["uv", "sync"])
     if result.stdout.strip():
         print_status(result.stdout.strip())
@@ -222,8 +217,8 @@ def main(argv: list[str] | None = None) -> int:
         ensure_clean_tracked_worktree()
 
         before_head = get_head_revision()
-        before_requirements = file_digest(REQUIREMENTS_FILE)
-        before_pyproject = file_digest(PYPROJECT_FILE)
+        before_requirements = requirements_digest(REQUIREMENTS_FILE)
+        before_pyproject = requirements_digest(PYPROJECT_FILE)
 
         print_status(f"Repository: {REPO_ROOT}")
         pull_result = run_command(["git", "pull", "--ff-only"])
@@ -233,8 +228,8 @@ def main(argv: list[str] | None = None) -> int:
             print_status(pull_result.stderr.strip())
 
         after_head = get_head_revision()
-        after_requirements = file_digest(REQUIREMENTS_FILE)
-        after_pyproject = file_digest(PYPROJECT_FILE)
+        after_requirements = requirements_digest(REQUIREMENTS_FILE)
+        after_pyproject = requirements_digest(PYPROJECT_FILE)
 
         if before_head == after_head:
             print_status("Repository is already up to date.")
@@ -242,11 +237,11 @@ def main(argv: list[str] | None = None) -> int:
             print_status(f"Updated from {before_head[:7]} to {after_head[:7]}.")
 
         if args.skip_deps:
-            print("Skipped Python dependency sync (--skip-deps).")
+            print_status("Skipped Python dependency sync (--skip-deps).")
         elif before_requirements != after_requirements or before_pyproject != after_pyproject:
             sync_python_dependencies()
         else:
-            print("Dependency files unchanged. Skipping Python dependency sync.")
+            print_status("Dependency files unchanged. Skipping Python dependency sync.")
 
         print_status(
             "Note: system dependencies such as Node.js and Pandoc still need "

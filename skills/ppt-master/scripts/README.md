@@ -114,7 +114,7 @@ uvx ppt-master pptx-template-import <template.pptx> --inheritance-mode both
 uvx ppt-master svg-authoring-view <imported-svg-or-dir> -o <output-dir> --projection-kind layered
 uvx ppt-master svg-authoring-view <authoring-dir> --refresh-summary
 uvx ppt-master compact-svg-coordinates <template_workspace>/templates --inplace --keep-native-frames
-uvx ppt-master mirror-template-materialize <import_workspace> <empty_template_workspace>
+uvx ppt-master mirror-template-materialize <import_workspace> <template_workspace>
 uvx ppt-master template-preview-pptx <template_workspace>
 uvx ppt-master template-preview-pptx <legacy_template_workspace> --visual-only
 ```
@@ -275,7 +275,7 @@ uvx ppt-master extract-svg-assets <layered_svg_dir> --icons-dir <icons_dir> --ic
 uvx ppt-master extract-svg-assets <flat_svg_dir> --icons-dir <icons_dir> --icon-namespace imported --reuse-inventory <layered_inventory.json> --inplace --id-prefix flat
 uvx ppt-master extract-svg-pictures "<svg_file>" --select "<group_id>" --resource-root "<workspace>" --images-dir "<picture_assets_dir>" --inplace  # optional create-template normalization: one selected group -> one SVG picture
 uvx ppt-master compact-svg-coordinates <template_workspace>/templates --inplace --keep-native-frames
-uvx ppt-master mirror-template-materialize <import_workspace> <empty_template_workspace>  # Type A mirror only; destination owns no roster
+uvx ppt-master mirror-template-materialize <import_workspace> <template_workspace>  # Type A mirror only; destination owns no roster
 ```
 
 `extract_svg_assets.py` fingerprints each extracted subtree before generated-ID
@@ -345,8 +345,6 @@ literal field fallback because they are shared by multiple slides.
 Image generation:
 
 ```bash
-uvx ppt-master latex-render <project_path>
-uvx ppt-master latex-render <project_path> --providers codecogs,quicklatex,mathpad,wikimedia
 uvx ppt-master image-gen "A modern futuristic workspace"
 uvx ppt-master image-gen --list-backends
 uvx ppt-master analyze-images <project_path>/images

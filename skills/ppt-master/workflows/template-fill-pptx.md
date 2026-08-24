@@ -80,7 +80,7 @@ Use this fixed layout:
 `project_manager.py import-sources` automatically runs the standard PPTX intake for imported PowerPoint files and writes `<stem>.slide_library.json` into `<project_dir>/analysis/`. If you are working from a manually assembled project that does not have the intake artifact, run the template-fill analyzer directly:
 
 ```bash
-uvx ppt-master pptx-intake "<project_dir>/sources/<source.pptx>" -o "<project_dir>/analysis"
+uvx ppt-master template-fill-pptx analyze "<project_dir>/sources/<source.pptx>" -o "<project_dir>/analysis/<stem>.slide_library.json"
 ```
 
 Read `<project_dir>/analysis/<stem>.slide_library.json` (intake prefixes per-deck artifacts by the template deck's file stem) and identify:
@@ -321,7 +321,7 @@ effects, treat that as a separate direct-PPTX animation customization task.
 Run a lightweight readability check:
 
 ```bash
-uvx ppt-master ppt-to-md "<project_dir>/exports/<output.pptx>"
+uvx ppt-master template-fill-pptx validate "<project_dir>"
 ```
 
 The validator finds the latest PPTX in `<project_dir>/exports/`, runs `ppt_to_md.py` into `<project_dir>/validation/readback.md`, and writes `<project_dir>/validation/validate_report.json`. `exports/` must contain only final deliverables.

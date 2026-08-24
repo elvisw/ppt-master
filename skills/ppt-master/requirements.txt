@@ -5,14 +5,7 @@
 # 大部分工具仅使用 Python 标准库，以下为可选依赖。
 #
 # Install / 安装方式：
-#   uv sync                # recommended / 推荐
-#   uv pip install -r requirements.txt  # alternative
-#   pip install -r requirements.txt     # legacy / 传统 pip
-#
-# Note: when adding/updating dependencies, also update both pyproject.toml files
-# (repo root + skills/ppt-master/) and run `uv lock` in both directories.
-# 注意：添加/更新依赖时，请同时更新两个 pyproject.toml 文件
-# （仓库根目录 + skills/ppt-master/），并在两个目录中分别运行 `uv lock`。
+#   pip install -r requirements.txt
 
 # Template registration / 模板注册 (scripts/register_template.py)
 PyYAML>=6.0
@@ -35,21 +28,6 @@ uharfbuzz>=0.50.0
 # notes_to_audio.py generates per-slide narration audio on macOS/Linux/Windows.
 # notes_to_audio.py 用于在 macOS/Linux/Windows 上生成逐页旁白音频。
 edge-tts>=7.2.8
-
-# ─────────────────────────────────────────────────────────────
-# Office compatibility dependencies (choose one, CairoSVG preferred)
-# Office 兼容模式依赖（二选一，优先使用 cairosvg）
-# ─────────────────────────────────────────────────────────────
-# Converts SVG to PNG fallback images for Office LTSC 2021 etc.
-# 用于将 SVG 转换为 PNG 后备图片，确保 Office LTSC 2021 等版本正常显示
-#
-# Option A / 方案 A: CairoSVG (recommended / 推荐, ~25MB, full gradient/filter support)
-#   uv add cairosvg
-#   macOS: brew install cairo
-#
-# Option B / 方案 B: svglib (lightweight / 轻量, ~5MB, some gradients may be lost)
-svglib>=1.5.0
-reportlab>=4.0.0
 
 # ─────────────────────────────────────────────────────────────
 # PDF to Markdown tool / PDF 转 Markdown 工具 (skills/ppt-master/scripts/source_to_md/pdf_to_md.py)

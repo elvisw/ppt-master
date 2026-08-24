@@ -11,9 +11,6 @@ dependencies = [
     "skia-pathops>=0.9.2",
     # Recorded narration
     "edge-tts>=7.2.8",
-    # Office compatibility (SVG to PNG fallback)
-    "svglib>=1.5.0",
-    "reportlab>=4.0.0",
     # PDF to Markdown
     "PyMuPDF>=1.23.0",
     # Document to Markdown (native paths)
