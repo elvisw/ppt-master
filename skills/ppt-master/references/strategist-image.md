@@ -73,28 +73,7 @@ For specialized or regulated paper-figure subjects, preserve the prompt depth re
 
 ## 3. Image Resource List
 
-Formula rendering is a conditional choice surfaced in final Stage 2 production confirmation. Recommend one policy and let the user confirm or override it:
-
-| Policy | Behavior | Use |
-|---|---|---|
-| `mixed` (default) | Render complex expressions to PNG; keep simple inline math as editable text / Unicode | Most academic, engineering, educational, and technical decks |
-| `render-all` | Render every formula-worthy expression to PNG | Formula-heavy teaching / research decks where consistency matters more than editability |
-| `text-only` | Keep expressions as editable text / Unicode | Business decks, light technical briefs, or an explicit editability preference |
-
-`$...$` / `$$...$$` in source material are input signals only. Never scan output files for dollar-delimited formulas. Fractions, radicals, integrals, sums, limits, matrices, multiline derivations, and complex super/subscripts are formula-worthy; short variables, simple assignments, percentages, and expressions such as `O(n log n)` normally remain text. Never invent an equation for decoration.
-
-For `mixed` or `render-all`, write selected source expressions to `<project_path>/images/formula_manifest.json` before writing the final spec, then run:
-
-```bash
-uvx ppt-master latex-render <project_path>
-uvx ppt-master analyze-images <project_path>/images
-```
-
-Follow `latex_render.py --help` for the manifest fields. The renderer writes dimensions, ratio, file, provider, and status back into it. Formula PNGs default to transparent; use an opaque final background only when the asset requires it.
-
-## 4. Image Resource List
-
-Add §VIII rows only for planned images and every selected formula; permitted unused sources create no row. Fill filename, dimensions/ratio, layout suggestion, crop, purpose/type, acquisition, status, reference, and conditional AI fields. `Acquire Via` is `ai`, `web`, `user`, `formula`, `placeholder`, or `slice`; status follows [`svg-image-embedding.md`](./svg-image-embedding.md). Keep any unavailable planned/required asset `Pending` or `Needs-Manual`; never delete or reclassify it to appear complete. After final confirmation, project each placed row into `spec_lock.md images` as `<path> | source=<Acquire Via> | pattern=<Layout pattern> | crop=<adaptive|no-crop>` and omit unplaced source/sheet rows. Preserve exact confirmed `source`/`crop`; keep non-empty `pattern`, including optional catalog ids, as preferred expression rather than locked geometry.
+Add §VIII rows only for planned images; permitted unused sources create no row. Fill filename, dimensions/ratio, layout suggestion, crop, purpose/type, acquisition, status, reference, and conditional AI fields. `Acquire Via` is `ai`, `web`, `user`, `placeholder`, or `slice`; status follows [`svg-image-embedding.md`](./svg-image-embedding.md). Keep any unavailable planned/required asset `Pending` or `Needs-Manual`; never delete or reclassify it to appear complete. After final confirmation, project each placed row into `spec_lock.md images` as `<path> | source=<Acquire Via> | pattern=<Layout pattern> | crop=<adaptive|no-crop>` and omit unplaced source/sheet rows. Preserve exact confirmed `source`/`crop`; keep non-empty `pattern`, including optional catalog ids, as preferred expression rather than locked geometry.
 
 **Prepared derivatives**: Keep canonical; `Reference`: `Derived from <bare filename>; treatment=<operation>;`. Deterministic child: distinct `.png`, inherits acquisition; §4.4 follows `user`/`ai` above. Lock placed children; [`image-base.md`](./image-base.md) §2–3 owns preparation.
 

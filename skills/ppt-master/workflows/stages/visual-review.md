@@ -42,7 +42,7 @@ pip install playwright
 python3 -m playwright install chromium
 
 # 2. live-preview server running for this project (provides inlined SVG fetch)
-uvx ppt-master confirm-ui <project_path> --no-browser
+uvx ppt-master svg-editor <project_path> --no-browser
 # (single instance per project — if it's already running, skip)
 ```
 

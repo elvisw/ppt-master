@@ -173,13 +173,13 @@ It is an analysis aid, not a final direct template conversion.
 Keep `<import_workspace>/svg/` unchanged as lossless native-payload backing. If the optional `<import_workspace>/svg-flat/` verification tree was requested, keep it unchanged too. Before the Template_Designer reads or edits any imported page SVG, create the canonical non-destructive authoring IR bundle:
 
 ```bash
-uvx ppt-master svg-authoring-view "<import_workspace>/svg" -o "<import_workspace>/authoring-svg"
+uvx ppt-master svg-authoring-view "<import_workspace>/svg" -o "<import_workspace>/authoring-svg" --projection-kind layered
 ```
 
 Only when the import explicitly used `--inheritance-mode both`, create the optional complete-page verification IR:
 
 ```bash
-uvx ppt-master svg-authoring-view "<import_workspace>/svg-flat" -o "<import_workspace>/authoring-svg-flat"
+uvx ppt-master svg-authoring-view "<import_workspace>/svg-flat" -o "<import_workspace>/authoring-svg-flat" --projection-kind flat
 ```
 
 Each bundle contains editable SVGs, a model-readable `authoring_summary.json`, and a tool-only `authoring_manifest.json`. The projection removes opaque text payload, duplicate hidden geometry carriers, and import-only identity attributes while keeping visible shape intent, compact preset/frame metadata, structure markers, logical ids, valid asset references, and a reserved `data-pptx-source-ref` on each imported logical object. Model-facing `data-pptx-frame` values and safe transform page coordinates use at most two decimals; normalized crop ratios, path geometry, transform linear coefficients, and the immutable lossless source retain their required precision. The summary lists the current SVG roster plus per-file canvas, size, text, image, vector, placeholder, and source-ref counts. The machine manifest records relative source files, document hashes, source paths, and initial authoring-subtree hashes; it does not duplicate opaque payload and MUST NOT enter model context. Source refs are unique within one document and are interpreted by tools together with that document's manifest record.
@@ -205,11 +205,12 @@ not use this compiler.
 Factor large decorative vector groups out of the lightweight IR documents so the model-facing SVGs stay readable while export remains native shapes. Never run this in place on the lossless import SVGs:
 
 ```bash
-# layered view — primary read surface in every mode
-uvx ppt-master extract-svg-assets "<import_workspace>/authoring-svg" --icons-dir "<import_workspace>/icons" --inplace --id-prefix layered --min-decoration-bytes 3000 --clean-stale
+# layered view — primary read surface and canonical extracted-vector inventory
+uvx ppt-master extract-svg-assets "<import_workspace>/authoring-svg" --icons-dir "<import_workspace>/icons" --icon-namespace imported --inplace --id-prefix layered --min-decoration-bytes 3000 --clean-stale
 
-# flat view — mirror inspection and optional composition spot checks; the lossless layered/flat sources remain authoritative for mirror
-uvx ppt-master extract-svg-assets "<import_workspace>/authoring-svg-flat" --icons-dir "<import_workspace>/icons" --inplace --id-prefix flat --min-decoration-bytes 3000 --clean-stale
+# optional flat verification view — run only when authoring-svg-flat/ exists;
+# reuse matching layered assets so only genuinely flat-only vectors create files
+uvx ppt-master extract-svg-assets "<import_workspace>/authoring-svg-flat" --icons-dir "<import_workspace>/icons" --icon-namespace imported --reuse-inventory "<import_workspace>/authoring-svg_vector_asset_inventory.json" --inplace --id-prefix flat --min-decoration-bytes 3000 --clean-stale
 ```
 
 The authoring SVGs in `<import_workspace>/authoring-svg/` and, when requested, `<import_workspace>/authoring-svg-flat/` are rewritten in place with compact `<use data-icon="imported/..."/>` placeholders. Each in-place extraction refreshes that bundle's `authoring_summary.json` automatically. Extracted assets have one canonical copy under `<import_workspace>/icons/imported/`; never duplicate them under `templates/icons/`. The root `icons/` directory remains a namespace container and must not contain rewritten page SVGs or inventories. The inventory is written beside the processed IR directory and records every preserved `data-pptx-source-ref`; re-inlining an asset therefore re-establishes the referenced object mapping before materialization. The existing icon embedding path re-inlines the extracted assets before final export, preserving multi-color artwork and non-square viewBox geometry as native SVG shapes. Text-bearing groups are never extracted; text must stay readable/editable in the working SVG. Extraction triggers on either many drawable elements or a large pure-vector XML block, so long single-path illustrations are factored out too. Pure-vector decoration runs inside text-bearing groups use a lower size threshold, allowing card borders and decorative paths to be extracted without hiding text. Referenced defs (`gradient` / `pattern` / `filter` / `clipPath` / `marker`) are copied into each asset and namespaced so the asset is self-contained after re-inline. If both layered and flat views are processed into the same icon namespace, keep distinct `--id-prefix` values to avoid asset ID collisions. `--clean-stale` removes only stale generated assets for the current SVG filenames and prefix inside the selected namespace; it is safe in this import workspace but should not be used against a shared hand-curated icon directory without a specific prefix.
@@ -325,8 +326,8 @@ Do not treat authoring IR documents as final template assets. `standard` / `fide
 First resolve the Type B source directory using the rule above. Create a non-destructive authoring IR bundle in a throwaway analysis workspace, then run the same vector readability pass only on that IR. Do **not** rewrite the user's original source directory in place.
 
 ```bash
-uvx ppt-master svg-authoring-view "<normalized_svg_source>" -o "<svg_analysis_workspace>/authoring-svg"
-uvx ppt-master extract-svg-assets "<svg_analysis_workspace>/authoring-svg" --icons-dir "<svg_analysis_workspace>/icons" --inplace --id-prefix source --min-decoration-bytes 3000 --clean-stale
+uvx ppt-master svg-authoring-view "<normalized_svg_source>" -o "<svg_analysis_workspace>/authoring-svg" --projection-kind generic
+uvx ppt-master extract-svg-assets "<svg_analysis_workspace>/authoring-svg" --icons-dir "<svg_analysis_workspace>/icons" --icon-namespace imported --inplace --id-prefix source --min-decoration-bytes 3000 --clean-stale
 ```
 
 If the source contains one deliberately selected complex subtree that should

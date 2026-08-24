@@ -20,7 +20,6 @@ supported generated-deck path authors a native formula marker in SVG and lets
 ```bash
 uvx ppt-master latex-render <project_path>
 uvx ppt-master latex-render <project_path> --dry-run
-uvx ppt-master latex-render <project_path> --providers codecogs,quicklatex,mathpad,wikimedia
 ```
 
 Use it only for an explicitly requested external raster workflow. It is not a

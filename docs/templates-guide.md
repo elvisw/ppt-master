@@ -256,7 +256,7 @@ For a PPTX-backed Type A mirror, that final step is one deterministic command:
 
 ```bash
 uvx ppt-master mirror-template-materialize \
-  "<import_workspace>" "<empty_template_workspace>"
+  "<import_workspace>" "<template_workspace>"
 ```
 
 It validates the IR manifest, immutable source hashes, complete native graph,

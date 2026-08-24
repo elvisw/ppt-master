@@ -29,7 +29,7 @@ description: Main-pipeline editor stage for starting live preview and applying s
 **Precondition**: no preview service running on this project.
 
 ```bash
-uvx ppt-master confirm-ui <project_path> --daemon
+uvx ppt-master svg-editor <project_path> --daemon
 ```
 
 (Plain mode — no `--live`. The `--live` flag is reserved for Step 6's auto-startup.)
@@ -92,9 +92,9 @@ Triggered by the user signals listed in "When to Run".
 If the project lives on a remote Linux server, run with `--no-browser`:
 
 ```bash
-uvx ppt-master confirm-ui <project_path> --daemon --no-browser
+uvx ppt-master svg-editor <project_path> --daemon --no-browser
 # or for Step 6's auto-startup on a remote host:
-uvx ppt-master confirm-ui <project_path> --live --daemon --no-browser
+uvx ppt-master svg-editor <project_path> --live --daemon --no-browser
 ```
 
 Let `<P>` be the port in launch output or `<project_path>/live_preview/lock.json`:

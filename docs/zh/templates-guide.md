@@ -234,7 +234,7 @@ Layout/Deck frontmatter 仍会记录 `replication_mode: standard|fidelity|mirror
 
 ```bash
 uvx ppt-master mirror-template-materialize \
-  "<import_workspace>" "<empty_template_workspace>"
+  "<import_workspace>" "<template_workspace>"
 ```
 
 它会先校验 IR manifest、不可变来源 hash、完整原生图谱、可见性事实和

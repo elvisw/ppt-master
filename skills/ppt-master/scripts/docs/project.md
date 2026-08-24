@@ -17,7 +17,7 @@ uvx ppt-master project scaffold-spec <project_path>  # optional manual helper
 uvx ppt-master project scaffold-lock <project_path>  # optional manual helper
 uvx ppt-master project validate <project_path>
 uvx ppt-master project info <project_path>
-uvx ppt-master project page-context <project_path> P07 [--bundle] [--pretty] [--record-usage]
+uvx ppt-master project page-context <project_path> P07 [--pretty] [--record-usage]
 uvx ppt-master project page-context-report <project_path>
 ```
 
@@ -143,7 +143,7 @@ uvx ppt-master project scaffold-spec projects/my_presentation_ppt169_20251116  #
 uvx ppt-master project scaffold-lock projects/my_presentation_ppt169_20251116  # optional
 uvx ppt-master project validate projects/my_presentation_ppt169_20251116
 uvx ppt-master project info projects/my_presentation_ppt169_20251116
-uvx ppt-master project page-context projects/my_presentation_ppt169_20251116 P07 --bundle --record-usage
+uvx ppt-master project page-context projects/my_presentation_ppt169_20251116 P07 --record-usage
 uvx ppt-master project page-context-report projects/my_presentation_ppt169_20251116
 ```
 
@@ -216,21 +216,20 @@ uvx ppt-master project-utils <project_path>
 Batch-check project structure and compliance.
 
 ```bash
-uvx ppt-master batch-validate examples
-uvx ppt-master batch-validate examples projects
+uvx ppt-master batch-validate projects
 uvx ppt-master batch-validate --all
-uvx ppt-master batch-validate examples --export
+uvx ppt-master batch-validate projects --export
 ```
 
-Use this for repository-wide health checks before release or cleanup.
+Use this for multi-project health checks before release or cleanup.
 
 ## `generate_examples_index.py`
 
-Rebuild `examples/README.md` automatically.
+Rebuild the examples `README.md` index. The example projects live in the separate
+[ppt-master-examples](https://github.com/hugohe3/ppt-master-examples) repository.
 
 ```bash
-uvx ppt-master generate-examples-index
-uvx ppt-master generate-examples-index examples
+uvx ppt-master generate-examples-index <path-to>/ppt-master-examples/examples
 ```
 
 ## `pptx_template_import.py`

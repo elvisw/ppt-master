@@ -102,15 +102,15 @@ the same combined Stage-1 items as open chat questions and wait explicitly.
 The following launch and wait commands belong to the **UI branch only**:
 
 ```bash
-uvx ppt-master confirm-ui <project_path> --daemon         # launch combined Stage 1; return for template chat handoff
-uvx ppt-master confirm-ui <project_path> --wait-only --wait-stage stage1  # Stage 1: communication + template selection
+uvx ppt-master confirm-ui <project_path> --daemon         # launch combined Stage 1
+uvx ppt-master confirm-ui <project_path> --wait-only --wait-stage stage1  # communication + template selection
 uvx ppt-master confirm-ui <project_path> --complete-template-selection # after Stage-1 free-design closure / template install
-uvx ppt-master confirm-ui <project_path> --wait-only       # final Stage 2: wait for the final result
+uvx ppt-master confirm-ui <project_path> --wait-only       # current final Stage 2
 uvx ppt-master confirm-ui <project_path> --daemon --port 5051
 uvx ppt-master confirm-ui <project_path> --no-browser
 uvx ppt-master confirm-ui <project_path> --timeout 0   # disable idle auto-shutdown
 uvx ppt-master confirm-ui <project_path> --reset-template-selection # clear prior template sidecars before a fresh UI run
-uvx ppt-master confirm-ui <project_path> --shutdown    # cleanup (idempotent)
+uvx ppt-master confirm-ui <project_path> --shutdown    # Step 4 cleanup (idempotent)
 ```
 
 - Without `--port`, binds the first free port from `127.0.0.1:5050`; the launch log prints the actual URL. `--port N` is exact and fails when unavailable. Auto-open is suppressed by `--no-browser`.
