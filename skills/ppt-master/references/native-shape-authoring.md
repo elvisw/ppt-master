@@ -115,8 +115,8 @@ Apply this page-local sequence before drawing:
 Example location and inspection commands:
 
 ```bash
-python3 "${SKILL_DIR}/scripts/preset_shape_svg.py" describe chevron --compact
-python3 "${SKILL_DIR}/scripts/preset_shape_svg.py" list --search connector
+uvx ppt-master preset-shape-svg describe chevron --compact
+uvx ppt-master preset-shape-svg list --search connector
 ```
 
 **Hard rule — semantic fit, not name association**: a preset name, topic word,
