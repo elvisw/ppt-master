@@ -22,8 +22,14 @@
 >
 > `uvx` wheel 已内置 skill、脚本与模板，依赖自动解析。下方的 Git clone / ZIP / marketplace 安装路径为上游安装方式，仍然完全可用。
 
+## ❤️ 赞助
+
+本项目由 <a href="https://www.kimi.com/code/?aff=ppt-master">Kimi</a>、<a href="https://www.packyapi.ai/register?aff=ppt-master">PackyCode</a>、<a href="https://apikey.fun/register?aff=PPT-MASTER">APIKEY.FUN</a>、<a href="https://runapi.host/register?aff=WMLJ">RunAPI</a>、<a href="https://www.compshare.cn/coding-plan?ytag=GPU_YY-git_pptmaster0624">优云智算</a> 等赞助方支持，得以持续免费开源。
+
+> **[想出现在这里？](SPONSORING_CN.md)**
+
 <details open>
-<summary>本项目由 <a href="https://www.kimi.com/code/?aff=ppt-master">Kimi</a>、<a href="https://www.packyapi.ai/register?aff=ppt-master">PackyCode</a>、<a href="https://apikey.fun/register?aff=PPT-MASTER">APIKEY.FUN</a>、<a href="https://runapi.host/register?aff=WMLJ">RunAPI</a>、<a href="https://www.compshare.cn/coding-plan?ytag=GPU_YY-git_pptmaster0624">优云智算</a> 等赞助方支持，得以持续免费开源。</summary>
+<summary>点击收起</summary>
 
 <p align="center">
   <a href="https://www.kimi.com/code/?aff=ppt-master"><img src="https://gcdn.moonshot.cn/growth-cdn/sponsor/kimi-zh.png" alt="Kimi" width="100%"></a>
@@ -438,6 +444,8 @@ PPT Master 目前主要由我开发维护。每个新模板、Bug 修复、文�
 <a href="https://www.compshare.cn/coding-plan?ytag=GPU_YY-git_pptmaster0624"><img src="docs/assets/sponsors/youyun.png" alt="优云智算" height="40" /></a>
 &nbsp;
 <a href="https://m.do.co/c/547f129aabe1"><img src="https://opensource.nyc3.cdn.digitaloceanspaces.com/attribution/assets/PoweredByDO/DO_Powered_by_Badge_blue.svg" alt="Powered by DigitalOcean" height="40" /></a>
+
+**[想出现在这里？→](SPONSORING_CN.md)** —— 展示位置、受众数据与价格。
 
 **个人赞助**
 
