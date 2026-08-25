@@ -2,7 +2,7 @@
 """PPT Master project management helpers.
 
 Usage:
-    uvx ppt-master project init <project_name> [--format ppt169] [--dir <path>]
+    uvx ppt-master project init <project_name> [--format <registered_format>] [--dir <path>]
     uvx ppt-master project import-sources <project_path> <source1> [<source2> ...] [--move | --copy]
     uvx ppt-master project scaffold-spec <project_path>
     uvx ppt-master project scaffold-lock <project_path>
@@ -10,6 +10,14 @@ Usage:
     uvx ppt-master project info <project_path>
     uvx ppt-master project page-context <project_path> P07 [--record-usage]
     uvx ppt-master project page-context-report <project_path>
+
+Examples:
+    uvx ppt-master project init demo
+    uvx ppt-master project init widescreen --format ppt169
+    uvx ppt-master project validate projects/demo
+
+Dependencies:
+    Same as project_management.cli.
 """
 
 from __future__ import annotations
