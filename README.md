@@ -12,15 +12,23 @@
 
 English | [中文](./README_CN.md)
 
-> **Fork notice**: This repository is a fork of [hugohe3/ppt-master](https://github.com/hugohe3/ppt-master), maintained by [elvisw](https://github.com/elvisw) and adapted to run as a `uvx` tool published on PyPI. The sponsor and donation information below belongs to the original author (Hugo He) and benefits the original project, not this fork.
+> **Fork notice**: This repository is a fork of [hugohe3/ppt-master](https://github.com/hugohe3/ppt-master), maintained by [elvisw](https://github.com/elvisw). This fork fully ports the upstream direct-script invocation style (`python3` + script path) to a unified `uvx ppt-master <command>` CLI (70+ subcommands) published on PyPI, and adapts every command call in the skill workflow docs to the `uvx` form — once the fork's skill is installed, AI agents invoke the `uvx` tool automatically, with no clone and no `pip install`. The sponsor and donation information below belongs to the original author (Hugo He) and benefits the original project, not this fork.
 >
-> **Fork install path (recommended for this fork)**: no clone and no `pip install` needed — install [uv](https://docs.astral.sh/uv/) and run the tool directly from PyPI:
+> **Fork install path (recommended for this fork)**: no clone and no `pip install` needed.
 >
-> ```bash
-> uvx ppt-master <command>          # e.g. uvx ppt-master project init my-deck --format ppt169
-> ```
+> 1. Install the skill (AI agents use it to invoke the `uvx` tool automatically):
 >
-> The `uvx` wheel bundles the skill, scripts, and templates; dependencies resolve automatically. The Git-clone / ZIP / marketplace paths below are the upstream install paths and remain fully supported.
+>    ```bash
+>    npx skills add https://github.com/elvisw/ppt-master
+>    ```
+>
+> 2. Install [uv](https://docs.astral.sh/uv/) and run the tool directly from PyPI:
+>
+>    ```bash
+>    uvx ppt-master <command>          # e.g. uvx ppt-master project init my-deck --format ppt169
+>    ```
+>
+> The `uvx` wheel bundles the skill, scripts, and templates (including the icon library); dependencies resolve automatically. The Git-clone / ZIP / marketplace paths below are the upstream install paths and remain fully supported.
 
 ## ❤️ Sponsors
 

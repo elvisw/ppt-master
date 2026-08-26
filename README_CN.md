@@ -12,15 +12,23 @@
 
 [English](./README.md) | 中文
 
-> **Fork 声明**：本仓库是 [hugohe3/ppt-master](https://github.com/hugohe3/ppt-master) 的 fork，由 [elvisw](https://github.com/elvisw) 维护，并适配为发布到 PyPI 的 `uvx` 工具。下方赞助商与捐赠信息属于原作者（Hugo He），收益归原项目所有，与本 fork 无关。
+> **Fork 声明**：本仓库是 [hugohe3/ppt-master](https://github.com/hugohe3/ppt-master) 的 fork，由 [elvisw](https://github.com/elvisw) 维护。本 fork 将上游直接调用脚本的方式（`python3` + 脚本路径）完整移植为统一的 `uvx ppt-master <command>` CLI（70+ 子命令）并发布到 PyPI，同时把 skill 工作流文档中的全部命令调用适配为 `uvx` 形式——安装本 fork 的 skill 后，AI agent 会自动调用 `uvx` 工具，无需 clone 仓库、无需 `pip install`。下方赞助商与捐赠信息属于原作者（Hugo He），收益归原项目所有，与本 fork 无关。
 >
-> **Fork 安装方式（本 fork 推荐）**：无需 clone、无需 `pip install`——安装 [uv](https://docs.astral.sh/uv/) 后直接从 PyPI 运行：
+> **Fork 安装方式（本 fork 推荐）**：无需 clone、无需 `pip install`。
 >
-> ```bash
-> uvx ppt-master <command>          # 例如 uvx ppt-master project init my-deck --format ppt169
-> ```
+> 1. 安装 skill（AI agent 通过它自动调用 `uvx` 工具）：
 >
-> `uvx` wheel 已内置 skill、脚本与模板，依赖自动解析。下方的 Git clone / ZIP / marketplace 安装路径为上游安装方式，仍然完全可用。
+>    ```bash
+>    npx skills add https://github.com/elvisw/ppt-master
+>    ```
+>
+> 2. 安装 [uv](https://docs.astral.sh/uv/) 后直接从 PyPI 运行工具：
+>
+>    ```bash
+>    uvx ppt-master <command>          # 例如 uvx ppt-master project init my-deck --format ppt169
+>    ```
+>
+> `uvx` wheel 已内置 skill、脚本与模板（含图标库），依赖自动解析。下方的 Git clone / ZIP / marketplace 安装路径为上游安装方式，仍然完全可用。
 
 ## ❤️ 赞助
 

@@ -2,14 +2,17 @@
 
 > Originated by [hugohe3/ppt-master](https://github.com/hugohe3/ppt-master)
 >
-> This PyPI package is a fork maintained by [elvisw](https://github.com/elvisw), adapted to run as a `uvx` tool. Sponsor and donation information shipped with the package belongs to the original author (Hugo He) and benefits the original project, not this fork.
+> This PyPI package is a fork maintained by [elvisw](https://github.com/elvisw). It fully ports the upstream direct-script invocation style (`python3` + script path) to a unified `uvx ppt-master <command>` CLI (70+ subcommands), and adapts every command call in the skill workflow docs to the `uvx` form — once the fork's skill is installed, AI agents invoke the `uvx` tool automatically, with no clone and no `pip install`. The wheel bundles the skill, scripts, and templates (including the icon library). Sponsor and donation information shipped with the package belongs to the original author (Hugo He) and benefits the original project, not this fork.
 
 AI-driven PPT generation CLI — convert documents to editable PowerPoint via SVG pipeline.
 
 ## Install
 
 ```bash
-# No install needed — run directly
+# Install the skill (AI agents use it to invoke the uvx tool automatically)
+npx skills add https://github.com/elvisw/ppt-master
+
+# No install needed for the tool itself — run directly
 uvx ppt-master <command>
 ```
 
