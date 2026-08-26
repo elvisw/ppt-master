@@ -27,7 +27,7 @@ uvx ppt-master pdf-to-md <file.pdf>
 # or
 uvx ppt-master ppt-to-md <deck.pptx>
 uvx ppt-master excel-to-md <workbook.xlsx>
-uvx ppt-master project init <project_name> --format ppt169
+uvx ppt-master project init <project_name>
 uvx ppt-master project import-sources <project_path> <source_files_or_dirs...>
 uvx ppt-master total-md-split <project_path>
 uvx ppt-master finalize-svg <project_path>
@@ -79,7 +79,7 @@ uvx ppt-master pptx-to-svg <deck.pptx> -o <output_dir>  # reconstruction/referen
 Project setup:
 
 ```bash
-uvx ppt-master project init <project_name> --format ppt169
+uvx ppt-master project init <project_name> [--format <registered_format>]
 uvx ppt-master project import-sources <project_path> <source_files_or_dirs...>
 uvx ppt-master project scaffold-spec <project_path>  # optional manual helper
 uvx ppt-master project scaffold-lock <project_path>  # optional manual helper
@@ -87,6 +87,11 @@ uvx ppt-master project validate <project_path>
 uvx ppt-master project page-context <project_path> P07 --record-usage
 uvx ppt-master project page-context-report <project_path>
 ```
+
+`--format` is optional and accepts registered canvas keys only. Pass it when
+the actual canvas exactly matches one of those keys; otherwise omit it. Without
+the flag, `init` creates `<name>_<YYYYMMDD>`, and authoring records the canvas
+in `spec_lock.md` for Default Generate or the first SVG for Quick Generate.
 
 `page-context` is an on-demand read-only current-page projection for diagnostics,
 routing checks, or context measurement; normal generation retains the complete
@@ -172,7 +177,7 @@ The destination must be empty, and the command does not write
 Template fill (direct PPTX, no SVG conversion):
 
 ```bash
-uvx ppt-master project init <project_name> --format ppt169
+uvx ppt-master project init <project_name>
 uvx ppt-master project import-sources <project_path> <source.pptx> <material...>
 # Manual fallback when import-sources did not produce analysis/<stem>.slide_library.json:
 uvx ppt-master template-fill-pptx analyze <project_path>/sources/<source.pptx> -o <project_path>/analysis/<stem>.slide_library.json

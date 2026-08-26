@@ -61,7 +61,8 @@ Convenience summary only — route selection starts in [`SKILL.md`](skills/ppt-m
 uvx ppt-master source-to-md <file_or_URL_or_dir> [<file_or_URL_or_dir> ...]
 
 # Project management
-uvx ppt-master project init <project_name> --format ppt169
+# Add --format <registered_format> only for an exact registered canvas.
+uvx ppt-master project init <project_name>
 uvx ppt-master project import-sources <project_path> <source_files_or_dirs_or_URLs...>
 uvx ppt-master project scaffold-spec <project_path>  # optional manual helper
 uvx ppt-master project scaffold-lock <project_path>  # optional manual helper
