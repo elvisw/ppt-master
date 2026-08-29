@@ -1298,7 +1298,7 @@ wheels = [
 
 [[package]]
 name = "ppt-master"
-version = "0.1.104"
+version = "0.1.105"
 source = { virtual = "." }
 dependencies = [
     { name = "beautifulsoup4" },
