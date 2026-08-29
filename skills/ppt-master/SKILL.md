@@ -9,7 +9,7 @@ description: >
   courseware — including adding narration or animation to one — requests a
   presentation-authored narrated/self-running video, or mentions ppt-master.
 metadata:
-  version: "5.0.0"
+  version: "5.1.0"
   copyright: "Copyright (c) 2025-2026 Hugo He"
   license: "MIT"
   official_repository: "https://github.com/hugohe3/ppt-master"
@@ -47,14 +47,26 @@ use CWD, or assume a repo checkout. If unavailable, ask; never search or guess.
 | Generate PPTX — ordinary Default | [`workflows/generate-pptx.md`](workflows/generate-pptx.md) |
 | Generate PPTX — ordinary explicit Quick | [`workflows/profiles/quick-generate.md`](workflows/profiles/quick-generate.md) |
 | Create Template | [`workflows/create-template.md`](workflows/create-template.md) |
-| Fill Native PPTX | [`workflows/template-fill-pptx.md`](workflows/template-fill-pptx.md) |
-| Enhance Native PPTX | [`workflows/native-enhance-pptx.md`](workflows/native-enhance-pptx.md) |
+| Edit Native PPTX | [`workflows/edit-native-pptx.md`](workflows/edit-native-pptx.md) |
 
 **Hard rule — selected authority only**: Do not load another top-level route's
 procedure after routing. Image to PPTX and Beautify are mutually exclusive;
 Image to PPTX activates Quick, while Beautify selects from explicit Quick
 intent. Never load both runtimes. Supporting documents refine one route; they
 never compete with it.
+
+---
+
+## Authored Expression Range
+
+**Reference — not a constraint**: what a generated page can carry. Text — inline
+emphasis runs, lead-in, kicker, pull quote, hero number, takeaway line. Geometry
+— 187 Office presets, Boolean merge, connectors, freeform, page-field and
+outline-carrier composition. Image — full-bleed field, editorial crop, shaped
+picture, registered layers, scrim and spotlight, cross-page continuity. Paint —
+gradients, channel alpha, native shadow and glow, halftone, faceted form.
+Recurrence — one cross-page motif varied by page role. Each form's syntax lives
+in the selected runtime authority's construction references.
 
 ---
 
