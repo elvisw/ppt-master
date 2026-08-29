@@ -146,7 +146,7 @@ changed. Use the owning route's checker form; Quick Generate must add its
 lockless profile flag:
 
 ```bash
-uvx ppt-master svg-quality-check <project_path> --stage final --json
+uvx ppt-master svg-quality-check <project_path> --canonical-authoring --stage final --json
 # Quick Generate: insert --quick-generate before --stage.
 ```
 
