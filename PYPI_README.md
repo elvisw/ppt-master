@@ -53,7 +53,6 @@ uvx ppt-master svg-to-pptx my-presentation
 | `notes-to-audio` | Generate per-slide narration audio (TTS) |
 | `animation-config` | Create / validate animation configuration |
 | `pptx-template-import` | Extract SVG references from PPTX template |
-| `template-fill-pptx` | Fill content into PPTX template |
 | `pptx-to-svg` | Convert PPTX to SVG |
 | `svg-position-calc` | Chart coordinate calculator |
 | `update-spec` | Propagate color / font changes to all SVGs |
