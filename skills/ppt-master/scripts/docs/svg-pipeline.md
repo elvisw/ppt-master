@@ -1033,7 +1033,7 @@ Validate SVG technical compliance.
 uvx ppt-master svg-quality-check projects/project/svg_output/01_cover.svg
 uvx ppt-master svg-quality-check projects/project/svg_output
 uvx ppt-master svg-quality-check projects/project
-uvx ppt-master svg-quality-check projects/project --stage first-page
+uvx ppt-master svg-quality-check projects/project --stage early
 uvx ppt-master svg-quality-check projects/project --stage final --json
 uvx ppt-master svg-quality-check projects/project --canonical-authoring --stage final --json
 uvx ppt-master svg-quality-check projects/project --format ppt169
@@ -1053,10 +1053,13 @@ Checks include:
 Warnings are advisory: they require no modification or acknowledgement and do
 not affect the command's zero exit status. Only errors block the quality gate.
 
-`--stage first-page` resolves only the first authored SVG and permits an incomplete
-future page roster. `--stage final` checks the complete project. With `--json`,
-the final stage writes `validation/svg_quality_report.json`, while the first-page
-stage writes `validation/svg_quality_first_page_report.json` so it cannot overwrite
+`--stage early` checks every authored SVG so far, each under the partial-roster
+rules, and permits an incomplete future page roster — this is the mid-roster
+gate command. `--stage first-page` resolves only the first authored SVG with
+the same permissions. `--stage final` checks the complete project. With
+`--json`, the final stage writes `validation/svg_quality_report.json`, while
+the early and first-page stages write `validation/svg_quality_early_report.json`
+and `validation/svg_quality_first_page_report.json` so they cannot overwrite
 the release gate (or use `--json-output`). The report separates
 release failures (`blocking`), changed/new advisories (`introduced`),
 prototype-identical diagnostics (`inherited`), and source-conversion losses
