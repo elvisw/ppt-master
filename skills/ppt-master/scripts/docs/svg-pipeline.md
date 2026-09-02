@@ -1020,9 +1020,18 @@ the SVG quality checker.
   a JSON bounds object with `--json`.
 - `calibrate` measures fixed CJK and Latin samples for every typography role
   from `spec_lock.md` or repeatable `--role NAME:FAMILY:SIZE` overrides, writes
-  `validation/text_calibration.json`, and prints a compact table or JSON. Add
-  `--outline` to include the longest planned line per mapped role from Design
-  Spec §IX.
+  `validation/text_calibration.json`, and prints a compact table or JSON. The
+  estimator is additive across scripts, so a line mixing CJK with Latin words
+  or digits is estimated as (CJK chars ÷ CJK rate + other chars ÷ Latin rate)
+  × 100; spaces, digits, and punctuation count as Latin. Rates are rounded, so
+  the estimate carries a few percent of slack; leave that margin in the zone. The checker's overflow
+  diagnostic prints that line's average px per character, which is not a
+  reusable rate. A lock role without its own
+  `<role>_family` resolves to `title_family` when the role name contains
+  `title` or `numeral`, otherwise to `body_family`. Add `--outline` to include
+  the longest planned line per mapped role from Design Spec §IX; a Content
+  value joined by spaced `·`, `•`, `|`, `/` separators or by semicolons counts
+  each block as its own line.
 
 ```bash
 uvx ppt-master text-measure measure "Editable DrawingML text" --size 22
