@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from typing import Any
 from xml.etree import ElementTree as ET
 
@@ -156,6 +157,10 @@ def _fallback_chart_colors(
         "text_color": text_color,
         "axis_color": _most_common_color(axis_colors) or dominant_stroke,
         "grid_color": _most_common_color(grid_colors) or dominant_stroke,
+        # Which roles were read from labeled strokes; an unlabeled role fell
+        # back to the marker's dominant stroke and the warning says so.
+        "axis_labeled": bool(axis_colors),
+        "grid_labeled": bool(grid_colors),
     }
 
 
@@ -707,10 +712,20 @@ def _native_chart_style_color_warnings(
             or payload_color == fallback_color
         ):
             continue
-        warnings.append(
+        message = (
             f"Native PPTX chart style.{field_name} #{payload_color} differs "
-            f"from fallback dominant {field_name} #{fallback_color}"
+            f"from fallback dominant {field_name} #{fallback_color}; set "
+            f"style.{field_name} to #{fallback_color} or repaint the fallback "
+            f"so #{payload_color} is its dominant {field_name}"
         )
+        label_needle = {"axis_color": "axis", "grid_color": "grid"}.get(field_name)
+        if label_needle and not inferred.get(f"{label_needle}_labeled"):
+            message += (
+                f" (no stroke carries an id or class naming '{label_needle}', so "
+                f"the marker's dominant stroke was read instead — label the "
+                f"{label_needle} lines to read their own color)"
+            )
+        warnings.append(message)
     return warnings
 
 
@@ -841,11 +856,65 @@ def _chart_projection_text_variants(value: Any) -> set[str]:
     return variants
 
 
+_NUMBER_FORMAT_RE = re.compile(r"^(#,##|#|0)?(0*)(?:\.(0+))?(%?)$")
+
+
+def _format_number_like_excel(number: float, number_format: str) -> str | None:
+    """Render ``number`` the way PowerPoint shows a plain Excel format code.
+
+    Covers the codes a chart payload realistically writes — ``0``, ``0.0``,
+    ``0.00``, ``#,##0``, ``#,##0.0``, and their ``%`` forms. Anything else
+    returns ``None`` so the caller keeps only the literal variants.
+    """
+    match = _NUMBER_FORMAT_RE.match(number_format.strip())
+    if match is None:
+        return None
+    grouping, _integers, decimals, percent = match.groups()
+    value = number * 100 if percent else number
+    digits = len(decimals or "")
+    text = f"{value:,.{digits}f}" if grouping == "#,##" else f"{value:.{digits}f}"
+    return f"{text}%" if percent else text
+
+
+def _chart_number_formats(payload: dict[str, Any]) -> list[str]:
+    """Collect every ``number_format`` the payload applies to visible numbers."""
+    formats: list[str] = []
+
+    def add(container: Any) -> None:
+        if not isinstance(container, dict):
+            return
+        value = container.get("number_format")
+        if value is None:
+            value = container.get("numberFormat")
+        if isinstance(value, str) and value.strip() and value not in formats:
+            formats.append(value)
+
+    for labels in (payload.get("data_labels"), payload.get("dataLabels")):
+        add(labels)
+        if isinstance(labels, dict):
+            for point in labels.get("points") or []:
+                add(point)
+    for plot in payload.get("plots") or []:
+        if isinstance(plot, dict):
+            add(plot.get("data_labels"))
+            add(plot.get("dataLabels"))
+    for series in payload.get("series") or []:
+        if isinstance(series, dict):
+            add(series.get("data_labels"))
+            add(series.get("dataLabels"))
+    axes = payload.get("axes")
+    if isinstance(axes, dict):
+        for config in axes.values():
+            add(config)
+    return formats
+
+
 def _chart_projected_texts(
     payload: dict[str, Any],
     chart_data: dict[str, Any],
 ) -> set[str]:
     projected: set[str] = set()
+    number_formats = _chart_number_formats(payload)
 
     def add(value: Any) -> None:
         if isinstance(value, dict):
@@ -861,6 +930,13 @@ def _chart_projected_texts(
                 add(item)
             return
         projected.update(_chart_projection_text_variants(value))
+        numeric = _maybe_number(value)
+        if numeric is None:
+            return
+        for number_format in number_formats:
+            formatted = _format_number_like_excel(numeric, number_format)
+            if formatted:
+                projected.add(formatted)
 
     for key in ("categories", "levels", "plots", "series", "values"):
         add(chart_data.get(key))
@@ -893,12 +969,14 @@ def _chart_projected_texts(
             or major_unit <= 0
         ):
             continue
-        value = minimum
-        for _ in range(1000):
+        # Build each tick from the index, not by accumulating ``major_unit``:
+        # repeated float addition turns the top tick 5.6 into
+        # 5.6000000000000005 and the fallback's "5.6" is then reported missing.
+        for index in range(1000):
+            value = round(minimum + index * major_unit, 10)
             if value > maximum + major_unit * 1e-6:
                 break
-            projected.update(_chart_projection_text_variants(value))
-            value += major_unit
+            add(value)
     return projected
 
 
@@ -918,10 +996,24 @@ def _native_chart_reverse_text_warnings(
         return []
     sample = ", ".join(repr(text) for text in missing[:8])
     suffix = "" if len(missing) <= 8 else f", and {len(missing) - 8} more"
-    return [
+    message = (
         "Native PPTX chart visible text not projected: "
         f"{sample}{suffix}. Use categories/data labels/axis labels/legend or companion text."
-    ]
+    )
+    # ``73.0`` in the fallback while the payload value is 73: General format
+    # renders ``73``, so the decimals need an explicit number_format.
+    if any(
+        re.fullmatch(r"-?\d+\.\d+", text)
+        and str(int(float(text))) in projected
+        and float(text).is_integer()
+        for text in missing
+    ):
+        message += (
+            " A value that ends in .0 renders without the decimals under the "
+            "General format; set data_labels.number_format (for example "
+            '"0.0") when the fallback shows them.'
+        )
+    return [message]
 
 
 def _native_chart_chrome_warnings(elem: ET.Element, payload: dict[str, Any]) -> list[str]:
