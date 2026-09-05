@@ -57,6 +57,7 @@ uvx ppt-master image-gen "A cinematic portrait" --backend minimax
 uvx ppt-master image-gen "A product launch hero image" --backend qwen
 uvx ppt-master image-gen "科技感背景图" --backend zhipu
 uvx ppt-master image-gen "A product KV in cinematic style" --backend volcengine
+uvx ppt-master image-gen "A mountain landscape" --backend tencent
 ```
 
 Configuration sources:

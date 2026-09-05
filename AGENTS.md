@@ -49,7 +49,7 @@ PPT Master turns source material into natively editable DrawingML PPTX. Generate
 ## Compatibility Boundary
 
 - This repository is a workflow/skill package, not an app or service scaffold.
-- Do NOT assume generic-project conventions like `.worktrees/`, `tests/`, or mandatory branch setup unless the user explicitly requests them.
+- Do NOT assume generic-project conventions like `.worktrees/`, CI, or mandatory branch setup unless the user explicitly requests them. The only test location is `skills/ppt-master/scripts/tests/` under the conditions in [`docs/rules/code-style.md`](docs/rules/code-style.md) §11.
 - On conflict with a generic coding skill, prioritize [`skills/ppt-master/SKILL.md`](skills/ppt-master/SKILL.md) inside this repository.
 - **GitHub operations target this fork, never upstream**: `origin` is `elvisw/ppt-master`; `upstream` is `hugohe3/ppt-master` (read-only sync source). All `gh` commands (PR create/merge, issue, workflow) must use `--repo elvisw/ppt-master` or set the default repo first (`gh repo set-default elvisw/ppt-master`). Never create PRs or issues against `hugohe3/ppt-master` unless the user explicitly asks to report something upstream.
 
