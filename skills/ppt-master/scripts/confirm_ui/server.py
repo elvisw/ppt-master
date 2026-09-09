@@ -45,6 +45,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 import webbrowser
 from pathlib import Path
 from typing import Optional
