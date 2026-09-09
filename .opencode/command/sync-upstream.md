@@ -244,7 +244,7 @@ python skills/ppt-master/scripts/check_cli_sync.py
 
 #### 4e. 提交前门禁（必须通过）
 
-在 `git commit` 之前，**必须**确认以下四项全部通过：
+在 `git commit` 之前，**必须**确认以下六项全部通过：
 
 1. **全仓库扫描零残留**：重复 Step 4d 的 `rg` 命令，确认输出为空
 2. **cli.py 同步**：`python skills/ppt-master/scripts/check_cli_sync.py` 确认 OK
@@ -255,8 +255,35 @@ python skills/ppt-master/scripts/check_cli_sync.py
    - 检查上游是否在 `attribution_guard.py` 中新增了 `_REQUIRED_GATE_FILES`/`_REQUIRED_ATTRIBUTION_FILES` 条目,对应文件必须存在
 4. **fork 适配完整性**：对「fork 修改文件清单」的每个文件 grep 验证其关键适配标记仍在（`PPT_MASTER_LAUNCH_TOKEN`、`normalized_project_key`、`projects_root`、`PPT_MASTER_TEMPLATES_DIR`），任一缺失必须修复后再提交
 5. **fork 声明块**：`README.md` 与 `README_CN.md` 在语言切换行之后必须保留 fork 声明块（`Fork notice` / `Fork 声明`，含 `uvx ppt-master` 安装说明），`PYPI_README.md` 顶部引用块必须保留 fork 维护者与赞助归属声明；`docs/faq.md` / `docs/zh/faq.md` 更新表格首行必须保留 `uvx`（PyPI）行；`docs/windows-installation.md` / `docs/zh/windows-installation.md` 标题下方必须保留 fork `uvx` 注记块；`docs/roadmap.md` / `docs/zh/roadmap.md` uv 段落末尾必须保留 fork 注记；`CONTRIBUTING.md` Setup 后必须保留 fork 注记；上游合并覆盖后必须恢复
+6. **fork 修改文件可运行性**：对「fork 修改文件清单」的每个 `.py` 文件运行语法与未定义名检查，两者必须全部通过：
 
-**五项有任何一项不通过，禁止提交。** 回到对应步骤修复后重新验证。
+   ```bash
+   # 语法级检查（8 个 fork 修改文件）
+   python -m py_compile \
+     skills/ppt-master/scripts/confirm_ui/server.py \
+     skills/ppt-master/scripts/svg_editor/server.py \
+     skills/ppt-master/scripts/visual_review.py \
+     skills/ppt-master/scripts/server_common.py \
+     skills/ppt-master/scripts/config.py \
+     skills/ppt-master/scripts/project_management/paths.py \
+     skills/ppt-master/scripts/project_manager.py \
+     skills/ppt-master/scripts/register_template.py
+
+   # 未定义名检查（F821，捕获"marker 在但 import 缺失"类错误，如 uuid 未导入）
+   uvx ruff check --select F821 \
+     skills/ppt-master/scripts/confirm_ui/server.py \
+     skills/ppt-master/scripts/svg_editor/server.py \
+     skills/ppt-master/scripts/visual_review.py \
+     skills/ppt-master/scripts/server_common.py \
+     skills/ppt-master/scripts/config.py \
+     skills/ppt-master/scripts/project_management/paths.py \
+     skills/ppt-master/scripts/project_manager.py \
+     skills/ppt-master/scripts/register_template.py
+   ```
+
+   门禁 4 的 grep 只验证适配标记存在，无法发现"标记在但代码坏"（如 `launch_token = uuid.uuid4().hex` 缺 `import uuid`）。F821 静态分析不执行导入，可捕获此类错误。任一失败必须修复后再提交。
+
+**六项有任何一项不通过，禁止提交。** 回到对应步骤修复后重新验证。
 
 ### Step 5: 依赖同步
 
