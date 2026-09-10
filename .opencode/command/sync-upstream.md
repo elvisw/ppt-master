@@ -34,65 +34,261 @@ git log main..upstream/main --oneline
 **建立本次同步的 immutable upstream 目标。** GitHub Actions 环境中，workflow 注入的
 `EXPECTED_UPSTREAM_SHA` 就是本次运行必须合并的确切提交；Actions 中变量为空时立即
 停止。本地运行中该变量为空时，才允许取 fetch 后的 upstream tip。两者都必须等于
-fetch 后的 `upstream/main`，否则立即停止：
+fetch 后的 `upstream/main`，否则立即停止。目标值和后续代码块需要的原始 HEAD 都必须
+写入 Git 内部临时状态，不能依赖普通 shell 变量跨越代码块：
 
 ```bash
+if ! SYNC_EXPECTED_STATE=$(git rev-parse --git-path ppt-master-sync.expected-upstream-sha); then
+  echo "Unable to resolve the Git-internal expected-target state path" >&2
+  exit 1
+fi
+if ! SYNC_ORIGINAL_HEAD_STATE=$(git rev-parse --git-path ppt-master-sync.pre-merge-head); then
+  echo "Unable to resolve the Git-internal original-HEAD state path" >&2
+  exit 1
+fi
+if ! SYNC_MERGE_HEAD_PATH=$(git rev-parse --git-path MERGE_HEAD); then
+  echo "Unable to resolve the Git merge-state path" >&2
+  exit 1
+fi
+if [ -e "$SYNC_EXPECTED_STATE" ] || [ -e "$SYNC_ORIGINAL_HEAD_STATE" ]; then
+  echo "A stale ppt-master sync state file exists; refusing to overwrite it" >&2
+  if [ -e "$SYNC_MERGE_HEAD_PATH" ]; then
+    echo "A merge is active; leaving it untouched" >&2
+    exit 1
+  fi
+  if ! rm -f -- "$SYNC_EXPECTED_STATE" "$SYNC_ORIGINAL_HEAD_STATE"; then
+    echo "Unable to clean stale Git-internal sync state" >&2
+  fi
+  exit 1
+fi
+if [ -e "$SYNC_MERGE_HEAD_PATH" ]; then
+  echo "A merge already exists before this sync run; refusing to abort it" >&2
+  exit 1
+fi
+
+cleanup_sync_state() {
+  if ! rm -f -- "$SYNC_EXPECTED_STATE" "$SYNC_ORIGINAL_HEAD_STATE"; then
+    echo "Unable to clean Git-internal sync state" >&2
+    return 1
+  fi
+}
+
+fail_sync() {
+  FAILURE_STATUS="${1:-1}"
+  if ! cleanup_sync_state; then
+    FAILURE_STATUS=1
+  fi
+  exit "$FAILURE_STATUS"
+}
+
 if ! FETCHED_UPSTREAM_SHA=$(git rev-parse upstream/main); then
   echo "Unable to resolve fetched upstream/main" >&2
-  exit 1
+  fail_sync 1
 fi
 if ! printf '%s\n' "$FETCHED_UPSTREAM_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
   echo "Fetched upstream tip is not a 40-character lowercase SHA" >&2
-  exit 1
+  fail_sync 1
 fi
 if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
   if [ -z "${EXPECTED_UPSTREAM_SHA:-}" ]; then
     echo "EXPECTED_UPSTREAM_SHA is required in GitHub Actions" >&2
-    exit 1
+    fail_sync 1
   fi
+  CANDIDATE_UPSTREAM_SHA="$EXPECTED_UPSTREAM_SHA"
 elif [ -z "${EXPECTED_UPSTREAM_SHA:-}" ]; then
-  EXPECTED_UPSTREAM_SHA="$FETCHED_UPSTREAM_SHA"
+  CANDIDATE_UPSTREAM_SHA="$FETCHED_UPSTREAM_SHA"
+else
+  CANDIDATE_UPSTREAM_SHA="$EXPECTED_UPSTREAM_SHA"
 fi
-if ! printf '%s\n' "$EXPECTED_UPSTREAM_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+if ! printf '%s\n' "$CANDIDATE_UPSTREAM_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
   echo "Expected upstream SHA is not a 40-character lowercase SHA" >&2
-  exit 1
+  fail_sync 1
 fi
-if [ "$EXPECTED_UPSTREAM_SHA" != "$FETCHED_UPSTREAM_SHA" ]; then
+if [ "$CANDIDATE_UPSTREAM_SHA" != "$FETCHED_UPSTREAM_SHA" ]; then
   echo "Expected upstream SHA does not match fetched upstream/main" >&2
-  exit 1
+  fail_sync 1
 fi
+if ! printf '%s\n' "$CANDIDATE_UPSTREAM_SHA" > "$SYNC_EXPECTED_STATE"; then
+  echo "Unable to persist the expected upstream SHA in Git-internal state" >&2
+  fail_sync 1
+fi
+echo "Persisted expected upstream SHA in Git-internal state"
 ```
 
-目标值必须是 40 位小写十六进制 SHA。目标文件只能在 Step 2 的 merge 成功后写入并
-暂存；Step 4e 门禁 7 与 Step 6 的提交程序共同消费该已暂存值。
+目标值必须是 40 位小写十六进制 SHA。目标文件只能在 Step 2 的 merge 成功并验证
+`MERGE_HEAD` 后写入并暂存；Step 4e 门禁 7 与 Step 6 的提交程序从同一个 Git 内部状态
+重新读取目标值。Step 1 失败时只清理本次创建的临时状态，不 abort 用户已有的 merge。
 
 ---
 
 ### Step 2: 合并上游
 
 ```bash
-if ! PRE_MERGE_HEAD=$(git rev-parse HEAD); then
-  echo "Unable to record the pre-merge HEAD" >&2
+if ! SYNC_EXPECTED_STATE=$(git rev-parse --git-path ppt-master-sync.expected-upstream-sha); then
+  echo "Unable to resolve the Git-internal expected-target state path" >&2
   exit 1
 fi
+if ! SYNC_ORIGINAL_HEAD_STATE=$(git rev-parse --git-path ppt-master-sync.pre-merge-head); then
+  echo "Unable to resolve the Git-internal original-HEAD state path" >&2
+  exit 1
+fi
+if ! SYNC_MERGE_HEAD_PATH=$(git rev-parse --git-path MERGE_HEAD); then
+  echo "Unable to resolve the Git merge-state path" >&2
+  exit 1
+fi
+
+cleanup_sync_state() {
+  if ! rm -f -- "$SYNC_EXPECTED_STATE" "$SYNC_ORIGINAL_HEAD_STATE"; then
+    echo "Unable to clean Git-internal sync state" >&2
+    return 1
+  fi
+}
+
+abort_owned_merge() {
+  if [ ! -f "$SYNC_ORIGINAL_HEAD_STATE" ] || [ ! -e "$SYNC_MERGE_HEAD_PATH" ]; then
+    return 0
+  fi
+  if ! SAVED_ORIGINAL_HEAD_SHA=$(tr -d '\r\n' < "$SYNC_ORIGINAL_HEAD_STATE"); then
+    echo "Unable to read the owned original-HEAD state" >&2
+    return 1
+  fi
+  if ! CURRENT_ORIG_HEAD_SHA=$(git rev-parse --verify ORIG_HEAD); then
+    echo "Unable to verify ORIG_HEAD ownership before abort" >&2
+    return 1
+  fi
+  if [ "$CURRENT_ORIG_HEAD_SHA" != "$SAVED_ORIGINAL_HEAD_SHA" ]; then
+    echo "Refusing to abort a merge not owned by this sync run" >&2
+    return 1
+  fi
+  if ! git merge --abort; then
+    echo "git merge --abort failed" >&2
+    return 1
+  fi
+  if git cat-file -e "$SAVED_ORIGINAL_HEAD_SHA:.github/upstream-main.sha" 2>/dev/null; then
+    if ! git restore --source="$SAVED_ORIGINAL_HEAD_SHA" --staged --worktree -- .github/upstream-main.sha; then
+      echo "Unable to restore the pre-merge upstream marker" >&2
+      return 1
+    fi
+  else
+    if ! git rm --cached --ignore-unmatch -- .github/upstream-main.sha; then
+      echo "Unable to remove the untracked upstream marker after abort" >&2
+      return 1
+    fi
+    if [ -e .github/upstream-main.sha ] && ! rm -f -- .github/upstream-main.sha; then
+      echo "Unable to remove the untracked upstream marker after abort" >&2
+      return 1
+    fi
+  fi
+}
+
+fail_sync() {
+  FAILURE_STATUS="${1:-1}"
+  if ! abort_owned_merge; then
+    FAILURE_STATUS=1
+  fi
+  if ! cleanup_sync_state; then
+    FAILURE_STATUS=1
+  fi
+  exit "$FAILURE_STATUS"
+}
+
+fail_without_abort() {
+  FAILURE_STATUS="${1:-1}"
+  if ! cleanup_sync_state; then
+    FAILURE_STATUS=1
+  fi
+  exit "$FAILURE_STATUS"
+}
+
+if [ ! -f "$SYNC_EXPECTED_STATE" ]; then
+  echo "Expected upstream state is missing; rerun Step 1" >&2
+  fail_sync 1
+fi
+if ! STORED_TARGET_SHA=$(tr -d '\r\n' < "$SYNC_EXPECTED_STATE"); then
+  echo "Unable to read the Git-internal expected upstream state" >&2
+  fail_sync 1
+fi
+if ! printf '%s\n' "$STORED_TARGET_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+  echo "Stored expected upstream SHA is invalid" >&2
+  fail_sync 1
+fi
+if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+  if [ -z "${EXPECTED_UPSTREAM_SHA:-}" ] || [ "$EXPECTED_UPSTREAM_SHA" != "$STORED_TARGET_SHA" ]; then
+    echo "Actions EXPECTED_UPSTREAM_SHA is missing or differs from Git-internal state" >&2
+    fail_sync 1
+  fi
+fi
+EXPECTED_UPSTREAM_SHA="$STORED_TARGET_SHA"
+
+if [ -e "$SYNC_ORIGINAL_HEAD_STATE" ]; then
+  echo "A stale original-HEAD state file exists; refusing to overwrite it" >&2
+  fail_without_abort 1
+fi
+if [ -e "$SYNC_MERGE_HEAD_PATH" ]; then
+  echo "A merge already exists before this sync run; refusing to abort it" >&2
+  fail_sync 1
+fi
+if ! PRE_MERGE_STATUS=$(git status --porcelain=v1 --untracked-files=all); then
+  echo "Unable to verify a clean worktree before starting the merge" >&2
+  fail_sync 1
+fi
+if [ -n "$PRE_MERGE_STATUS" ]; then
+  echo "Worktree must be clean before starting the sync-owned merge" >&2
+  fail_sync 1
+fi
+if ! ORIGINAL_HEAD_SHA=$(git rev-parse --verify HEAD); then
+  echo "Unable to record the pre-merge HEAD" >&2
+  fail_sync 1
+fi
+if ! printf '%s\n' "$ORIGINAL_HEAD_SHA" > "$SYNC_ORIGINAL_HEAD_STATE"; then
+  echo "Unable to persist the pre-merge HEAD in Git-internal state" >&2
+  fail_sync 1
+fi
+
 if git merge --no-ff --no-commit "$EXPECTED_UPSTREAM_SHA"; then
   :
 else
   MERGE_EXIT=$?
-  if ! git merge --abort; then
-    echo "Merge failed and git merge --abort also failed" >&2
-    exit 1
-  fi
-  echo "Merge failed; merge aborted. Stop without changing the upstream marker." >&2
-  exit "$MERGE_EXIT"
+  echo "Merge failed; aborting this sync-owned merge." >&2
+  fail_sync "$MERGE_EXIT"
 fi
+
+if [ ! -e "$SYNC_MERGE_HEAD_PATH" ]; then
+  echo "git merge returned 0 without creating MERGE_HEAD; refusing already-up-to-date merge" >&2
+  fail_sync 1
+fi
+if ! MERGE_HEAD_LINE_COUNT=$(awk 'NF { count += 1 } END { print count + 0 }' "$SYNC_MERGE_HEAD_PATH"); then
+  echo "Unable to count MERGE_HEAD entries" >&2
+  fail_sync 1
+fi
+if [ "$MERGE_HEAD_LINE_COUNT" -ne 1 ]; then
+  echo "MERGE_HEAD must contain exactly one target" >&2
+  fail_sync 1
+fi
+if ! MERGE_HEAD_SHA=$(tr -d '\r\n' < "$SYNC_MERGE_HEAD_PATH"); then
+  echo "Unable to read MERGE_HEAD" >&2
+  fail_sync 1
+fi
+if [ "$MERGE_HEAD_SHA" != "$EXPECTED_UPSTREAM_SHA" ]; then
+  echo "MERGE_HEAD does not equal the fixed expected upstream SHA" >&2
+  fail_sync 1
+fi
+if ! ORIG_HEAD_SHA=$(git rev-parse --verify ORIG_HEAD); then
+  echo "Successful merge did not set ORIG_HEAD" >&2
+  fail_sync 1
+fi
+if [ "$ORIG_HEAD_SHA" != "$ORIGINAL_HEAD_SHA" ]; then
+  echo "ORIG_HEAD does not equal the recorded pre-merge HEAD" >&2
+  fail_sync 1
+fi
+
 if ! printf '%s\n' "$EXPECTED_UPSTREAM_SHA" > .github/upstream-main.sha; then
-  echo "Unable to write the upstream marker after merge" >&2
-  exit 1
+  echo "Unable to write the upstream marker after merge validation" >&2
+  fail_sync 1
 fi
 if ! git add .github/upstream-main.sha; then
   echo "Unable to stage the upstream marker" >&2
-  exit 1
+  fail_sync 1
 fi
 ```
 
@@ -112,6 +308,12 @@ reset、rebase、squash、cherry-pick、切换分支和清除 `MERGE_HEAD`。失
 Step 2 成功才允许进入本步；失败（包括冲突）已经 abort 并停止，禁止手动解冲突后
 继续本次运行。成功后，核心原则是保留 fork 的 uvx 适配，合入上游的新功能。
 `skills/ppt-master/scripts/*.py` 除 `attribution_guard.py` 与下方「fork 修改文件清单」列出的文件外零改动。
+
+本步若需要启动独立 shell 代码块，不能引用前一代码块的普通变量。每个代码块都必须
+用 `git rev-parse --git-path ppt-master-sync.expected-upstream-sha` 和
+`git rev-parse --git-path ppt-master-sync.pre-merge-head` 重新取得路径，再读取并校验
+两个 Git 内部状态文件；Actions 中还要重新校验环境里的 `EXPECTED_UPSTREAM_SHA` 与
+持久化 target 相等。任何失败都必须走本次运行的 abort/cleanup 失败路径后退出。
 
 **fork 修改文件清单**（这些文件含 fork 独有的 Windows/uvx 适配，上游更新时**保留 fork 适配标记、合入上游功能改动**，不得整文件回退）：
 
@@ -347,31 +549,149 @@ python skills/ppt-master/scripts/check_cli_sync.py
 7. **merge-state 门禁**：在 `git commit` 创建 merge commit 之前验证 merge 状态与目标文件仍然成立：
 
    ```bash
-   if ! MERGE_HEAD_SHA=$(git rev-parse -q --verify MERGE_HEAD); then
-     echo "MERGE_HEAD is missing" >&2
+   # This is an independent shell: reload all sync state from .git.
+   if ! SYNC_EXPECTED_STATE=$(git rev-parse --git-path ppt-master-sync.expected-upstream-sha); then
+     echo "Unable to resolve the Git-internal expected-target state path" >&2
      exit 1
+   fi
+   if ! SYNC_ORIGINAL_HEAD_STATE=$(git rev-parse --git-path ppt-master-sync.pre-merge-head); then
+     echo "Unable to resolve the Git-internal original-HEAD state path" >&2
+     exit 1
+   fi
+   if ! SYNC_MERGE_HEAD_PATH=$(git rev-parse --git-path MERGE_HEAD); then
+     echo "Unable to resolve the Git merge-state path" >&2
+     exit 1
+   fi
+
+   cleanup_sync_state() {
+     if ! rm -f -- "$SYNC_EXPECTED_STATE" "$SYNC_ORIGINAL_HEAD_STATE"; then
+       echo "Unable to clean Git-internal sync state" >&2
+       return 1
+     fi
+   }
+
+   abort_owned_merge() {
+     if [ ! -f "$SYNC_ORIGINAL_HEAD_STATE" ] || [ ! -e "$SYNC_MERGE_HEAD_PATH" ]; then
+       return 0
+     fi
+     if ! SAVED_ORIGINAL_HEAD_SHA=$(tr -d '\r\n' < "$SYNC_ORIGINAL_HEAD_STATE"); then
+       echo "Unable to read the owned original-HEAD state" >&2
+       return 1
+     fi
+     if ! CURRENT_ORIG_HEAD_SHA=$(git rev-parse --verify ORIG_HEAD); then
+       echo "Unable to verify ORIG_HEAD ownership before abort" >&2
+       return 1
+     fi
+     if [ "$CURRENT_ORIG_HEAD_SHA" != "$SAVED_ORIGINAL_HEAD_SHA" ]; then
+       echo "Refusing to abort a merge not owned by this sync run" >&2
+       return 1
+     fi
+   if ! git merge --abort; then
+     echo "git merge --abort failed" >&2
+     return 1
+   fi
+    if git cat-file -e "$SAVED_ORIGINAL_HEAD_SHA:.github/upstream-main.sha" 2>/dev/null; then
+      if ! git restore --source="$SAVED_ORIGINAL_HEAD_SHA" --staged --worktree -- .github/upstream-main.sha; then
+        echo "Unable to restore the pre-merge upstream marker" >&2
+        return 1
+      fi
+    else
+      if ! git rm --cached --ignore-unmatch -- .github/upstream-main.sha; then
+        echo "Unable to remove the untracked upstream marker after abort" >&2
+        return 1
+      fi
+      if [ -e .github/upstream-main.sha ] && ! rm -f -- .github/upstream-main.sha; then
+        echo "Unable to remove the untracked upstream marker after abort" >&2
+        return 1
+      fi
+    fi
+   }
+
+   fail_sync() {
+     FAILURE_STATUS="${1:-1}"
+     if ! abort_owned_merge; then
+       FAILURE_STATUS=1
+     fi
+     if ! cleanup_sync_state; then
+       FAILURE_STATUS=1
+     fi
+     exit "$FAILURE_STATUS"
+   }
+
+   if [ ! -f "$SYNC_EXPECTED_STATE" ]; then
+     echo "Expected upstream state is missing; rerun Step 1" >&2
+     fail_sync 1
+   fi
+   if ! STORED_TARGET_SHA=$(tr -d '\r\n' < "$SYNC_EXPECTED_STATE"); then
+     echo "Unable to read the Git-internal expected upstream state" >&2
+     fail_sync 1
+   fi
+   if ! printf '%s\n' "$STORED_TARGET_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+     echo "Stored expected upstream SHA is invalid" >&2
+     fail_sync 1
+   fi
+   if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+     if [ -z "${EXPECTED_UPSTREAM_SHA:-}" ] || [ "$EXPECTED_UPSTREAM_SHA" != "$STORED_TARGET_SHA" ]; then
+       echo "Actions EXPECTED_UPSTREAM_SHA is missing or differs from Git-internal state" >&2
+       fail_sync 1
+     fi
+   fi
+   EXPECTED_UPSTREAM_SHA="$STORED_TARGET_SHA"
+
+   if [ ! -f "$SYNC_ORIGINAL_HEAD_STATE" ]; then
+     echo "Original-HEAD state is missing; refusing to commit" >&2
+     fail_sync 1
+   fi
+   if ! ORIGINAL_HEAD_SHA=$(tr -d '\r\n' < "$SYNC_ORIGINAL_HEAD_STATE"); then
+     echo "Unable to read the Git-internal original-HEAD state" >&2
+     fail_sync 1
+   fi
+   if [ ! -e "$SYNC_MERGE_HEAD_PATH" ]; then
+     echo "MERGE_HEAD is missing" >&2
+     fail_sync 1
+   fi
+   if ! MERGE_HEAD_LINE_COUNT=$(awk 'NF { count += 1 } END { print count + 0 }' "$SYNC_MERGE_HEAD_PATH"); then
+     echo "Unable to count MERGE_HEAD entries" >&2
+     fail_sync 1
+   fi
+   if [ "$MERGE_HEAD_LINE_COUNT" -ne 1 ]; then
+     echo "MERGE_HEAD must contain exactly one target" >&2
+     fail_sync 1
+   fi
+   if ! MERGE_HEAD_SHA=$(tr -d '\r\n' < "$SYNC_MERGE_HEAD_PATH"); then
+     echo "Unable to read MERGE_HEAD" >&2
+     fail_sync 1
    fi
    if [ "$MERGE_HEAD_SHA" != "$EXPECTED_UPSTREAM_SHA" ]; then
      echo "MERGE_HEAD does not equal EXPECTED_UPSTREAM_SHA" >&2
-     exit 1
+     fail_sync 1
+   fi
+   if ! ORIG_HEAD_SHA=$(git rev-parse --verify ORIG_HEAD); then
+     echo "ORIG_HEAD is missing" >&2
+     fail_sync 1
+   fi
+   if [ "$ORIG_HEAD_SHA" != "$ORIGINAL_HEAD_SHA" ]; then
+     echo "ORIG_HEAD does not equal the saved original HEAD" >&2
+     fail_sync 1
    fi
    if ! WORKTREE_TARGET_SHA=$(tr -d '\r\n' < .github/upstream-main.sha); then
      echo "Unable to read .github/upstream-main.sha" >&2
-     exit 1
+     fail_sync 1
    fi
    if ! INDEX_TARGET_SHA=$(git show :".github/upstream-main.sha" | tr -d '\r\n'); then
      echo "Unable to read the staged upstream marker" >&2
-     exit 1
+     fail_sync 1
    fi
    if [ "$WORKTREE_TARGET_SHA" != "$EXPECTED_UPSTREAM_SHA" ] ||
       [ "$INDEX_TARGET_SHA" != "$EXPECTED_UPSTREAM_SHA" ]; then
      echo "The upstream marker is not staged with EXPECTED_UPSTREAM_SHA" >&2
-     exit 1
+     fail_sync 1
    fi
    ```
 
-   任一命令非零（`MERGE_HEAD` 被清除/改写，或工作树/索引目标文件与选定 SHA 不一致）
-   都停止，不提交。
+   任一命令非零（包括状态文件、`ORIG_HEAD`、`MERGE_HEAD` 或 marker 不一致）都必须
+   先 abort 本次拥有的 merge，再清理 `.git` 临时状态并停止；成功通过本门禁后不得清理
+   状态，Step 6 仍需从文件重新读取。
 
 **七项有任何一项不通过，禁止提交。** 回到对应步骤修复后重新验证。
 
@@ -395,59 +715,207 @@ python skills/ppt-master/scripts/check_deps_sync.py
 **提交前确认 Step 4e 门禁已通过（七项全部通过，含 merge-state 门禁）。**
 
 ```bash
-# 提交合并和适配（仅已追踪文件的更新 + 新文件 + 目标文件）
-if [ -z "${PRE_MERGE_HEAD:-}" ]; then
-  echo "PRE_MERGE_HEAD was not recorded before merge" >&2
+# This is an independent shell: reload target, original HEAD, and merge ownership from .git.
+if ! SYNC_EXPECTED_STATE=$(git rev-parse --git-path ppt-master-sync.expected-upstream-sha); then
+  echo "Unable to resolve the Git-internal expected-target state path" >&2
   exit 1
 fi
+if ! SYNC_ORIGINAL_HEAD_STATE=$(git rev-parse --git-path ppt-master-sync.pre-merge-head); then
+  echo "Unable to resolve the Git-internal original-HEAD state path" >&2
+  exit 1
+fi
+if ! SYNC_MERGE_HEAD_PATH=$(git rev-parse --git-path MERGE_HEAD); then
+  echo "Unable to resolve the Git merge-state path" >&2
+  exit 1
+fi
+
+cleanup_sync_state() {
+  if ! rm -f -- "$SYNC_EXPECTED_STATE" "$SYNC_ORIGINAL_HEAD_STATE"; then
+    echo "Unable to clean Git-internal sync state" >&2
+    return 1
+  fi
+}
+
+abort_owned_merge() {
+  if [ ! -f "$SYNC_ORIGINAL_HEAD_STATE" ] || [ ! -e "$SYNC_MERGE_HEAD_PATH" ]; then
+    return 0
+  fi
+  if ! SAVED_ORIGINAL_HEAD_SHA=$(tr -d '\r\n' < "$SYNC_ORIGINAL_HEAD_STATE"); then
+    echo "Unable to read the owned original-HEAD state" >&2
+    return 1
+  fi
+  if ! CURRENT_ORIG_HEAD_SHA=$(git rev-parse --verify ORIG_HEAD); then
+    echo "Unable to verify ORIG_HEAD ownership before abort" >&2
+    return 1
+  fi
+  if [ "$CURRENT_ORIG_HEAD_SHA" != "$SAVED_ORIGINAL_HEAD_SHA" ]; then
+    echo "Refusing to abort a merge not owned by this sync run" >&2
+    return 1
+  fi
+  if ! git merge --abort; then
+    echo "git merge --abort failed" >&2
+    return 1
+  fi
+  if git cat-file -e "$SAVED_ORIGINAL_HEAD_SHA:.github/upstream-main.sha" 2>/dev/null; then
+    if ! git restore --source="$SAVED_ORIGINAL_HEAD_SHA" --staged --worktree -- .github/upstream-main.sha; then
+      echo "Unable to restore the pre-merge upstream marker" >&2
+      return 1
+    fi
+  else
+    if ! git rm --cached --ignore-unmatch -- .github/upstream-main.sha; then
+      echo "Unable to remove the untracked upstream marker after abort" >&2
+      return 1
+    fi
+    if [ -e .github/upstream-main.sha ] && ! rm -f -- .github/upstream-main.sha; then
+      echo "Unable to remove the untracked upstream marker after abort" >&2
+      return 1
+    fi
+  fi
+}
+
+fail_before_commit() {
+  FAILURE_STATUS="${1:-1}"
+  if ! abort_owned_merge; then
+    FAILURE_STATUS=1
+  fi
+  if ! cleanup_sync_state; then
+    FAILURE_STATUS=1
+  fi
+  exit "$FAILURE_STATUS"
+}
+
+if [ ! -f "$SYNC_EXPECTED_STATE" ]; then
+  echo "Expected upstream state is missing; rerun Step 1" >&2
+  fail_before_commit 1
+fi
+if ! STORED_TARGET_SHA=$(tr -d '\r\n' < "$SYNC_EXPECTED_STATE"); then
+  echo "Unable to read the Git-internal expected upstream state" >&2
+  fail_before_commit 1
+fi
+if ! printf '%s\n' "$STORED_TARGET_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+  echo "Stored expected upstream SHA is invalid" >&2
+  fail_before_commit 1
+fi
+if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+  if [ -z "${EXPECTED_UPSTREAM_SHA:-}" ] || [ "$EXPECTED_UPSTREAM_SHA" != "$STORED_TARGET_SHA" ]; then
+    echo "Actions EXPECTED_UPSTREAM_SHA is missing or differs from Git-internal state" >&2
+    fail_before_commit 1
+  fi
+fi
+EXPECTED_UPSTREAM_SHA="$STORED_TARGET_SHA"
+if [ ! -f "$SYNC_ORIGINAL_HEAD_STATE" ]; then
+  echo "Original-HEAD state is missing; refusing to commit" >&2
+  fail_before_commit 1
+fi
+if ! ORIGINAL_HEAD_SHA=$(tr -d '\r\n' < "$SYNC_ORIGINAL_HEAD_STATE"); then
+  echo "Unable to read the Git-internal original-HEAD state" >&2
+  fail_before_commit 1
+fi
+if [ ! -e "$SYNC_MERGE_HEAD_PATH" ]; then
+  echo "MERGE_HEAD is missing before commit" >&2
+  fail_before_commit 1
+fi
+if ! MERGE_HEAD_LINE_COUNT=$(awk 'NF { count += 1 } END { print count + 0 }' "$SYNC_MERGE_HEAD_PATH"); then
+  echo "Unable to count MERGE_HEAD entries" >&2
+  fail_before_commit 1
+fi
+if [ "$MERGE_HEAD_LINE_COUNT" -ne 1 ]; then
+  echo "MERGE_HEAD must contain exactly one target" >&2
+  fail_before_commit 1
+fi
+if ! MERGE_HEAD_SHA=$(tr -d '\r\n' < "$SYNC_MERGE_HEAD_PATH"); then
+  echo "Unable to read MERGE_HEAD" >&2
+  fail_before_commit 1
+fi
+if [ "$MERGE_HEAD_SHA" != "$EXPECTED_UPSTREAM_SHA" ]; then
+  echo "MERGE_HEAD does not equal EXPECTED_UPSTREAM_SHA" >&2
+  fail_before_commit 1
+fi
+if ! ORIG_HEAD_SHA=$(git rev-parse --verify ORIG_HEAD); then
+  echo "ORIG_HEAD is missing before commit" >&2
+  fail_before_commit 1
+fi
+if [ "$ORIG_HEAD_SHA" != "$ORIGINAL_HEAD_SHA" ]; then
+  echo "ORIG_HEAD does not equal the saved original HEAD" >&2
+  fail_before_commit 1
+fi
+if ! WORKTREE_TARGET_SHA=$(tr -d '\r\n' < .github/upstream-main.sha); then
+  echo "Unable to read .github/upstream-main.sha" >&2
+  fail_before_commit 1
+fi
+if ! INDEX_TARGET_SHA=$(git show :".github/upstream-main.sha" | tr -d '\r\n'); then
+  echo "Unable to read the staged upstream marker" >&2
+  fail_before_commit 1
+fi
+if [ "$WORKTREE_TARGET_SHA" != "$EXPECTED_UPSTREAM_SHA" ] ||
+   [ "$INDEX_TARGET_SHA" != "$EXPECTED_UPSTREAM_SHA" ]; then
+  echo "The upstream marker is not staged with EXPECTED_UPSTREAM_SHA" >&2
+  fail_before_commit 1
+fi
+
+# 提交合并和适配（仅已追踪文件的更新 + 新文件 + 目标文件）
 if ! git add -u; then
   echo "Unable to stage tracked sync changes" >&2
-  exit 1
+  fail_before_commit 1
 fi
 if ! git add .github/upstream-main.sha cli.py skills/ppt-master/cli.py pyproject.toml skills/ppt-master/pyproject.toml; then
   echo "Unable to stage sync files" >&2
-  exit 1
+  fail_before_commit 1
 fi
 if ! git commit -m "merge upstream/main: resolve conflicts, adapt to uvx, sync cli.py mappings"; then
   echo "Unable to create the upstream merge commit" >&2
-  exit 1
+  fail_before_commit 1
 fi
+
+fail_after_commit() {
+  FAILURE_STATUS="${1:-1}"
+  if ! cleanup_sync_state; then
+    FAILURE_STATUS=1
+  fi
+  exit "$FAILURE_STATUS"
+}
+
 if ! SYNC_MERGE_COMMIT=$(git rev-parse HEAD); then
   echo "Unable to resolve the new merge commit" >&2
-  exit 1
+  fail_after_commit 1
 fi
 if ! MERGE_PARENTS=$(git show -s --format=%P "$SYNC_MERGE_COMMIT"); then
   echo "Unable to inspect merge commit parents" >&2
-  exit 1
+  fail_after_commit 1
 fi
 if ! PARENT_COUNT=$(printf '%s\n' "$MERGE_PARENTS" | awk '{ print NF }'); then
   echo "Unable to count merge commit parents" >&2
-  exit 1
+  fail_after_commit 1
 fi
 if [ "$PARENT_COUNT" -ne 2 ]; then
   echo "The sync commit must have exactly two parents" >&2
-  exit 1
+  fail_after_commit 1
 fi
 if ! FIRST_PARENT=$(git rev-parse "$SYNC_MERGE_COMMIT^1"); then
   echo "Unable to resolve the first merge parent" >&2
-  exit 1
+  fail_after_commit 1
 fi
 if ! SECOND_PARENT=$(git rev-parse "$SYNC_MERGE_COMMIT^2"); then
   echo "Unable to resolve the second merge parent" >&2
-  exit 1
+  fail_after_commit 1
 fi
-if [ "$FIRST_PARENT" != "$PRE_MERGE_HEAD" ]; then
-  echo "The first merge parent is not PRE_MERGE_HEAD" >&2
-  exit 1
+if [ "$FIRST_PARENT" != "$ORIGINAL_HEAD_SHA" ]; then
+  echo "The first merge parent is not the saved original HEAD" >&2
+  fail_after_commit 1
 fi
 if [ "$SECOND_PARENT" != "$EXPECTED_UPSTREAM_SHA" ]; then
   echo "The second merge parent is not EXPECTED_UPSTREAM_SHA" >&2
-  exit 1
+  fail_after_commit 1
 fi
 if ! git merge-base --is-ancestor "$EXPECTED_UPSTREAM_SHA" "$SYNC_MERGE_COMMIT"; then
   echo "Expected upstream SHA is not an ancestor of the sync commit" >&2
+  fail_after_commit 1
+fi
+if ! cleanup_sync_state; then
+  echo "Unable to clean Git-internal sync state after success" >&2
   exit 1
 fi
+echo "Created and verified the two-parent upstream merge commit"
 ```
 
 以上检查任一失败，说明 merge commit 的提交关系被破坏（不是恰好双亲 merge、父序不对，
@@ -464,9 +932,19 @@ git add pyproject.toml skills/ppt-master/pyproject.toml
 git commit -m "chore: bump version to X.Y.Z"
 ```
 
-版本提交保持独立，与 merge commit 分离。版本提交完成后再次验证 ancestry 仍然成立：
+版本提交保持独立，与 merge commit 分离。Step 6 成功结束时已清理 `.git` 内部临时状态；
+之后的独立代码块必须从已提交 marker 重读目标，不得引用 Step 6 的 shell 变量。版本提交
+完成后再次验证 ancestry 仍然成立：
 
 ```bash
+if ! EXPECTED_UPSTREAM_SHA=$(git show HEAD:.github/upstream-main.sha | tr -d '\r\n'); then
+  echo "Unable to read the committed upstream marker" >&2
+  exit 1
+fi
+if ! printf '%s\n' "$EXPECTED_UPSTREAM_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+  echo "Committed upstream marker is invalid" >&2
+  exit 1
+fi
 if ! git merge-base --is-ancestor "$EXPECTED_UPSTREAM_SHA" HEAD; then
   echo "Expected upstream SHA is not an ancestor of HEAD after version commit" >&2
   exit 1

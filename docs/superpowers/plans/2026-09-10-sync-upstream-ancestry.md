@@ -23,13 +23,20 @@
   或与 fetch 后 `upstream/main` 不匹配必须立即失败，只有本地运行允许 fallback fetch。
 - manual OpenCode、Verify、Push 的 if 必须同时满足
   `workflow_dispatch && steps.upstream.outputs.has_changes == 'true'`；无变化必须正常跳过。
-- Verify 必须先以 `git diff --quiet && git diff --cached --quiet` 拒绝脏工作树，再以
+- Verify 必须先以 `git diff --quiet && git diff --cached --quiet`，再以
+  `git status --porcelain=v1 --untracked-files=all` 拒绝任何脏工作树，再以
   `git show HEAD:.github/upstream-main.sha | tr -d '\r\n'` 读取已提交 marker，不得读取工作树 marker。
 - Verify 必须确认 `BASE_SHA` 与 expected 都是 HEAD 祖先，并找到恰好双父 merge：
   第一父严格等于 `BASE_SHA`，第二父严格等于 `EXPECTED_UPSTREAM_SHA`。
 - `.github/upstream-main.sha` 只有在
   `git merge --no-ff --no-commit "$EXPECTED_UPSTREAM_SHA"` 成功后才能写入/暂存；冲突
-  必须 `git merge --abort` 后停止，不能残留 marker 修改。
+  必须 `git merge --abort` 后停止，不能残留 marker 修改；成功或任何 abort 路径都要清理
+  `.git` 内部 target/original-HEAD 临时状态。
+- `.opencode/command/sync-upstream.md` 的各代码块不得依赖跨 shell 普通变量；target 与
+  原始 HEAD 必须通过 `git rev-parse --git-path` 定位的 `.git` 内部文件跨块传递，后续块
+  每次重新读取。Actions 还要复核 env target 与该文件相等。
+- abort 只允许发生在本次运行已写入 original-HEAD ownership state 且 merge state 与其
+  `ORIG_HEAD` 匹配时；这样不得意外 abort 或恢复用户在本次运行前已有的 merge/内容。
 - manual push 必须使用 `git push origin HEAD:main`；non-fast-forward 时停止并从最新 main 重跑，禁止 force-push。
 - fork 仓库设置仅允许 merge commit；关闭 squash merge 和 rebase merge。
 - ancestry 门禁失败必须阻断 `Check UVX Migration → auto-tag → publish-pypi`，不得以内容相同或模型声明替代。
@@ -53,6 +60,9 @@
 **Interfaces:**
 - Produces: `steps.upstream.outputs.upstream_sha`，值为 fetch 后的 40 位 upstream tip SHA。
 - Produces: `.github/upstream-main.sha`，供 Task 2 的 PR/main checks 消费。
+- Produces during one command run: Git 内部临时状态
+  `ppt-master-sync.expected-upstream-sha` 与 `ppt-master-sync.pre-merge-head`；成功或失败
+  终止时都清理，后续独立 shell 通过 `git rev-parse --git-path` 重新定位并读取。
 - Contract: OpenCode 创建真实 merge commit；workflow_dispatch 只由 workflow push。
 - Contract: manual workflow 只能从 `refs/heads/main` 运行；无变化时 manual OpenCode、
   Verify、Push 全部跳过。
@@ -85,55 +95,62 @@ Expected: 只输出 `8aee5cd0cc7a51080e0cd5a05ef95eacfebfa8a0`。
 
 - [x] **Step 3: 改写 sync-upstream.md 的 Step 1/2**
 
-在 Step 1 的 fetch 后建立目标：GitHub Actions 使用 workflow env 注入的
-`EXPECTED_UPSTREAM_SHA` 并要求它等于 fetch tip；Actions 中变量为空立即失败；本地运行
-在变量为空时才取 `git rev-parse upstream/main`。随后显式验证 40 位小写格式。目标文件
-不得在 merge 前写入：
+Step 1 在 fetch 后通过 `git rev-parse --git-path` 取得固定的 Git 内部状态路径，写入
+`ppt-master-sync.expected-upstream-sha`；Actions 必须使用并复核 env 注入值，本地仅在
+env 为空时从 fetched `upstream/main` fallback。目标值和后续代码块的原始 HEAD 不得依赖
+跨 shell 变量：
 
 ```bash
-FETCHED_UPSTREAM_SHA=$(git rev-parse upstream/main)
-if [ "${GITHUB_ACTIONS:-}" = "true" ] && [ -z "${EXPECTED_UPSTREAM_SHA:-}" ]; then
-  echo "EXPECTED_UPSTREAM_SHA is required in GitHub Actions" >&2
+if ! SYNC_EXPECTED_STATE=$(git rev-parse --git-path ppt-master-sync.expected-upstream-sha); then
+  echo "Unable to resolve the Git-internal expected-target state path" >&2
   exit 1
 fi
-if [ -z "${EXPECTED_UPSTREAM_SHA:-}" ]; then
-  EXPECTED_UPSTREAM_SHA="$FETCHED_UPSTREAM_SHA"
-fi
-if ! printf '%s\n' "$EXPECTED_UPSTREAM_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
-  echo "Expected upstream SHA is not a 40-character lowercase SHA" >&2
+if ! SYNC_ORIGINAL_HEAD_STATE=$(git rev-parse --git-path ppt-master-sync.pre-merge-head); then
+  echo "Unable to resolve the Git-internal original-HEAD state path" >&2
   exit 1
 fi
-if [ "$EXPECTED_UPSTREAM_SHA" != "$FETCHED_UPSTREAM_SHA" ]; then
-  echo "Expected upstream SHA does not match fetched upstream/main" >&2
+if ! printf '%s\n' "$CANDIDATE_UPSTREAM_SHA" > "$SYNC_EXPECTED_STATE"; then
+  echo "Unable to persist the expected upstream SHA in Git-internal state" >&2
   exit 1
 fi
 ```
 
-Step 2 在保存原始 HEAD 后执行唯一 merge 命令；仅当 merge 成功才写入并暂存目标文件：
-
-```bash
-PRE_MERGE_HEAD=$(git rev-parse HEAD)
-if git merge --no-ff --no-commit "$EXPECTED_UPSTREAM_SHA"; then
-  :
-else
-  MERGE_EXIT=$?
-  git merge --abort
-  exit "$MERGE_EXIT"
-fi
-printf '%s\n' "$EXPECTED_UPSTREAM_SHA" > .github/upstream-main.sha
-git add .github/upstream-main.sha
-```
-
-merge 失败（包括冲突）必须 `git merge --abort` 后立即停止；任何 abort 失败也必须
-fail-closed。紧随其后写明 Global Constraints 中的历史改写禁令和允许的 abort 路径。
+Step 2 是独立 shell，必须重新取得并读取同一个 target state；在唯一的
+`git merge --no-ff --no-commit "$EXPECTED_UPSTREAM_SHA"` 成功后，先确认 `MERGE_HEAD`
+恰好一项且等于 target，再读取本次 merge 设置的 `ORIG_HEAD`，确认它等于写入
+`ppt-master-sync.pre-merge-head` 的原始 HEAD，最后才写入/暂存目标文件。Already-up-to-
+date（merge 返回 0 但没有 `MERGE_HEAD`）必须 fail-closed。冲突或任何失败必须只 abort
+本次状态文件标识的 merge、恢复 merge 前 marker、清理两个 `.git` 临时文件后停止；不能
+abort 或覆盖用户在本次运行前已有的 merge/内容。
 
 - [x] **Step 4: 在 Step 4e 加入提交前 merge-state 门禁**
 
-现有六项门禁扩为七项；第 7 项在 merge commit 前用显式 `if`/`exit` 验证 merge 状态
-与已暂存目标文件（不使用裸 `test`）：
+现有六项门禁扩为七项；第 7 项是独立 shell 代码块，必须重新用 `git rev-parse
+--git-path` 取得两个 `.git` 状态路径、读取 target/original HEAD，并用显式 `if`/`exit`
+验证 merge 状态与已暂存目标文件（不使用裸 `test`）：
 
 ```bash
-if ! MERGE_HEAD_SHA=$(git rev-parse -q --verify MERGE_HEAD); then
+if ! SYNC_EXPECTED_STATE=$(git rev-parse --git-path ppt-master-sync.expected-upstream-sha); then
+  echo "Unable to resolve the Git-internal expected-target state path" >&2
+  exit 1
+fi
+if ! SYNC_ORIGINAL_HEAD_STATE=$(git rev-parse --git-path ppt-master-sync.pre-merge-head); then
+  echo "Unable to resolve the Git-internal original-HEAD state path" >&2
+  exit 1
+fi
+if ! MERGE_HEAD_PATH=$(git rev-parse --git-path MERGE_HEAD); then
+  echo "Unable to resolve the Git merge-state path" >&2
+  exit 1
+fi
+if ! EXPECTED_UPSTREAM_SHA=$(tr -d '\r\n' < "$SYNC_EXPECTED_STATE"); then
+  echo "Unable to read the Git-internal expected upstream state" >&2
+  exit 1
+fi
+if ! ORIGINAL_HEAD_SHA=$(tr -d '\r\n' < "$SYNC_ORIGINAL_HEAD_STATE"); then
+  echo "Unable to read the Git-internal original-HEAD state" >&2
+  exit 1
+fi
+if ! MERGE_HEAD_SHA=$(tr -d '\r\n' < "$MERGE_HEAD_PATH"); then
   echo "MERGE_HEAD is missing" >&2
   exit 1
 fi
@@ -152,37 +169,88 @@ fi
 ```
 
 任一非零都停止，不提交；工作树 marker 也必须与索引值相同。
+该独立代码块必须具备与 Step 2 相同的 ownership-aware `abort_owned_merge` 和 cleanup
+逻辑：只有本次写入的 original-HEAD state 与 `ORIG_HEAD` 匹配时才 abort；marker 恢复到
+merge 前版本后删除两个 `.git` 临时状态。
 
 - [x] **Step 5: 改写 Step 6 的提交与发布边界**
 
-`PRE_MERGE_HEAD` 必须来自 Step 2 的 merge 前；提交后必须用显式 `if`/`exit` 验证
-恰好两个父，且 `^1` 为原始 HEAD、`^2` 为 expected：
+Step 6 是另一个独立 shell，不能读取 Step 2/4e 的普通变量；必须重新取得并读取
+`ppt-master-sync.expected-upstream-sha` 与 `ppt-master-sync.pre-merge-head`。提交前若
+任一 gate 失败，统一 abort 本次状态文件所拥有的 merge、恢复 marker、清理临时状态后
+退出；提交成功后清理状态。然后用显式 `if`/`exit` 验证恰好两个父，且 `^1` 为从内部
+状态读取的原始 HEAD、`^2` 为 expected：
 
 ```bash
-if [ -z "${PRE_MERGE_HEAD:-}" ]; then
-  echo "PRE_MERGE_HEAD was not recorded before merge" >&2
+if ! SYNC_EXPECTED_STATE=$(git rev-parse --git-path ppt-master-sync.expected-upstream-sha); then
+  echo "Unable to resolve the Git-internal expected-target state path" >&2
   exit 1
 fi
-git add -u
-git add .github/upstream-main.sha cli.py skills/ppt-master/cli.py pyproject.toml skills/ppt-master/pyproject.toml
-git commit -m "merge upstream/main: resolve conflicts, adapt to uvx, sync cli.py mappings"
-SYNC_MERGE_COMMIT=$(git rev-parse HEAD)
-MERGE_PARENTS=$(git show -s --format=%P "$SYNC_MERGE_COMMIT")
-PARENT_COUNT=$(printf '%s\n' "$MERGE_PARENTS" | awk '{ print NF }')
+if ! SYNC_ORIGINAL_HEAD_STATE=$(git rev-parse --git-path ppt-master-sync.pre-merge-head); then
+  echo "Unable to resolve the Git-internal original-HEAD state path" >&2
+  exit 1
+fi
+if ! EXPECTED_UPSTREAM_SHA=$(tr -d '\r\n' < "$SYNC_EXPECTED_STATE"); then
+  echo "Unable to read the Git-internal expected upstream state" >&2
+  exit 1
+fi
+if ! ORIGINAL_HEAD_SHA=$(tr -d '\r\n' < "$SYNC_ORIGINAL_HEAD_STATE"); then
+  echo "Unable to read the Git-internal original-HEAD state" >&2
+  exit 1
+fi
+# Define abort_owned_merge/fail_before_commit here; they abort only when the
+# original-HEAD state belongs to this run, then restore the pre-merge marker
+# and remove both Git-internal state files.
+if ! git add -u; then
+  echo "Unable to stage tracked sync changes" >&2
+  fail_before_commit 1
+fi
+if ! git add .github/upstream-main.sha cli.py skills/ppt-master/cli.py pyproject.toml skills/ppt-master/pyproject.toml; then
+  echo "Unable to stage sync files" >&2
+  fail_before_commit 1
+fi
+if ! git commit -m "merge upstream/main: resolve conflicts, adapt to uvx, sync cli.py mappings"; then
+  echo "Unable to create the upstream merge commit" >&2
+  fail_before_commit 1
+fi
+if ! SYNC_MERGE_COMMIT=$(git rev-parse HEAD); then
+  echo "Unable to resolve the new merge commit" >&2
+  fail_after_commit 1
+fi
+if ! MERGE_PARENTS=$(git show -s --format=%P "$SYNC_MERGE_COMMIT"); then
+  echo "Unable to inspect merge commit parents" >&2
+  fail_after_commit 1
+fi
+if ! PARENT_COUNT=$(printf '%s\n' "$MERGE_PARENTS" | awk '{ print NF }'); then
+  echo "Unable to count merge commit parents" >&2
+  fail_after_commit 1
+fi
 if [ "$PARENT_COUNT" -ne 2 ]; then
   echo "The sync commit must have exactly two parents" >&2
-  exit 1
+  fail_after_commit 1
 fi
-if [ "$(git rev-parse "$SYNC_MERGE_COMMIT^1")" != "$PRE_MERGE_HEAD" ]; then
-  echo "The first parent is not PRE_MERGE_HEAD" >&2
-  exit 1
+if ! FIRST_PARENT=$(git rev-parse "$SYNC_MERGE_COMMIT^1"); then
+  echo "Unable to resolve the first merge parent" >&2
+  fail_after_commit 1
 fi
-if [ "$(git rev-parse "$SYNC_MERGE_COMMIT^2")" != "$EXPECTED_UPSTREAM_SHA" ]; then
+if ! SECOND_PARENT=$(git rev-parse "$SYNC_MERGE_COMMIT^2"); then
+  echo "Unable to resolve the second merge parent" >&2
+  fail_after_commit 1
+fi
+if [ "$FIRST_PARENT" != "$ORIGINAL_HEAD_SHA" ]; then
+  echo "The first parent is not the saved original HEAD" >&2
+  fail_after_commit 1
+fi
+if [ "$SECOND_PARENT" != "$EXPECTED_UPSTREAM_SHA" ]; then
   echo "The second parent is not EXPECTED_UPSTREAM_SHA" >&2
-  exit 1
+  fail_after_commit 1
 fi
 if ! git merge-base --is-ancestor "$EXPECTED_UPSTREAM_SHA" "$SYNC_MERGE_COMMIT"; then
   echo "Expected upstream SHA is not an ancestor of the sync commit" >&2
+  fail_after_commit 1
+fi
+if ! cleanup_sync_state; then
+  echo "Unable to clean Git-internal sync state after success" >&2
   exit 1
 fi
 ```
@@ -190,6 +258,10 @@ fi
 版本提交保持独立；完成后再次用显式 `if`/`exit` 运行：
 
 ```bash
+if ! EXPECTED_UPSTREAM_SHA=$(git show HEAD:.github/upstream-main.sha | tr -d '\r\n'); then
+  echo "Unable to read the committed upstream marker" >&2
+  exit 1
+fi
 if ! git merge-base --is-ancestor "$EXPECTED_UPSTREAM_SHA" HEAD; then
   echo "Expected upstream SHA is not an ancestor of HEAD" >&2
   exit 1
@@ -269,6 +341,15 @@ OpenCode manual step 后新增：
             echo "::error::OpenCode left the worktree or index dirty"
             exit 1
           fi
+          if ! WORKTREE_STATUS=$(git status --porcelain=v1 --untracked-files=all); then
+            echo "::error::Unable to inspect the complete worktree status"
+            exit 1
+          fi
+          if [ -n "$WORKTREE_STATUS" ]; then
+            echo "::error::OpenCode left tracked or untracked worktree changes"
+            printf '%s\n' "$WORKTREE_STATUS"
+            exit 1
+          fi
           if [ -z "${BASE_SHA:-}" ] || [ -z "${EXPECTED_UPSTREAM_SHA:-}" ]; then
             echo "::error::BASE_SHA and EXPECTED_UPSTREAM_SHA are required"
             exit 1
@@ -277,7 +358,10 @@ OpenCode manual step 后新增：
             echo "::error::HEAD does not contain .github/upstream-main.sha"
             exit 1
           fi
-          RECORDED_SHA=$(git show HEAD:.github/upstream-main.sha | tr -d '\r\n')
+          if ! RECORDED_SHA=$(git show HEAD:.github/upstream-main.sha | tr -d '\r\n'); then
+            echo "::error::Unable to read committed upstream marker"
+            exit 1
+          fi
           if [ "$RECORDED_SHA" != "$EXPECTED_UPSTREAM_SHA" ]; then
             echo "::error::Recorded SHA $RECORDED_SHA does not match expected $EXPECTED_UPSTREAM_SHA"
             exit 1
@@ -290,10 +374,19 @@ OpenCode manual step 后新增：
             echo "::error::Expected upstream SHA is not an ancestor of HEAD"
             exit 1
           fi
-          MERGE_LINES=$(git rev-list --merges --parents "$BASE_SHA..HEAD")
-          MATCHES=$(printf '%s\n' "$MERGE_LINES" |
-            awk -v base="$BASE_SHA" -v expected="$EXPECTED_UPSTREAM_SHA" 'NF == 3 && $2 == base && $3 == expected { print $1 }')
-          MATCH_COUNT=$(printf '%s\n' "$MATCHES" | awk 'NF { count += 1 } END { print count + 0 }')
+          if ! MERGE_LINES=$(git rev-list --merges --parents "$BASE_SHA..HEAD"); then
+            echo "::error::Unable to enumerate merge commits after BASE_SHA"
+            exit 1
+          fi
+          if ! MATCHES=$(printf '%s\n' "$MERGE_LINES" |
+            awk -v base="$BASE_SHA" -v expected="$EXPECTED_UPSTREAM_SHA" 'NF == 3 && $2 == base && $3 == expected { print $1 }'); then
+            echo "::error::Unable to inspect merge commit parents"
+            exit 1
+          fi
+          if ! MATCH_COUNT=$(printf '%s\n' "$MATCHES" | awk 'NF { count += 1 } END { print count + 0 }'); then
+            echo "::error::Unable to count matching merge commits"
+            exit 1
+          fi
           if [ "$MATCH_COUNT" -ne 1 ]; then
             echo "::error::Expected exactly one two-parent merge with ^1=$BASE_SHA and ^2=$EXPECTED_UPSTREAM_SHA"
             git log --graph --oneline --decorate "$BASE_SHA..HEAD"
@@ -326,19 +419,20 @@ Run:
 
 ```powershell
 python -c "import pathlib,yaml; data=yaml.safe_load(pathlib.Path('.github/workflows/sync-upstream.yml').read_text(encoding='utf-8')); assert data['jobs']['sync-upstream']['steps']; print('sync-upstream.yml: OK')"
-python -m unittest discover -s skills/ppt-master/scripts/tests -p "test_sync_upstream_task1_extension.py" -v
+python -m unittest discover -s skills/ppt-master/scripts/tests -p "test_sync_upstream_merge_state.py" -v
 git diff --check
 ```
 
 Expected: `sync-upstream.yml: OK`，契约回归测试通过，`git diff --check` 无错误；另须
-运行真实 Git 行为沙盘覆盖 main/non-main、has_changes true/false、正确双父、目标在第一
-父/多父、工作树脏、marker 未提交，并记录每个 exit code、parents 和输出。
+运行真实 Git 行为沙盘覆盖独立 shell target 读取、already-up-to-date、MERGE_HEAD 不匹配、
+marker 写入失败、git add 失败、untracked 工作树、成功双父，并验证每个失败后的
+`MERGE_HEAD`/marker/state 清理与输出。
 
 Commit:
 
 ```powershell
-git add .github/upstream-main.sha .opencode/command/sync-upstream.md .github/workflows/sync-upstream.yml docs/superpowers/plans/2026-09-10-sync-upstream-ancestry.md
-git commit -m "ci: preserve upstream merge ancestry"
+git add .opencode/command/sync-upstream.md .github/workflows/sync-upstream.yml docs/superpowers/plans/2026-09-10-sync-upstream-ancestry.md
+git commit -m "fix(ci): make merge state fail closed"
 ```
 
 ### Task 1 扩展：fail-closed workflow 与 merge 验证（本轮修订）
@@ -347,16 +441,21 @@ git commit -m "ci: preserve upstream merge ancestry"
   仅配置 `github-actions[bot]` name/email，不含 token 或 remote。
 - [x] schedule/manual OpenCode 均通过 env 注入
   `EXPECTED_UPSTREAM_SHA=${{ steps.upstream.outputs.upstream_sha }}`；Actions 缺失或
-  不匹配立即失败，本地才允许 fallback fetch。
+  不匹配立即失败，本地仅在 Step 1 fallback 后持久化 target，后续代码块从 `.git` 内部
+  状态重新读取。
 - [x] manual OpenCode、Verify、Push 均使用
   `workflow_dispatch && steps.upstream.outputs.has_changes == 'true'`，no-change 正常跳过；
   manual CLI 使用 `OPENCODE_MODEL` 和 `-m "$OPENCODE_MODEL"`。
-- [x] Verify 先检查 `git diff --quiet && git diff --cached --quiet`，再读取
+- [x] Verify 先检查 `git diff --quiet && git diff --cached --quiet`，再检查
+  `git status --porcelain=v1 --untracked-files=all`，最后读取
   `git show HEAD:.github/upstream-main.sha | tr -d '\r\n'`；同时验证 BASE/expected
   ancestry 和唯一恰好双父 merge 的父序 `[BASE_SHA, EXPECTED_UPSTREAM_SHA]`。
-- [x] marker 只在 merge 成功后写入/暂存；冲突先 `git merge --abort` 后停止；`.opencode`
-  中关键校验均为显式 `if`/`exit`。
-- [x] 追加 PyYAML、静态契约、ref/no-change 和真实 Git 行为沙盘验证；记录到
+- [x] merge 成功后先验证 `MERGE_HEAD` 恰好一项且等于固定 target，再读取
+  `ORIG_HEAD` 作为原始第一父；marker 只在此后写入/暂存。already-up-to-date、冲突、
+  marker 写入失败、git add 失败和提交前 gate 失败都统一 abort（仅限本次 ownership）并
+  恢复 marker、清理 `.git` 临时状态；提交后验证 `HEAD^1`/`HEAD^2` 后清理状态。
+- [x] 追加独立 shell、cleanup、already-up-to-date、MERGE_HEAD mismatch、marker/add
+  failure、untracked 和成功双父行为沙盘；记录到
   `.superpowers/sdd/sync-upstream-task-1-report.md`。临时测试验证后删除，不纳入提交。
 
 ---
@@ -567,7 +666,8 @@ Expected: worktree clean；upstream/main 为目标 SHA；无未知改动。
 
 - [ ] **Step 2: 开始真实 repair merge**
 
-记录 `PRE_MERGE_HEAD=$(git rev-parse HEAD)`，然后执行：
+在 `git rev-parse --git-path ppt-master-sync.pre-merge-head` 返回的 Git 内部临时路径记录
+merge 前 HEAD；然后执行：
 
 ```powershell
 git merge --no-ff --no-commit 64b65839c7f8096a534c872c03d688a2b2491c8f
@@ -605,8 +705,8 @@ git show -s --format=%P HEAD
 git log --graph --oneline --decorate --max-count=15
 ```
 
-Expected: 第一条 exit 0；第二条无输出；parents 第一项为 `PRE_MERGE_HEAD`、第二项为
-`64b65839...`；提交图显示真实双父 merge。
+Expected: 第一条 exit 0；第二条无输出；parents 第一项严格等于 Git 内部临时状态中的
+merge 前 HEAD、第二项为 `64b65839...`；提交图显示真实双父 merge。
 
 - [ ] **Step 6: 运行 workflow 与 fork 门禁**
 

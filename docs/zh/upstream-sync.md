@@ -36,7 +36,8 @@ main/PR ancestry 门禁由独立任务接入。上游无变化时 OpenCode、提
 
 `EXPECTED_UPSTREAM_SHA` 由 workflow 注入 OpenCode 环境；Actions 中缺失或与 fetch 后
 的 `upstream/main` 不一致会 fail-closed。只有本地执行时，变量为空才允许回退到 fetch
-后的 upstream tip。
+后的 upstream tip；CLI 会把 fallback target 写入 `.git` 内部临时状态，后续独立 shell
+逐块重读同一状态，成功或 abort 都清理该状态。
 
 ### 方式二：手动触发（workflow_dispatch）
 
@@ -44,7 +45,8 @@ main/PR ancestry 门禁由独立任务接入。上游无变化时 OpenCode、提
 2. 选择 `main`；非 `refs/heads/main` 会被前置 guard 拒绝
 3. 有上游变化时，workflow 将 immutable `EXPECTED_UPSTREAM_SHA` 和模型变量注入 CLI
 4. OpenCode 只合并、适配和提交，不获得 `PUSH_PAT`，也不得执行 push
-5. OpenCode 退出后，Verify 先确认工作树/索引干净，再从 `HEAD:.github/upstream-main.sha`
+5. OpenCode 退出后，Verify 先运行 `git diff --quiet && git diff --cached --quiet`，再运行
+   `git status --porcelain=v1 --untracked-files=all`；随后从 `HEAD:.github/upstream-main.sha`
    读取记录，确认 `BASE_SHA` 与目标都是 HEAD 祖先，并找到恰好双父且父序为
    `^1=BASE_SHA`、`^2=EXPECTED_UPSTREAM_SHA` 的 merge commit
 6. 以上 workflow 验证通过后，最后的 workflow step 才注入 `PUSH_PAT` 并执行
@@ -59,7 +61,11 @@ opencode
 # 然后输入: /sync-upstream
 ```
 
-本地执行不会触发 GitHub Actions 的 main-ref/PAT 推送路径。
+本地执行不会触发 GitHub Actions 的 main-ref/PAT 推送路径。命令会把 target 和 merge 前
+HEAD 持久化到 `.git` 内部临时状态；merge 成功后先确认 `MERGE_HEAD` 恰好为固定 target，
+再用本次 merge 设置的 `ORIG_HEAD` 校验原始第一父，最后才写入/暂存 marker。already-
+up-to-date、冲突、marker 写入或 `git add` 失败都会 abort 本次拥有的 merge、恢复 merge
+前 marker、清理临时状态并停止。
 
 ---
 
@@ -189,6 +195,10 @@ git tag vX.Y.Z && git push origin vX.Y.Z
   `git diff --quiet && git diff --cached --quiet`，再读取
   `git show HEAD:.github/upstream-main.sha | tr -d '\r\n'`；工作树中的未提交 marker
   不能冒充已提交记录
+- **验证必须拒绝未跟踪文件** — `git status --porcelain=v1 --untracked-files=all` 非空
+  时 Verify 立即失败
+- **命令代码块不得共享普通变量** — 每个独立 shell 都通过 `git rev-parse --git-path`
+  重读 `.git` 内部 target/original-HEAD 状态；成功和 abort 路径都清理临时状态
 - **合并关系必须精确** — `BASE_SHA` 与 immutable 目标都必须是 HEAD 祖先，并且必须
   找到恰好双父 merge，第一父为 `BASE_SHA`、第二父为 `EXPECTED_UPSTREAM_SHA`
 - **`skills/ppt-master/scripts/*.py` 的 `python3` 残留** — `check_uvx_migration.yml` 已豁免该目录

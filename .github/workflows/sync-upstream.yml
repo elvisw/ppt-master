@@ -148,6 +148,15 @@ jobs:
             git status --short
             exit 1
           fi
+          if ! WORKTREE_STATUS=$(git status --porcelain=v1 --untracked-files=all); then
+            echo "::error::Unable to inspect the complete worktree status"
+            exit 1
+          fi
+          if [ -n "$WORKTREE_STATUS" ]; then
+            echo "::error::OpenCode left tracked or untracked worktree changes"
+            printf '%s\n' "$WORKTREE_STATUS"
+            exit 1
+          fi
 
           if [ -z "${BASE_SHA:-}" ] || [ -z "${EXPECTED_UPSTREAM_SHA:-}" ]; then
             echo "::error::BASE_SHA and EXPECTED_UPSTREAM_SHA are required"
