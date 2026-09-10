@@ -4,7 +4,7 @@
 
 **Goal:** 让 schedule、workflow_dispatch 和发布链都机械验证选定上游提交的 ancestry，并以一次真实 merge 修复当前缺失的 `64b65839` 父关系。
 
-**Architecture:** `.github/upstream-main.sha` 持久化每次同步选定的 immutable upstream SHA；`.opencode/command/sync-upstream.md` 是提交关系程序的唯一所有者，两个 OpenCode prompt 只传值和强调不可绕过门禁。PR check 验证目标 SHA、直接 merge parent 与 head ancestry，`check-uvx-migration.yml` 再在 `main` 发布边界验证登记目标，manual push 由 workflow 在验证后执行。
+**Architecture:** `.github/upstream-main.sha` 持久化每次同步选定的 immutable upstream SHA；`.opencode/command/sync-upstream.md` 是提交关系程序的唯一所有者，两个 OpenCode prompt 只传值和强调不可绕过门禁。每次命令运行用 `git rev-parse --git-path ppt-master-sync` 定位并以原子 `mkdir` 建立独占 `.git` 状态目录，保存 target、original HEAD、marker 存在状态与字节快照；各代码块自行重读，成功或安全失败清理整个目录。PR check 验证目标 SHA、直接 merge parent 与 head ancestry，`check-uvx-migration.yml` 再在 `main` 发布边界验证登记目标，manual push 由 workflow 在验证后执行。
 
 **Tech Stack:** Git、GitHub Actions YAML、POSIX shell、OpenCode Action、GitHub CLI、Python 3.12 + PyYAML（仅做 YAML 语法验证）。
 
@@ -31,12 +31,18 @@
 - `.github/upstream-main.sha` 只有在
   `git merge --no-ff --no-commit "$EXPECTED_UPSTREAM_SHA"` 成功后才能写入/暂存；冲突
   必须 `git merge --abort` 后停止，不能残留 marker 修改；成功或任何 abort 路径都要清理
-  `.git` 内部 target/original-HEAD 临时状态。
+  `.git/ppt-master-sync/` 独占状态目录。若 ownership 无法证明，必须保留现场而不得猜测
+  abort 或恢复用户文件。
 - `.opencode/command/sync-upstream.md` 的各代码块不得依赖跨 shell 普通变量；target 与
-  原始 HEAD 必须通过 `git rev-parse --git-path` 定位的 `.git` 内部文件跨块传递，后续块
-  每次重新读取。Actions 还要复核 env target 与该文件相等。
-- abort 只允许发生在本次运行已写入 original-HEAD ownership state 且 merge state 与其
-  `ORIG_HEAD` 匹配时；这样不得意外 abort 或恢复用户在本次运行前已有的 merge/内容。
+  原始 HEAD、marker 存在状态和字节快照必须通过 `git rev-parse --git-path` 定位的独占
+  `.git` 状态目录跨块传递，后续块每次重新读取。状态目录以原子 `mkdir` 加锁，已存在
+  必须 fail-closed；Actions 还要复核 env target 与持久化 target 相等。
+- abort 前必须同时证明当前 `HEAD` 与 persisted original HEAD 相等；`ORIG_HEAD` 存在时也
+  必须相等；`MERGE_HEAD` 存在时必须恰好一项且严格等于 persisted target。MERGE_HEAD 缺失
+  时只有 ownership 完整且 HEAD/ORIG_HEAD 条件成立才可安全恢复 marker，否则保留现场。
+- marker 原本 tracked 时必须保存字节级快照，并用 original HEAD/快照验证 index+worktree
+  恢复；原本 absent 时只允许对 `.github/upstream-main.sha` 单一路径执行
+  `git rm --cached --ignore-unmatch` 和删除，并确认路径与 index 都 absent。
 - manual push 必须使用 `git push origin HEAD:main`；non-fast-forward 时停止并从最新 main 重跑，禁止 force-push。
 - fork 仓库设置仅允许 merge commit；关闭 squash merge 和 rebase merge。
 - ancestry 门禁失败必须阻断 `Check UVX Migration → auto-tag → publish-pypi`，不得以内容相同或模型声明替代。
@@ -61,8 +67,10 @@
 - Produces: `steps.upstream.outputs.upstream_sha`，值为 fetch 后的 40 位 upstream tip SHA。
 - Produces: `.github/upstream-main.sha`，供 Task 2 的 PR/main checks 消费。
 - Produces during one command run: Git 内部临时状态
-  `ppt-master-sync.expected-upstream-sha` 与 `ppt-master-sync.pre-merge-head`；成功或失败
-  终止时都清理，后续独立 shell 通过 `git rev-parse --git-path` 重新定位并读取。
+  `.git/ppt-master-sync/` 独占目录（原子 `mkdir` lock），其中保存
+  `expected-upstream-sha`、`original-head`、`marker-original-state`、tracked marker 的
+  `marker-snapshot` 和 `merge-started`；成功或安全失败终止时清理整个目录，后续独立
+  shell 通过 `git rev-parse --git-path` 重新定位并读取。
 - Contract: OpenCode 创建真实 merge commit；workflow_dispatch 只由 workflow push。
 - Contract: manual workflow 只能从 `refs/heads/main` 运行；无变化时 manual OpenCode、
   Verify、Push 全部跳过。
@@ -95,51 +103,99 @@ Expected: 只输出 `8aee5cd0cc7a51080e0cd5a05ef95eacfebfa8a0`。
 
 - [x] **Step 3: 改写 sync-upstream.md 的 Step 1/2**
 
-Step 1 在 fetch 后通过 `git rev-parse --git-path` 取得固定的 Git 内部状态路径，写入
-`ppt-master-sync.expected-upstream-sha`；Actions 必须使用并复核 env 注入值，本地仅在
-env 为空时从 fetched `upstream/main` fallback。目标值和后续代码块的原始 HEAD 不得依赖
-跨 shell 变量：
+Step 1 在 fetch 后通过 `git rev-parse --git-path ppt-master-sync` 取得状态目录，并用
+原子 `mkdir -- "$SYNC_STATE_DIR"` 建立本次同步独占 lock；已存在必须 fail-closed。目录
+内写入 `expected-upstream-sha`；Actions 必须使用并复核 env 注入值，本地仅在 env 为空时
+从 fetched `upstream/main` fallback。target、original HEAD、marker 原始存在状态/字节
+快照和 merge ownership 都不得依赖跨 shell 普通变量：
 
 ```bash
-if ! SYNC_EXPECTED_STATE=$(git rev-parse --git-path ppt-master-sync.expected-upstream-sha); then
+if ! SYNC_STATE_DIR=$(git rev-parse --git-path ppt-master-sync); then
+  echo "Unable to resolve the Git-internal sync state directory" >&2
+  exit 1
+fi
+if ! SYNC_EXPECTED_STATE=$(git rev-parse --git-path ppt-master-sync/expected-upstream-sha); then
   echo "Unable to resolve the Git-internal expected-target state path" >&2
   exit 1
 fi
-if ! SYNC_ORIGINAL_HEAD_STATE=$(git rev-parse --git-path ppt-master-sync.pre-merge-head); then
+if ! SYNC_ORIGINAL_HEAD_STATE=$(git rev-parse --git-path ppt-master-sync/original-head); then
   echo "Unable to resolve the Git-internal original-HEAD state path" >&2
+  exit 1
+fi
+if ! SYNC_MARKER_STATE=$(git rev-parse --git-path ppt-master-sync/marker-original-state); then
+  echo "Unable to resolve the Git-internal marker state path" >&2
+  exit 1
+fi
+if ! SYNC_MARKER_SNAPSHOT=$(git rev-parse --git-path ppt-master-sync/marker-snapshot); then
+  echo "Unable to resolve the Git-internal marker snapshot path" >&2
+  exit 1
+fi
+if ! SYNC_MERGE_STARTED_STATE=$(git rev-parse --git-path ppt-master-sync/merge-started); then
+  echo "Unable to resolve the Git-internal merge ownership path" >&2
+  exit 1
+fi
+if ! mkdir -- "$SYNC_STATE_DIR"; then
+  echo "A ppt-master sync is already active; refusing to share its state" >&2
   exit 1
 fi
 if ! printf '%s\n' "$CANDIDATE_UPSTREAM_SHA" > "$SYNC_EXPECTED_STATE"; then
   echo "Unable to persist the expected upstream SHA in Git-internal state" >&2
+  rm -rf -- "$SYNC_STATE_DIR"
   exit 1
 fi
 ```
 
-Step 2 是独立 shell，必须重新取得并读取同一个 target state；在唯一的
+Step 2 是独立 shell，必须重新取得并读取同一个 state directory；先记录 original HEAD，
+marker tracked 时保存字节快照，marker absent 但路径（包括 ignored/untracked）存在时拒绝
+启动。每次 merge 前写入 `merge-started` ownership state。在唯一的
 `git merge --no-ff --no-commit "$EXPECTED_UPSTREAM_SHA"` 成功后，先确认 `MERGE_HEAD`
 恰好一项且等于 target，再读取本次 merge 设置的 `ORIG_HEAD`，确认它等于写入
-`ppt-master-sync.pre-merge-head` 的原始 HEAD，最后才写入/暂存目标文件。Already-up-to-
+`original-head` 的原始 HEAD，最后才写入/暂存目标文件。Already-up-to-
 date（merge 返回 0 但没有 `MERGE_HEAD`）必须 fail-closed。冲突或任何失败必须只 abort
-本次状态文件标识的 merge、恢复 merge 前 marker、清理两个 `.git` 临时文件后停止；不能
-abort 或覆盖用户在本次运行前已有的 merge/内容。
+本次 `merge-started` 且 HEAD/ORIG_HEAD/MERGE_HEAD target ownership 成立的 merge，恢复
+merge 前 marker、清理整个 `.git/ppt-master-sync/` 后停止；ownership 不成立时不能 abort
+或覆盖用户在本次运行前已有的 merge/内容，必须保留现场。
 
 - [x] **Step 4: 在 Step 4e 加入提交前 merge-state 门禁**
 
 现有六项门禁扩为七项；第 7 项是独立 shell 代码块，必须重新用 `git rev-parse
---git-path` 取得两个 `.git` 状态路径、读取 target/original HEAD，并用显式 `if`/`exit`
-验证 merge 状态与已暂存目标文件（不使用裸 `test`）：
+--git-path ppt-master-sync` 取得本次独占状态目录及所有状态文件，并用显式 `if`/`exit`
+验证 ownership、merge 状态与已暂存目标文件（不使用裸 `test`）。Step 2 的
+`abort_owned_merge`、marker 恢复和 cleanup helper 必须逐字同样内联到本代码块：
 
 ```bash
-if ! SYNC_EXPECTED_STATE=$(git rev-parse --git-path ppt-master-sync.expected-upstream-sha); then
+if ! SYNC_STATE_DIR=$(git rev-parse --git-path ppt-master-sync); then
+  echo "Unable to resolve the Git-internal sync state directory" >&2
+  exit 1
+fi
+if ! SYNC_EXPECTED_STATE=$(git rev-parse --git-path ppt-master-sync/expected-upstream-sha); then
   echo "Unable to resolve the Git-internal expected-target state path" >&2
   exit 1
 fi
-if ! SYNC_ORIGINAL_HEAD_STATE=$(git rev-parse --git-path ppt-master-sync.pre-merge-head); then
+if ! SYNC_ORIGINAL_HEAD_STATE=$(git rev-parse --git-path ppt-master-sync/original-head); then
   echo "Unable to resolve the Git-internal original-HEAD state path" >&2
+  exit 1
+fi
+if ! SYNC_MARKER_STATE=$(git rev-parse --git-path ppt-master-sync/marker-original-state); then
+  echo "Unable to resolve the Git-internal marker state path" >&2
+  exit 1
+fi
+if ! SYNC_MARKER_SNAPSHOT=$(git rev-parse --git-path ppt-master-sync/marker-snapshot); then
+  echo "Unable to resolve the Git-internal marker snapshot path" >&2
+  exit 1
+fi
+if ! SYNC_MERGE_STARTED_STATE=$(git rev-parse --git-path ppt-master-sync/merge-started); then
+  echo "Unable to resolve the Git-internal merge ownership path" >&2
   exit 1
 fi
 if ! MERGE_HEAD_PATH=$(git rev-parse --git-path MERGE_HEAD); then
   echo "Unable to resolve the Git merge-state path" >&2
+  exit 1
+fi
+if [ ! -d "$SYNC_STATE_DIR" ] || [ ! -f "$SYNC_EXPECTED_STATE" ] ||
+   [ ! -f "$SYNC_ORIGINAL_HEAD_STATE" ] || [ ! -f "$SYNC_MARKER_STATE" ] ||
+   [ ! -f "$SYNC_MERGE_STARTED_STATE" ]; then
+  echo "Sync ownership state is incomplete" >&2
   exit 1
 fi
 if ! EXPECTED_UPSTREAM_SHA=$(tr -d '\r\n' < "$SYNC_EXPECTED_STATE"); then
@@ -168,26 +224,48 @@ if [ "$INDEX_TARGET_SHA" != "$EXPECTED_UPSTREAM_SHA" ]; then
 fi
 ```
 
-任一非零都停止，不提交；工作树 marker 也必须与索引值相同。
-该独立代码块必须具备与 Step 2 相同的 ownership-aware `abort_owned_merge` 和 cleanup
-逻辑：只有本次写入的 original-HEAD state 与 `ORIG_HEAD` 匹配时才 abort；marker 恢复到
-merge 前版本后删除两个 `.git` 临时状态。
+任一非零都停止，不提交；工作树 marker 也必须与索引值相同。该独立代码块必须具备与
+Step 2 相同的 ownership-aware `abort_owned_merge` 和 cleanup 逻辑：abort 前同时证明
+当前 HEAD/可用 ORIG_HEAD 为 persisted original，且 MERGE_HEAD 存在时严格等于 persisted
+target；缺失 MERGE_HEAD 只能在 ownership 完整且 HEAD/ORIG_HEAD 条件成立时恢复 marker。
+安全恢复后删除整个状态目录，ownership 不成立时保留现场。
 
 - [x] **Step 5: 改写 Step 6 的提交与发布边界**
 
 Step 6 是另一个独立 shell，不能读取 Step 2/4e 的普通变量；必须重新取得并读取
-`ppt-master-sync.expected-upstream-sha` 与 `ppt-master-sync.pre-merge-head`。提交前若
-任一 gate 失败，统一 abort 本次状态文件所拥有的 merge、恢复 marker、清理临时状态后
-退出；提交成功后清理状态。然后用显式 `if`/`exit` 验证恰好两个父，且 `^1` 为从内部
-状态读取的原始 HEAD、`^2` 为 expected：
+`ppt-master-sync/expected-upstream-sha`、`original-head`、`marker-original-state`、
+`marker-snapshot` 和 `merge-started`。提交前若任一 gate 失败，统一按 ownership 证明
+结果 abort/恢复 marker 或保留现场；安全路径清理整个状态目录，提交成功后也清理状态。
+然后用显式 `if`/`exit` 验证恰好两个父，且 `^1` 为从内部状态读取的原始 HEAD、`^2` 为
+expected：
 
 ```bash
-if ! SYNC_EXPECTED_STATE=$(git rev-parse --git-path ppt-master-sync.expected-upstream-sha); then
+if ! SYNC_STATE_DIR=$(git rev-parse --git-path ppt-master-sync); then
+  echo "Unable to resolve the Git-internal sync state directory" >&2
+  exit 1
+fi
+if ! SYNC_EXPECTED_STATE=$(git rev-parse --git-path ppt-master-sync/expected-upstream-sha); then
   echo "Unable to resolve the Git-internal expected-target state path" >&2
   exit 1
 fi
-if ! SYNC_ORIGINAL_HEAD_STATE=$(git rev-parse --git-path ppt-master-sync.pre-merge-head); then
+if ! SYNC_ORIGINAL_HEAD_STATE=$(git rev-parse --git-path ppt-master-sync/original-head); then
   echo "Unable to resolve the Git-internal original-HEAD state path" >&2
+  exit 1
+fi
+if ! SYNC_MARKER_STATE=$(git rev-parse --git-path ppt-master-sync/marker-original-state); then
+  echo "Unable to resolve the Git-internal marker state path" >&2
+  exit 1
+fi
+if ! SYNC_MARKER_SNAPSHOT=$(git rev-parse --git-path ppt-master-sync/marker-snapshot); then
+  echo "Unable to resolve the Git-internal marker snapshot path" >&2
+  exit 1
+fi
+if ! SYNC_MERGE_STARTED_STATE=$(git rev-parse --git-path ppt-master-sync/merge-started); then
+  echo "Unable to resolve the Git-internal merge ownership path" >&2
+  exit 1
+fi
+if ! SYNC_MERGE_HEAD_PATH=$(git rev-parse --git-path MERGE_HEAD); then
+  echo "Unable to resolve the Git merge-state path" >&2
   exit 1
 fi
 if ! EXPECTED_UPSTREAM_SHA=$(tr -d '\r\n' < "$SYNC_EXPECTED_STATE"); then
@@ -198,9 +276,12 @@ if ! ORIGINAL_HEAD_SHA=$(tr -d '\r\n' < "$SYNC_ORIGINAL_HEAD_STATE"); then
   echo "Unable to read the Git-internal original-HEAD state" >&2
   exit 1
 fi
-# Define abort_owned_merge/fail_before_commit here; they abort only when the
-# original-HEAD state belongs to this run, then restore the pre-merge marker
-# and remove both Git-internal state files.
+# Define the same abort_owned_merge/fail_before_commit helper here; the state
+# directory is the exclusive lock, and abort requires current HEAD/ORIG_HEAD
+# to equal original-head plus MERGE_HEAD to equal expected-upstream-sha. The
+# helper restores marker-original-state (tracked from marker-snapshot, or
+# absent through marker-only git rm/delete) and removes the whole state dir
+# only after safe recovery.
 if ! git add -u; then
   echo "Unable to stage tracked sync changes" >&2
   fail_before_commit 1
@@ -419,20 +500,23 @@ Run:
 
 ```powershell
 python -c "import pathlib,yaml; data=yaml.safe_load(pathlib.Path('.github/workflows/sync-upstream.yml').read_text(encoding='utf-8')); assert data['jobs']['sync-upstream']['steps']; print('sync-upstream.yml: OK')"
-python -m unittest discover -s skills/ppt-master/scripts/tests -p "test_sync_upstream_merge_state.py" -v
+python -m unittest discover -s skills/ppt-master/scripts/tests -p "test_sync_upstream_ownership.py" -v
 git diff --check
 ```
 
-Expected: `sync-upstream.yml: OK`，契约回归测试通过，`git diff --check` 无错误；另须
-运行真实 Git 行为沙盘覆盖独立 shell target 读取、already-up-to-date、MERGE_HEAD 不匹配、
-marker 写入失败、git add 失败、untracked 工作树、成功双父，并验证每个失败后的
-`MERGE_HEAD`/marker/state 清理与输出。
+Expected: `sync-upstream.yml: OK`，契约回归测试通过，`git diff --check` 无错误；真实
+Git 行为沙盘还必须覆盖：跨独立 shell 重读 target/original HEAD、already-up-to-date、
+foreign target merge 不 abort、foreign original HEAD 不恢复、MERGE_HEAD 缺失时的安全
+marker 恢复、marker 写入失败、git add 失败、ignored/untracked pre-existing marker 拒绝、
+tracked marker 字节恢复、absent marker 恢复为 absent、状态目录 lock 并发拒绝和成功双父。
+每个安全失败都要验证无 `MERGE_HEAD`、marker/index 恢复、整个状态目录清理；ownership 不
+成立的 foreign 场景要验证现场和状态目录保留。
 
 Commit:
 
 ```powershell
 git add .opencode/command/sync-upstream.md .github/workflows/sync-upstream.yml docs/superpowers/plans/2026-09-10-sync-upstream-ancestry.md
-git commit -m "fix(ci): make merge state fail closed"
+git commit -m "fix(ci): preserve merge abort ownership"
 ```
 
 ### Task 1 扩展：fail-closed workflow 与 merge 验证（本轮修订）
@@ -452,10 +536,12 @@ git commit -m "fix(ci): make merge state fail closed"
   ancestry 和唯一恰好双父 merge 的父序 `[BASE_SHA, EXPECTED_UPSTREAM_SHA]`。
 - [x] merge 成功后先验证 `MERGE_HEAD` 恰好一项且等于固定 target，再读取
   `ORIG_HEAD` 作为原始第一父；marker 只在此后写入/暂存。already-up-to-date、冲突、
-  marker 写入失败、git add 失败和提交前 gate 失败都统一 abort（仅限本次 ownership）并
-  恢复 marker、清理 `.git` 临时状态；提交后验证 `HEAD^1`/`HEAD^2` 后清理状态。
-- [x] 追加独立 shell、cleanup、already-up-to-date、MERGE_HEAD mismatch、marker/add
-  failure、untracked 和成功双父行为沙盘；记录到
+  marker 写入失败、git add 失败和提交前 gate 失败都统一按 ownership 结果处理：安全拥有
+  时 abort/恢复 marker/清理整个 state dir，foreign 场景不 abort、不恢复并保留现场；提交
+  后验证 `HEAD^1`/`HEAD^2` 后清理状态。
+- [x] 追加独立 shell、state lock、already-up-to-date、foreign target/original、缺失
+  MERGE_HEAD 安全恢复、tracked/absent marker、ignored marker、marker/add failure、
+  untracked 和成功双父行为沙盘；记录到
   `.superpowers/sdd/sync-upstream-task-1-report.md`。临时测试验证后删除，不纳入提交。
 
 ---
@@ -666,7 +752,7 @@ Expected: worktree clean；upstream/main 为目标 SHA；无未知改动。
 
 - [ ] **Step 2: 开始真实 repair merge**
 
-在 `git rev-parse --git-path ppt-master-sync.pre-merge-head` 返回的 Git 内部临时路径记录
+在 `git rev-parse --git-path ppt-master-sync/original-head` 返回的 Git 内部临时路径记录
 merge 前 HEAD；然后执行：
 
 ```powershell

@@ -36,8 +36,10 @@ main/PR ancestry 门禁由独立任务接入。上游无变化时 OpenCode、提
 
 `EXPECTED_UPSTREAM_SHA` 由 workflow 注入 OpenCode 环境；Actions 中缺失或与 fetch 后
 的 `upstream/main` 不一致会 fail-closed。只有本地执行时，变量为空才允许回退到 fetch
-后的 upstream tip；CLI 会把 fallback target 写入 `.git` 内部临时状态，后续独立 shell
-逐块重读同一状态，成功或 abort 都清理该状态。
+后的 upstream tip；CLI 会用 `git rev-parse --git-path ppt-master-sync` 和原子 `mkdir`
+建立每次同步的独占 `.git` 状态目录，把 fallback target、original HEAD、marker 原始
+存在状态/字节快照和 merge ownership 写入其中，后续独立 shell 逐块重读，成功或已安全
+恢复的失败路径清理整个状态目录。
 
 ### 方式二：手动触发（workflow_dispatch）
 
@@ -61,11 +63,12 @@ opencode
 # 然后输入: /sync-upstream
 ```
 
-本地执行不会触发 GitHub Actions 的 main-ref/PAT 推送路径。命令会把 target 和 merge 前
-HEAD 持久化到 `.git` 内部临时状态；merge 成功后先确认 `MERGE_HEAD` 恰好为固定 target，
-再用本次 merge 设置的 `ORIG_HEAD` 校验原始第一父，最后才写入/暂存 marker。already-
-up-to-date、冲突、marker 写入或 `git add` 失败都会 abort 本次拥有的 merge、恢复 merge
-前 marker、清理临时状态并停止。
+本地执行不会触发 GitHub Actions 的 main-ref/PAT 推送路径。命令会用独占 `.git/ppt-master-sync/`
+状态目录跨 shell 持久化 target、merge 前 HEAD 和 marker 原始状态；merge 成功后先确认
+`MERGE_HEAD` 恰好为固定 target，再用本次 merge 设置的 `ORIG_HEAD` 校验原始第一父，最后
+才写入/暂存 marker。already-up-to-date、冲突、marker 写入或 `git add` 失败只有在当前
+HEAD/ORIG_HEAD/MERGE_HEAD ownership 全部成立时才会 abort 并恢复 marker；foreign merge、
+foreign HEAD 或 ignored/untracked marker 会保留现场并停止。
 
 ---
 
