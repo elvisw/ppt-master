@@ -25,12 +25,34 @@ agent: general
 ### Step 1: 拉取上游
 
 ```bash
+if ! UPSTREAM_URL=$(git config --get remote.upstream.url); then
+  echo "Unable to read the upstream remote URL" >&2
+  exit 1
+fi
+case "$UPSTREAM_URL" in
+  https://github.com/hugohe3/ppt-master.git|\
+  https://github.com/hugohe3/ppt-master|\
+  git@github.com:hugohe3/ppt-master.git|\
+  ssh://git@github.com/hugohe3/ppt-master.git)
+    ;;
+  *)
+    echo "The upstream remote is not the canonical hugohe3/ppt-master repository" >&2
+    exit 1
+    ;;
+esac
 if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
   echo "GitHub Actions: reusing upstream/main already fetched by the workflow"
 else
-  git fetch upstream
+  if ! git fetch upstream main; then
+    echo "Unable to fetch canonical upstream/main; refusing to use a stale ref" >&2
+    exit 1
+  fi
 fi
-git log main..upstream/main --oneline
+if ! git rev-parse --verify refs/remotes/upstream/main^{commit} >/dev/null; then
+  echo "Fetched upstream/main is unavailable" >&2
+  exit 1
+fi
+git log HEAD..upstream/main --oneline
 ```
 
 记录上游新增的提交数量和主题。
@@ -243,11 +265,12 @@ restore_marker_from_state() {
       echo "Unable to remove the newly tracked upstream marker" >&2
       return 1
     fi
-    if [ -e .github/upstream-main.sha ] && ! rm -f -- .github/upstream-main.sha; then
+    if { [ -e .github/upstream-main.sha ] || [ -L .github/upstream-main.sha ]; } &&
+       ! rm -f -- .github/upstream-main.sha; then
       echo "Unable to remove the newly created upstream marker" >&2
       return 1
     fi
-    if [ -e .github/upstream-main.sha ] ||
+    if [ -e .github/upstream-main.sha ] || [ -L .github/upstream-main.sha ] ||
        git ls-files --error-unmatch -- .github/upstream-main.sha >/dev/null 2>&1; then
       echo "The absent upstream marker was not fully restored" >&2
       return 1
@@ -400,6 +423,14 @@ if ! printf '%s\n' "$ORIGINAL_HEAD_SHA" > "$SYNC_ORIGINAL_HEAD_STATE"; then
   fail_without_abort 1
 fi
 if git cat-file -e "$ORIGINAL_HEAD_SHA:.github/upstream-main.sha" 2>/dev/null; then
+  if ! MARKER_MODE=$(git ls-tree "$ORIGINAL_HEAD_SHA" -- .github/upstream-main.sha | awk 'NF { print $1 }'); then
+    echo "Unable to inspect the original upstream marker mode" >&2
+    fail_without_abort 1
+  fi
+  if [ "$MARKER_MODE" != "100644" ]; then
+    echo "The original upstream marker must be a regular file" >&2
+    fail_without_abort 1
+  fi
   if ! printf '%s\n' tracked > "$SYNC_MARKER_STATE"; then
     echo "Unable to persist the tracked marker state" >&2
     fail_without_abort 1
@@ -413,7 +444,7 @@ else
     echo "Unable to persist the absent marker state" >&2
     fail_without_abort 1
   fi
-  if [ -e .github/upstream-main.sha ]; then
+  if [ -e .github/upstream-main.sha ] || [ -L .github/upstream-main.sha ]; then
     echo "HEAD does not track .github/upstream-main.sha, but the path already exists" >&2
     fail_without_abort 1
   fi
@@ -468,6 +499,10 @@ if [ "$ORIG_HEAD_SHA" != "$ORIGINAL_HEAD_SHA" ]; then
   fail_sync 1
 fi
 
+if [ -L .github/upstream-main.sha ]; then
+  echo "The merged upstream marker must not be a symbolic link" >&2
+  fail_sync 1
+fi
 if ! printf '%s\n' "$EXPECTED_UPSTREAM_SHA" > .github/upstream-main.sha; then
   echo "Unable to write the upstream marker after merge validation" >&2
   fail_sync 1
@@ -493,13 +528,13 @@ reset、rebase、squash、cherry-pick、切换分支和清除 `MERGE_HEAD`。失
 
 Step 2 成功才允许进入本步；失败（包括冲突）已经 abort 并停止，禁止手动解冲突后
 继续本次运行。成功后，核心原则是保留 fork 的 uvx 适配，合入上游的新功能。
-`skills/ppt-master/scripts/*.py` 除 `attribution_guard.py` 与下方「fork 修改文件清单」列出的文件外零改动。
+Python 文件按 hunk 和契约审查，不按整文件 allowlist 审查。保留下方清单中的 fork
+标记和必要 import，并合入其他上游功能与安全修复；用对应的聚焦测试验证行为。
 
 本步若需要启动独立 shell 代码块，不能引用前一代码块的普通变量。每个代码块都必须
-用 `git rev-parse --git-path ppt-master-sync.expected-upstream-sha` 和
-`git rev-parse --git-path ppt-master-sync.pre-merge-head` 重新取得路径，再读取并校验
-两个 Git 内部状态文件；Actions 中还要重新校验环境里的 `EXPECTED_UPSTREAM_SHA` 与
-持久化 target 相等。任何失败都必须走本次运行的 abort/cleanup 失败路径后退出。
+用 `git rev-parse --git-path ppt-master-sync` 重新取得状态目录及其状态文件，再读取并
+校验这些文件；Actions 中还要重新校验环境里的 `EXPECTED_UPSTREAM_SHA` 与持久化 target
+相等。任何失败都必须走本次运行的 abort/cleanup 失败路径后退出。
 
 **fork 修改文件清单**（这些文件含 fork 独有的 Windows/uvx 适配，上游更新时**保留 fork 适配标记、合入上游功能改动**，不得整文件回退）：
 
@@ -539,7 +574,7 @@ Step 2 成功才允许进入本步；失败（包括冲突）已经 abort 并停
 | `*.md` workflow/reference | 接受上游内容，将所有 `python3` → `uvx` |
 | `cli.py` (根 & skills) | 无冲突（上游无此文件）；检查新脚本映射 |
 | `pyproject.toml` | 手动同步依赖；保留 version/tool.uv/tool.setuptools 段 |
-| `skills/ppt-master/scripts/*.py` | **零改动**（跳过 `upstream-sync.md` 中的 `.py` 替换脚本）——**两个例外：① `attribution_guard.py` 的 `_SKILL_GATE_MARKER` 必须保持 `uvx ppt-master attribution-guard`（fork 适配），不得回退为上游的 `python3 scripts/attribution_guard.py`；② `register_template.py` 的 `PPT_MASTER_TEMPLATES_DIR` 库根解析（fork 适配，uvx wheel 只读缓存下注册必须落到可写检出目录），不得回退为上游的纯 `SKILL_DIR` 相对解析** |
+| `skills/ppt-master/scripts/*.py` | 按 hunk 审查：保留 fork 标记和 import，合入上游功能与安全修复；`attribution_guard.py` 的 `_SKILL_GATE_MARKER` 必须保持 `uvx ppt-master attribution-guard`，`register_template.py` 的 `PPT_MASTER_TEMPLATES_DIR` 库根解析必须保留 |
 
 ---
 
@@ -833,11 +868,12 @@ python skills/ppt-master/scripts/check_cli_sync.py
           echo "Unable to remove the newly tracked upstream marker" >&2
           return 1
         fi
-        if [ -e .github/upstream-main.sha ] && ! rm -f -- .github/upstream-main.sha; then
+        if { [ -e .github/upstream-main.sha ] || [ -L .github/upstream-main.sha ]; } &&
+           ! rm -f -- .github/upstream-main.sha; then
           echo "Unable to remove the newly created upstream marker" >&2
           return 1
         fi
-        if [ -e .github/upstream-main.sha ] ||
+        if [ -e .github/upstream-main.sha ] || [ -L .github/upstream-main.sha ] ||
            git ls-files --error-unmatch -- .github/upstream-main.sha >/dev/null 2>&1; then
           echo "The absent upstream marker was not fully restored" >&2
           return 1
@@ -996,6 +1032,10 @@ python skills/ppt-master/scripts/check_cli_sync.py
       echo "ORIG_HEAD does not equal the saved original HEAD" >&2
       fail_sync 1
     fi
+    if [ -L .github/upstream-main.sha ] || [ ! -e .github/upstream-main.sha ]; then
+      echo "The upstream marker is missing or is a symbolic link" >&2
+      fail_sync 1
+    fi
     if ! WORKTREE_TARGET_SHA=$(tr -d '\r\n' < .github/upstream-main.sha); then
       echo "Unable to read .github/upstream-main.sha" >&2
       fail_sync 1
@@ -1135,11 +1175,12 @@ restore_marker_from_state() {
       echo "Unable to remove the newly tracked upstream marker" >&2
       return 1
     fi
-    if [ -e .github/upstream-main.sha ] && ! rm -f -- .github/upstream-main.sha; then
+    if { [ -e .github/upstream-main.sha ] || [ -L .github/upstream-main.sha ]; } &&
+       ! rm -f -- .github/upstream-main.sha; then
       echo "Unable to remove the newly created upstream marker" >&2
       return 1
     fi
-    if [ -e .github/upstream-main.sha ] ||
+    if [ -e .github/upstream-main.sha ] || [ -L .github/upstream-main.sha ] ||
        git ls-files --error-unmatch -- .github/upstream-main.sha >/dev/null 2>&1; then
       echo "The absent upstream marker was not fully restored" >&2
       return 1
@@ -1306,6 +1347,10 @@ if [ "$ORIG_HEAD_SHA" != "$ORIGINAL_HEAD_SHA" ]; then
   echo "ORIG_HEAD does not equal the saved original HEAD" >&2
   fail_before_commit 1
 fi
+if [ -L .github/upstream-main.sha ] || [ ! -e .github/upstream-main.sha ]; then
+  echo "The upstream marker is missing or is a symbolic link" >&2
+  fail_before_commit 1
+fi
 if ! WORKTREE_TARGET_SHA=$(tr -d '\r\n' < .github/upstream-main.sha); then
   echo "Unable to read .github/upstream-main.sha" >&2
   fail_before_commit 1
@@ -1418,15 +1463,11 @@ fi
 
 **如果在 GitHub Actions 环境中运行：**
 
-- **OpenCode Action 路径（schedule 触发）**：不 push — 由 action 基础设施自动创建分支和 PR，PR 合并后触发下游 CI 链（`check-uvx-migration` → `auto-tag` → `publish-pypi`）
-- **CLI 路径（workflow_dispatch）**：不 push — 由 workflow 在 OpenCode 退出后验证 ancestry 并执行 push；模型不得获得 push 凭据，也不得执行任何 push
+- schedule 和 workflow_dispatch 都只由准备 job 运行 OpenCode；模型不得获得任何 GitHub 写凭据，也不得 push 或创建 PR。
+- 新 trusted runner 在重新验证 bundle、manifest、对象 ancestry 和 main 未前进后，最后一个 step 才使用 `PUSH_PAT` 将明确的 verified SHA 推到唯一同步分支并创建 PR。
+- 两条 Actions 路径都禁止直接推送 `main`；PR 合并后再进入现有发布门禁。
 
-**如果本地运行：**
-```bash
-git push origin main
-git tag vX.Y.Z
-git push origin vX.Y.Z
-```
+**如果本地运行**，完成验证后的提交后停止；发布操作必须由受信任维护流程单独执行。
 
 ---
 
@@ -1434,7 +1475,7 @@ git push origin vX.Y.Z
 
 输出验证信息即可，不要尝试执行 `gh` CLI 命令。
 
-**schedule 触发路径：** 输出 "PR 已创建，合并后 auto-tag → publish-pypi 自动触发。查看 https://github.com/elvisw/ppt-master/actions"
+**schedule / workflow_dispatch 触发路径：** trusted runner 会创建同步 PR；合并后由现有发布门禁继续。查看 https://github.com/elvisw/ppt-master/actions
 
 **workflow_dispatch 路径：** 输出 "同步提交完成，workflow 将验证 ancestry 并自动 push，下游 CI 链自动触发。查看 https://github.com/elvisw/ppt-master/actions"
 

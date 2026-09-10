@@ -19,6 +19,7 @@ Dependencies:
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import subprocess
 import sys
@@ -32,12 +33,24 @@ MARKER_CONTENT_RE = re.compile(rb"^[0-9a-f]{40}\n$")
 PROTECTED_PATHS = frozenset(
     {
         ".github/scripts/check_upstream_ancestry.py",
+        ".github/workflows/sync-upstream.yml",
         ".github/workflows/check-upstream-ancestry.yml",
         ".github/workflows/check-uvx-migration.yml",
         ".github/workflows/auto-tag.yml",
         ".github/workflows/publish-pypi.yml",
+        ".opencode/command/sync-upstream.md",
+        "skills/ppt-master/scripts/check_cli_sync.py",
+        "skills/ppt-master/scripts/check_deps_sync.py",
+        "skills/ppt-master/scripts/check_uvx_migration.py",
+        "skills/ppt-master/scripts/attribution_guard.py",
+        "skills/ppt-master/scripts/auto_fix_uvx.py",
+        "skills/ppt-master/scripts/tests/test_check_upstream_ancestry.py",
+        "skills/ppt-master/scripts/tests/test_sync_upstream_ownership.py",
+        "skills/ppt-master/scripts/tests/test_sync_upstream_workflow.py",
     }
 )
+MANIFEST_KEYS = frozenset({"base_sha", "target_sha", "verified_sha"})
+VERSION_RE = re.compile(rb"(?m)^[ \t]*version[ \t]*=[ \t]*[\"'](\d+)\.(\d+)\.(\d+)[\"'][ \t]*$")
 
 
 class CheckError(RuntimeError):
@@ -66,6 +79,91 @@ def _run_git(repo: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
 def _validate_sha(value: str, label: str) -> None:
     if not SHA_RE.fullmatch(value):
         raise CheckError(f"{label} must be a 40-character lowercase SHA")
+
+
+def _reject_duplicate_manifest_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise CheckError("The manifest contains duplicate keys")
+        result[key] = value
+    return result
+
+
+def validate_manifest(
+    manifest_path: Path,
+    *,
+    expected_base_sha: str,
+    expected_target_sha: str,
+    expected_verified_sha: str,
+) -> None:
+    """Validate the exact immutable manifest exchanged between sync jobs."""
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        raise CheckError("The sync manifest is unavailable or is a symlink")
+    try:
+        raw = manifest_path.read_bytes()
+    except OSError as exc:
+        raise CheckError("Unable to read the sync manifest") from exc
+    try:
+        parsed = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_reject_duplicate_manifest_keys,
+            parse_constant=lambda value: (_ for _ in ()).throw(
+                CheckError("The manifest contains a non-finite JSON value")
+            ),
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise CheckError("The sync manifest is not valid UTF-8 JSON") from exc
+    if not isinstance(parsed, dict) or set(parsed) != MANIFEST_KEYS:
+        raise CheckError("The sync manifest must contain exactly base_sha, target_sha, and verified_sha")
+
+    expected = {
+        "base_sha": expected_base_sha,
+        "target_sha": expected_target_sha,
+        "verified_sha": expected_verified_sha,
+    }
+    for key in sorted(MANIFEST_KEYS):
+        value = parsed[key]
+        if not isinstance(value, str):
+            raise CheckError(f"The manifest field {key} must be a SHA string")
+        _validate_sha(value, f"manifest {key}")
+        _validate_sha(expected[key], f"expected {key}")
+        if value != expected[key]:
+            raise CheckError(f"The manifest field {key} does not match the trusted value")
+
+
+def _read_project_version(repo: Path, commit_sha: str, path: str, label: str) -> tuple[int, int, int] | None:
+    result = _run_git(repo, "show", f"{commit_sha}:{path}")
+    if result.returncode != 0:
+        return None
+    matches = VERSION_RE.findall(result.stdout)
+    if len(matches) != 1:
+        raise CheckError(f"The {label} package version is missing or ambiguous")
+    try:
+        return int(matches[0][0]), int(matches[0][1]), int(matches[0][2])
+    except ValueError as exc:
+        raise CheckError(f"The {label} package version is invalid") from exc
+
+
+def _verify_version_bump(repo: Path, base_sha: str, head_sha: str) -> None:
+    paths = (
+        ("pyproject.toml", "root"),
+        ("skills/ppt-master/pyproject.toml", "skill"),
+    )
+    base_versions = [_read_project_version(repo, base_sha, path, label) for path, label in paths]
+    head_versions = [_read_project_version(repo, head_sha, path, label) for path, label in paths]
+    if not any(version is not None for version in base_versions + head_versions):
+        return
+    if any(version is None for version in base_versions + head_versions):
+        raise CheckError("Both fork package manifests must carry a single semantic version")
+    base_root, base_skill = base_versions
+    head_root, head_skill = head_versions
+    if base_root is None or base_skill is None or head_root is None or head_skill is None:
+        raise CheckError("Both fork package manifests must carry a single semantic version")
+    if head_root != head_skill:
+        raise CheckError("The two fork package versions must match in the sync candidate")
+    if head_root <= base_root or head_skill <= base_skill:
+        raise CheckError("The sync candidate must bump both fork package versions")
 
 
 def _require_commit(repo: Path, value: str, label: str) -> None:
@@ -158,7 +256,13 @@ def _assert_no_protected_changes(repo: Path, base_sha: str, head_sha: str) -> No
         raise CheckError("The PR changes a protected CI gate file")
 
 
-def verify_head_commit(repo: Path, head_sha: str, upstream_ref: str) -> str:
+def verify_head_commit(
+    repo: Path,
+    head_sha: str,
+    upstream_ref: str,
+    *,
+    expected_target_sha: str | None = None,
+) -> str:
     """Verify a recorded marker in one commit object and its ancestry."""
     _require_commit(repo, head_sha, "HEAD")
     head_entry = _read_tree_entry(repo, head_sha, "HEAD")
@@ -166,11 +270,23 @@ def verify_head_commit(repo: Path, head_sha: str, upstream_ref: str) -> str:
         raise CheckError("The HEAD marker is missing")
     _require_regular_blob(head_entry, "HEAD")
     target = _read_marker(repo, head_sha, "HEAD")
+    if expected_target_sha is not None:
+        _validate_sha(expected_target_sha, "expected target")
+        if target != expected_target_sha:
+            raise CheckError("The recorded upstream target differs from the immutable expected target")
     _verify_target_ancestry(repo, target, head_sha, upstream_ref)
     return "Verified recorded upstream ancestry"
 
 
-def verify_pull_request(repo: Path, base_sha: str, head_sha: str, upstream_ref: str) -> str:
+def verify_pull_request(
+    repo: Path,
+    base_sha: str,
+    head_sha: str,
+    upstream_ref: str,
+    *,
+    expected_target_sha: str | None = None,
+    require_version_bump: bool = False,
+) -> str:
     """Verify the marker transition and strict merge ancestry for a PR."""
     _require_commit(repo, base_sha, "base")
     _require_commit(repo, head_sha, "head")
@@ -190,8 +306,14 @@ def verify_pull_request(repo: Path, base_sha: str, head_sha: str, upstream_ref: 
         return "Recorded upstream marker unchanged; ordinary PR skipped"
 
     target = _read_marker(repo, head_sha, "head")
+    if expected_target_sha is not None:
+        _validate_sha(expected_target_sha, "expected target")
+        if target != expected_target_sha:
+            raise CheckError("The recorded upstream target differs from the immutable expected target")
     _verify_target_ancestry(repo, target, head_sha, upstream_ref)
     merge_commit = _verify_strict_merge(repo, base_sha, head_sha, target)
+    if require_version_bump:
+        _verify_version_bump(repo, base_sha, head_sha)
     return f"Verified two-parent merge commit {merge_commit}"
 
 
@@ -202,12 +324,23 @@ def build_parser() -> argparse.ArgumentParser:
         default=".",
         help="Git repository containing the objects to inspect (default: current directory)",
     )
-    parser.add_argument("--head-sha", required=True, help="Commit object to verify")
+    parser.add_argument("--head-sha", help="Commit object to verify")
     parser.add_argument("--base-sha", help="PR base commit; enables marker transition checks")
     parser.add_argument(
         "--upstream-ref",
-        required=True,
         help="Fetched upstream ref containing the recorded target, e.g. upstream/main",
+    )
+    parser.add_argument("--manifest", help="Manifest JSON exchanged between sync jobs")
+    parser.add_argument("--expected-base-sha", help="Trusted base SHA for manifest mode")
+    parser.add_argument(
+        "--expected-target-sha",
+        help="Trusted upstream target SHA for manifest or ancestry mode",
+    )
+    parser.add_argument("--expected-verified-sha", help="Trusted candidate tip SHA for manifest mode")
+    parser.add_argument(
+        "--require-version-bump",
+        action="store_true",
+        help="Require both fork package manifests to advance together",
     )
     return parser
 
@@ -218,12 +351,44 @@ def main(argv: list[str] | None = None) -> int:
         repo = Path(args.repo).resolve()
         if not repo.is_dir():
             raise CheckError("The Git repository path is unavailable")
+        if args.manifest is not None:
+            expected_values = (
+                args.expected_base_sha,
+                args.expected_target_sha,
+                args.expected_verified_sha,
+            )
+            if any(value is None for value in expected_values):
+                raise CheckError("Manifest mode requires all three expected SHA values")
+            validate_manifest(
+                Path(args.manifest),
+                expected_base_sha=args.expected_base_sha,
+                expected_target_sha=args.expected_target_sha,
+                expected_verified_sha=args.expected_verified_sha,
+            )
+            print("Verified exact sync manifest")
+            return 0
+        if args.head_sha is None or args.upstream_ref is None:
+            raise CheckError("Ancestry mode requires --head-sha and --upstream-ref")
+        if args.require_version_bump and args.base_sha is None:
+            raise CheckError("--require-version-bump requires --base-sha")
         if args.base_sha is not None:
             if not args.base_sha:
                 raise CheckError("--base-sha was provided with an empty value")
-            message = verify_pull_request(repo, args.base_sha, args.head_sha, args.upstream_ref)
+            message = verify_pull_request(
+                repo,
+                args.base_sha,
+                args.head_sha,
+                args.upstream_ref,
+                expected_target_sha=args.expected_target_sha,
+                require_version_bump=args.require_version_bump,
+            )
         else:
-            message = verify_head_commit(repo, args.head_sha, args.upstream_ref)
+            message = verify_head_commit(
+                repo,
+                args.head_sha,
+                args.upstream_ref,
+                expected_target_sha=args.expected_target_sha,
+            )
     except CheckError as exc:
         print(f"::error::{exc}", file=sys.stderr)
         return 1

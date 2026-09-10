@@ -93,75 +93,82 @@ git merge-base --is-ancestor "$EXPECTED_UPSTREAM_SHA" HEAD
 
 ## 4. GitHub Actions 边界
 
-### 4.1 Schedule 路径
+### 4.1 统一触发与并发边界
 
-`.github/workflows/sync-upstream.yml` 的 schedule prompt 指向
-`.opencode/command/sync-upstream.md` 的提交模型，并明确禁止历史改写。
-两个 prompt 的 `CRITICAL` 块都传入并引用
-`${{ steps.upstream.outputs.upstream_sha }}`。OpenCode action 仍负责创建分支和 PR。
+`.github/workflows/sync-upstream.yml` 的 schedule 和 workflow_dispatch 共用一个固定
+`sync-upstream` concurrency group，`cancel-in-progress: false`。workflow_dispatch 只允许
+`refs/heads/main`；无变化时两个 job 的候选、artifact、分支和 PR 路径全部跳过。
 
-新增 `.github/workflows/check-upstream-ancestry.yml`，不配置 `paths` filter，使用
-`pull_request_target`。它只在 `trusted/` 目录以 base SHA 检出受信任脚本，并使用
-`persist-credentials: false`；校验 PR number/base/head 后，从 base repo 的
-`refs/pull/<number>/head` 精确 fetch PR head object 到同一 trusted object store，
-机械确认 `FETCH_HEAD == event HEAD_SHA`。workflow 只执行 `trusted/` 中的 shell 与
-helper，以 `--repo trusted` 指向同一对象库，绝不 checkout 或执行候选脚本、action
-或 shell。base/head 必须是非空 40 位小写 SHA，且 trusted checkout/fetched object
-必须逐一等于事件值。
+### 4.2 Job 1：Prepare Candidate
 
-trusted helper 在 PR 模式先检查 base..head diff 不得修改任何受保护门禁文件：
-`.github/scripts/check_upstream_ancestry.py`、四个 ancestry/release workflow；任一
-变化即 fail-closed。随后对 base/head 的 marker 区分 absent、deleted、added、
-unchanged 和 changed 状态，并验证目标文件格式、目标 SHA 属于真实上游历史、是
-PR head 的祖先，以及 base..head 范围内存在唯一恰好双父 merge（父序为
-`[BASE_SHA, TARGET]`）。marker 必须是普通 `100644 blob`，内容严格为 40 位小写
-hex 加一个 LF；失败不得回显原始内容。
+`prepare-candidate` 只声明 `permissions: contents: read`，从 `${{ github.sha }}` 以完整历史检出
+并验证 `HEAD` 等于 immutable base SHA。由于 `actions/checkout` 的 `token` input 是 required，
+空 token 会使 action 失败，而传入 `github.token` 又违反模型 job 的 authenticated-checkout 边界，
+实现采用 canonical public URL 的 `git init` + 无 `--depth` fetch（等价 `fetch-depth: 0`）+ detached
+checkout；它不写 credential，因此等价并强于 `persist-credentials: false`。它明确添加并 fetch canonical
+`https://github.com/hugohe3/ppt-master.git`；fetch 错误直接失败，不使用 stale `upstream/main`。
+只配置 `github-actions[bot]` 的 Git author identity。
 
-该 trusted `pull_request_target` gate 的首次部署存在 bootstrap 边界：本次 PR 的
-base 尚无该 trusted workflow/helper，因此本次安全性由人工审查、本地真实沙盘和
-合并后的 main gate 证明，不能声称当前 PR 已被新 workflow 保护。部署到 main 后，
-普通 PR 不得自修改上述 protected gate 文件；修改必须通过受信任维护流程（例如
-受信任分支/管理员审查后落地），不得静默绕过。
+该 job 只执行一个固定的 `opencode-ai@1.18.30` CLI 路径。模型环境只包含
+`DEEPSEEK_API_KEY`、模型选择、`EXPECTED_UPSTREAM_SHA` 和普通 Actions 元数据；不得出现
+`github.token`、`GITHUB_TOKEN`、`GH_TOKEN`、`PUSH_PAT`、`id-token: write` 或任何 job-level write
+permission。模型只能修改并提交工作树，不能 push、建 PR、改写历史或接触 repository credential。
 
-### 4.2 Workflow Dispatch 路径
+模型退出后，job 1 使用 base checkout 快照的 helper 做 defense-in-depth 检查：clean worktree、
+严格 marker blob、目标上游 ancestry、唯一双父 merge（`^1=base`、`^2=target`）、版本 bump 和
+protected gate policy。它创建 `candidate.bundle`，仅包含 candidate ref 相对 base 以上所需 Git
+objects；它不归档 worktree、`.git/config` 或模型生成的可执行文件。
 
-manual prompt 和 `.opencode/command/sync-upstream.md` 的 GitHub Actions 段都改为
-只修改和提交，禁止模型 push。模型运行前不再把 `PUSH_PAT` 写入 remote URL，
-manual 的 OpenCode 环境也不再注入可写 `GH_TOKEN`。`opencode run` 返回后，workflow
-执行独立的 `Verify upstream ancestry` step；通过后才在独立 push step 中注入 PAT、
-设置 remote 并运行 `git push origin HEAD:main`。验证失败时 shell 直接终止，模型
-无法用文字声明绕过。
+### 4.3 Job 2：Verify And Open PR
 
-如果 push 因 `main` 并发前进而被 non-fast-forward 拒绝，本次运行失败并停止；
-不得 rebase 或 force-push，必须从最新 `main` 重新执行完整同步流程。
+`verify-and-open-pr` 在 fresh runner 上运行，只声明 `contents: read` 和 artifact 下载所需的
+`actions: read`。它从 Job 1 输出的 base SHA 检出 trusted base，下载固定 artifact 名称后只把
+bundle 和 manifest 当作不可信 Git object data。它不 checkout candidate，不运行 candidate 中的
+workflow、helper、shell、配置、hook、action 或后台进程。
 
-### 4.3 Main 发布边界
+manifest 必须是 UTF-8 JSON 且键集合严格为 `base_sha`、`target_sha`、`verified_sha`；三个值必须
+是 40 位小写 SHA，并分别等于 trusted job outputs。bundle 必须通过 Git bundle 校验，导入固定
+candidate ref 后 ref tip 必须等于 `verified_sha`，且 base、target、candidate commit objects 都
+存在。随后 trusted base helper 再次 fetch canonical upstream，并以 base copies 验证 marker、
+上游历史、candidate ancestry、严格 parent order、唯一 merge、版本形状和完整 protected set。
 
-`.github/workflows/check-uvx-migration.yml` 在现有 uvx 检查之前读取
-`.github/upstream-main.sha`，fetch 上游并验证：
+发布前 trusted job 重新读取 `origin/main`，要求仍等于 base；立即重新读取 candidate ref，要求仍等于
+authoritative `verified_sha`。只有最后的 publication step 才注入 `PUSH_PAT`，并使用
+`GIT_CONFIG_GLOBAL=/dev/null`、`GIT_CONFIG_SYSTEM=/dev/null` 与 `core.hooksPath=/dev/null`。
+它将明确 SHA 推送到 `opencode/sync-<run-id>-<attempt>`，绝不推送 `main`，再用同一 PAT 创建
+`elvisw/ppt-master` 指向 `main` 的 PR。main 前进、non-fast-forward、manifest/object/ref mismatch
+任一情况都 fail-closed，不 rebase、不 rewrite、不 force-push。
 
-1. 目标文件是合法 SHA，且目标提交属于 `upstream/main` 历史。
-2. 目标 SHA 是当前 `main` HEAD 的祖先。
+### 4.4 Trusted-file policy
 
-任何失败都让 `Check UVX Migration` 失败。`auto-tag.yml` 已只在该 workflow 成功时
-继续，因此 ancestry 损坏会阻断 tag 与 PyPI 发布。该门禁验证最后一次已登记的
-同步目标，不要求 fork 在每次普通 main push 时追平实时 upstream tip。
+`.github/scripts/check_upstream_ancestry.py` 的 protected set 覆盖五个 sync/release workflow、
+trusted helper、`.opencode/command/sync-upstream.md`、`check_cli_sync.py`、`check_deps_sync.py`、
+`check_uvx_migration.py`、`attribution_guard.py`、`auto_fix_uvx.py` 以及作为这些 gate executable
+specification 的 focused tests。普通 sync PR 修改任一文件都失败；维护这些文件必须走显式 trusted
+maintenance/bootstrap 流程。Python 同步策略按 hunk/contract 保留 fork marker/import，并合入
+其他上游功能和安全修复，不再使用“整文件零 diff” allowlist。
 
-发布 owner 固定为 tag push：`auto-tag.yml` 在最终 fetch/HEAD 锁定后使用现有
-`PUSH_PAT` 推送 immutable tag，使 `publish-pypi.yml` 的 tag 入口成为唯一自动发布
-触发器；auto-tag 不再显式 dispatch publish。`publish-pypi.yml` 仍保留带必填
-`release_sha`/`release_tag` 的 workflow_dispatch 作为人工恢复入口，但必须从相同
-tag ref 检出并验证 remote tag、HEAD、版本和 ancestry 全部绑定到同一 SHA。
+### 4.5 Bootstrap boundary
 
-### 4.4 仓库合并设置与落盘方式
+首次把该 trusted workflow/helper 部署到 main 的 PR，其 base 可能尚无当前 gate，因此不能声称该
+PR 已被新 workflow 自身保护。Task 5A 的安全性由人工 diff 审查、独立 unit/YAML/CLI/deps/
+attribution 检查和真实临时 Git/artifact 沙盘证明。部署到 main 后，protected gate 文件只能通过
+trusted maintenance/bootstrap 流程修改。
+
+### 4.6 发布边界
+
+Task 5A 不修改 release workflows；现有 `check-uvx-migration`、`auto-tag` 和 `publish-pypi` 的
+ancestry/release owner 继续由 Task 2/5B 管理。同步 PR 进入 `main` 后才由既有发布链处理。
+
+### 4.7 仓库合并设置与落盘方式
 
 通过 fork API 关闭 `allow_squash_merge` 和 `allow_rebase_merge`，保留
 `allow_merge_commit=true`，并在修改前后读取 API 回执。该设置只作用于
 `elvisw/ppt-master`，不触碰上游。
 
 repair 分支如创建 PR，必须使用 `gh pr merge --merge`；不得使用 squash 或 rebase。
-合并后必须 fetch `origin/main` 并在远端主分支上重跑 ancestry 门禁。当前任务不自动
-push 或创建 PR，仓库设置修改和本地提交除外。
+Task 5A 的同步 publication 只创建唯一分支到 `main` 的 PR，不直接写 `main`；合并后必须
+fetch `origin/main` 并在远端主分支上重跑 ancestry 门禁。Task 5A 不修改仓库合并设置。
 
 ## 5. 当前历史修复与执行目标更新
 
@@ -195,34 +202,37 @@ git log HEAD..09ad58f0d58decc9d30799ca83374ff2604ef16b --oneline
 ## 6. 错误处理
 
 - `git merge --no-ff --no-commit` 冲突无法安全解决时执行 `git merge --abort` 并停止。
-- ancestry 门禁失败时不尝试用内容比较替代，不推送，不创建有效同步结论。
-- schedule PR 检查只读上游，不向上游写入任何内容。
-- manual push 仅在 OpenCode 成功退出且 ancestry 门禁通过后执行。
-- manual push non-fast-forward 时停止并从最新 main 重跑，禁止 force-push。
+- ancestry、manifest、bundle、candidate ref 或 main-tip 门禁失败时不尝试用内容比较替代，不发布，不创建有效同步结论。
+- schedule 和 workflow_dispatch 都只读 canonical upstream；trusted publication 只写 fork 的唯一同步分支。
+- PAT 仅在 trusted runner 的最终 publication step 注入，且只在 OpenCode 成功退出、对象验证和 ancestry 门禁全部通过后执行。
+- main 前进或 publication non-fast-forward 时停止并从最新 main 重跑，禁止 force-push、rebase 或 rewrite。
 - PR 被 squash/rebase 的入口通过 fork 仓库设置关闭；main 门禁继续作为发布兜底。
 - 现有 attribution、CLI sync、F821、依赖与 fork marker 任一门禁失败时仍按原流程阻断。
 
 ## 7. 验证计划
 
-1. 静态审查提交关系规则由 `.opencode/command/sync-upstream.md` 所有，两个 prompt 只传入目标 SHA、指向所有者并保留必要的 CRITICAL 门禁。
+1. 静态审查提交关系规则由 `.opencode/command/sync-upstream.md` 所有，单一 pinned CLI prompt 只传入目标 SHA、指向所有者并保留必要的 CRITICAL 门禁。
 2. 对历史故障提交 `726c386b` 和本次 replacement target `09ad58f0` 运行 ancestry 检查，确认负向场景失败。
 3. 在临时 clone/branch 沙盘执行完整的 Step 2→6，验证 `MERGE_HEAD`、双父 merge、目标文件和独立版本提交。
 4. 对 repair 分支最终 `HEAD` 运行 ancestry 检查，确认通过且目标缺失列表为空。
 5. 验证 repair merge commit 恰好有两个父节点，其中包含实现分支原 HEAD 和 `09ad58f0`。
-6. 校验三个 workflow YAML 可被解析，检查 schedule/manual 条件、凭据注入和 verify-before-push 顺序。
+6. 校验 sync workflow YAML 可被解析，检查统一 schedule/manual 路径、concurrency、只读权限、固定 CLI、artifact 条件、trusted helper 和 verify-before-publication 顺序。
 7. 验证 PR check 的三种输入：目标文件不变时跳过、合法 repair 通过、篡改目标或单父伪 merge 失败。
 8. 验证 main 发布门禁对 repair HEAD 通过、对仅更新目标文件但没有 ancestry 的构造提交失败。
 9. 读取 GitHub API 确认只允许 merge commit；未来 repair PR 使用 merge 模式，落地后 fetch 并在 `origin/main` 复验目标 ancestry。
 10. 运行现有 `check_cli_sync.py`、attribution guard、fork marker、`py_compile`、Ruff F821 和依赖同步门禁。
-11. 审查 `git diff`、`git log --graph` 和工作区状态，确认未夹带无关改动。
+11. 运行独立 workflow contract、manifest/bundle artifact、protected-file、fetch fail-closed、dangling symlink 和跨平台 Bash discovery 测试；审查 `git diff`、`git log --graph` 和工作区状态，确认未夹带无关改动。
 
 ## 8. 涉及文件
 
 - `.opencode/command/sync-upstream.md`
 - `.github/workflows/sync-upstream.yml`
-- `.github/workflows/check-upstream-ancestry.yml`（新增）
-- `.github/workflows/check-uvx-migration.yml`
-- `.github/upstream-main.sha`（新增）
+- `.github/scripts/check_upstream_ancestry.py`
+- `skills/ppt-master/scripts/tests/test_check_upstream_ancestry.py`
+- `skills/ppt-master/scripts/tests/test_sync_upstream_ownership.py`
+- `skills/ppt-master/scripts/tests/test_sync_upstream_workflow.py`
+- `docs/zh/upstream-sync.md`
 - `docs/superpowers/specs/2026-09-10-sync-upstream-ancestry-design.md`
+- `docs/superpowers/plans/2026-09-10-sync-upstream-ancestry.md`
 
-当前 ancestry repair 通过 Git 提交关系完成，不通过修改上游代码文件模拟。
+Task 5A 不修改 release workflows、版本或 Task 3/4 历史；当前 ancestry repair 通过 Git 提交关系完成，不通过修改上游代码文件模拟。

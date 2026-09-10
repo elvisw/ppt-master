@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import textwrap
@@ -14,8 +16,26 @@ import yaml
 ROOT = Path(__file__).resolve().parents[4]
 COMMAND = ROOT / ".opencode" / "command" / "sync-upstream.md"
 WORKFLOW = ROOT / ".github" / "workflows" / "sync-upstream.yml"
-BASH = os.environ.get("BASH", r"C:\Program Files\Git\bin\bash.exe")
-BASH_AVAILABLE = Path(BASH).is_file()
+
+
+def discover_bash() -> str | None:
+    configured = os.environ.get("BASH")
+    if configured:
+        return configured if Path(configured).is_file() else shutil.which(configured)
+    discovered = shutil.which("bash")
+    if discovered:
+        return discovered
+    for candidate in (
+        Path(os.environ.get("ProgramFiles", "")) / "Git" / "bin" / "bash.exe",
+        Path(os.environ.get("ProgramW6432", "")) / "Git" / "bin" / "bash.exe",
+    ):
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+BASH = discover_bash()
+BASH_AVAILABLE = BASH is not None and Path(BASH).is_file()
 MARKER = ".github/upstream-main.sha"
 OLD_MARKER = b"old marker\x00\r\n"
 
@@ -37,7 +57,7 @@ def run_bash(
     env = os.environ.copy()
     env.update(extra_env or {})
     return subprocess.run(
-        [BASH],
+        [BASH],  # type: ignore[list-item]
         cwd=repo,
         env=env,
         input=script,
@@ -93,9 +113,11 @@ class SyncUpstreamOwnershipTests(unittest.TestCase):
             raise AssertionError("Step 6 block not found")
         cls.step6 = textwrap.dedent(step6_match.group(1))
 
-        steps = cls.workflow_data["jobs"]["sync-upstream"]["steps"]
+        steps = cls.workflow_data["jobs"]["verify-and-open-pr"]["steps"]
         cls.verify = next(
-            step["run"] for step in steps if step.get("name") == "Verify upstream ancestry"
+            step["run"]
+            for step in steps
+            if step.get("name") == "Verify untrusted candidate with trusted helper"
         )
 
     def _new_repo(
@@ -460,6 +482,12 @@ printf() {
         self.assertNotIn("PRE_MERGE_HEAD", self.command_text)
         self.assertIn("mkdir -- \"$SYNC_STATE_DIR\"", self.command_text)
         self.assertIn("git rev-parse --git-path ppt-master-sync", self.command_text)
+        self.assertIn("if ! git fetch upstream main; then", self.command_text)
+        self.assertIn("remote.upstream.url", self.command_text)
+        self.assertIn("git log HEAD..upstream/main --oneline", self.command_text)
+        self.assertIn("[ -L .github/upstream-main.sha ]", self.command_text)
+        self.assertNotIn("git push origin main", self.command_text)
+        self.assertNotIn("zero diff", self.command_text.lower())
         self.assertIn("Refusing to abort a foreign MERGE_HEAD target", self.command_text)
         self.assertIn("CURRENT_HEAD_SHA", self.command_text)
         self.assertIn("marker-original-state", self.command_text)
@@ -472,7 +500,31 @@ printf() {
 
     def test_yaml_parses_and_verify_has_untracked_gate(self) -> None:
         self.assertIn("git status --porcelain=v1 --untracked-files=all", self.verify)
-        self.assertIn("git show HEAD:.github/upstream-main.sha | tr -d", self.verify)
+        self.assertIn("check_upstream_ancestry.py", self.verify)
+
+    def test_command_fetches_fail_closed_and_uses_symlink_safe_marker_checks(self) -> None:
+        self.assertIn("if ! git fetch upstream main; then", self.command_text)
+        self.assertIn("https://github.com/hugohe3/ppt-master.git", self.command_text)
+        self.assertIn("[ -e .github/upstream-main.sha ] || [ -L .github/upstream-main.sha ]", self.command_text)
+        self.assertNotIn("零改动", self.command_text)
+        self.assertNotIn("git push origin main", self.command_text)
+
+    @unittest.skipUnless(BASH_AVAILABLE, "Bash is required for the ownership sandbox")
+    def test_dangling_marker_symlink_is_rejected_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo, base = self._new_repo(Path(temporary), tracked_marker=False)
+            marker = repo / MARKER
+            try:
+                marker.symlink_to("missing-target")
+            except OSError as exc:
+                self.skipTest(f"symlink creation unavailable: {exc}")
+            target = self._add_target(repo, base=base)
+            self._run_step1(repo, target)
+            result = self._run_step2(repo, target=target)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertTrue(marker.is_symlink())
+            self._assert_no_merge(repo)
+            self._assert_state_absent(repo)
 
 
 if __name__ == "__main__":

@@ -4,9 +4,9 @@
 
 **Goal:** 让 schedule、workflow_dispatch 和发布链都机械验证选定上游提交的 ancestry，并以一次真实 merge 修复当前缺失的上游父关系。原始事件涉及 `64b65839`；Task 4 执行时的 immutable replacement target 已获批准为 `09ad58f0d58decc9d30799ca83374ff2604ef16b`。
 
-**Architecture:** `.github/upstream-main.sha` 持久化每次同步选定的 immutable upstream SHA；`.opencode/command/sync-upstream.md` 是提交关系程序的唯一所有者，两个 OpenCode prompt 只传值和强调不可绕过门禁。每次命令运行用 `git rev-parse --git-path ppt-master-sync` 定位并以原子 `mkdir` 建立独占 `.git` 状态目录，保存 target、original HEAD、marker 存在状态与字节快照；各代码块自行重读，成功或安全失败清理整个目录。PR check 验证目标 SHA、直接 merge parent 与 head ancestry，`check-uvx-migration.yml` 再在 `main` 发布边界验证登记目标，manual push 由 workflow 在验证后执行。
+**Architecture:** `.github/workflows/sync-upstream.yml` 将同步拆成只读 `prepare-candidate` 和新 runner 上的 `verify-and-open-pr` 两个 job。准备 job 只运行固定 `opencode-ai@1.18.30`，验证 immutable base/target 后只上传 Git bundle 与三 SHA manifest；trusted job 只执行 base checkout 中的 helper，验证对象、祖先关系、protected gate 文件、版本形状和 main tip，最后一步才用 PAT 将明确 SHA 推到唯一分支并创建 PR。`.opencode/command/sync-upstream.md` 仍是模型提交关系程序的唯一所有者。
 
-**Tech Stack:** Git、GitHub Actions YAML、POSIX shell、OpenCode Action、GitHub CLI、Python 3.12 + PyYAML（仅做 YAML 语法验证）。
+**Tech Stack:** Git、GitHub Actions YAML、POSIX shell、pinned OpenCode CLI、GitHub CLI、Python 3.12 + PyYAML（仅做 YAML 语法验证）。
 
 ## Global Constraints
 
@@ -14,15 +14,18 @@
 - Task 4 当前修复目标固定为 `09ad58f0d58decc9d30799ca83374ff2604ef16b`；原始事件中的 `64b65839c7f8096a534c872c03d688a2b2491c8f` 仅作为历史证据保留。
 - 从 merge 开始到 merge commit 创建完成，禁止 reset、rebase、squash、cherry-pick、切换分支和清除 `MERGE_HEAD`；失败只允许 `git merge --abort` 后停止。
 - `.github/upstream-main.sha` 只含一行 40 位小写 SHA 和结尾换行。
-- schedule 的 OpenCode Action 保留建分支/PR职责；workflow_dispatch 仅允许
+- schedule 和 workflow_dispatch 共用同一个候选准备路径；workflow_dispatch 仅允许
   `GITHUB_REF == refs/heads/main`，guard 缺失或不匹配必须 fail-closed。
 - identity step 只能配置 `github-actions[bot]` 的 name/email，不得设置 token、remote
   或 push 凭据；workflow_dispatch 的模型不得获得 `PUSH_PAT` 或执行 push。
 - schedule/manual 两个 OpenCode step 都必须通过 env 注入
   `EXPECTED_UPSTREAM_SHA=${{ steps.upstream.outputs.upstream_sha }}`；Actions 中变量缺失
   或与 fetch 后 `upstream/main` 不匹配必须立即失败，只有本地运行允许 fallback fetch。
-- manual OpenCode、Verify、Push 的 if 必须同时满足
-  `workflow_dispatch && steps.upstream.outputs.has_changes == 'true'`；无变化必须正常跳过。
+- 无变化时模型、artifact、trusted job、分支和 PR 全部正常跳过；有变化时两个触发器必须走同一
+  bundle → trusted verification → PR 路径。
+- Checkout decision: `actions/checkout` requires a token; an empty token fails and `github.token`
+  would violate the model boundary, so both jobs use an uncredentialed canonical-URL full-history
+  fetch (no `--depth`, equivalent to `fetch-depth: 0`) plus detached immutable checkout.
 - Verify 必须先以 `git diff --quiet && git diff --cached --quiet`，再以
   `git status --porcelain=v1 --untracked-files=all` 拒绝任何脏工作树，再以
   `git show HEAD:.github/upstream-main.sha | tr -d '\r\n'` 读取已提交 marker，不得读取工作树 marker。
@@ -43,14 +46,49 @@
 - marker 原本 tracked 时必须保存字节级快照，并用 original HEAD/快照验证 index+worktree
   恢复；原本 absent 时只允许对 `.github/upstream-main.sha` 单一路径执行
   `git rm --cached --ignore-unmatch` 和删除，并确认路径与 index 都 absent。
-- manual push 必须使用 `git push origin HEAD:main`；non-fast-forward 时停止并从最新 main 重跑，禁止 force-push。
+- trusted publication 必须使用 `verified_sha:refs/heads/opencode/sync-<run-id>-<attempt>`；main
+  前进或 push 非 fast-forward 时停止，禁止 rewrite、force-push 或任何直接 main push。
 - fork 仓库设置仅允许 merge commit；关闭 squash merge 和 rebase merge。
 - ancestry 门禁失败必须阻断 `Check UVX Migration → auto-tag → publish-pypi`，不得以内容相同或模型声明替代。
-- 本次修复执行在 merge commit 后动态 bump 两处 fork 包版本至下一个未占用 patch 版本；不执行远端 push/PR。
-  运行时契约仍是 schedule 由 Action 创建 PR，workflow_dispatch 仅在 Verify 成功后由 workflow push。
+- 本次修复执行在 merge commit 后动态 bump 两处 fork 包版本至下一个未占用 patch 版本；本地不执行远端 push/PR。
+  运行时契约是两个触发器都由 trusted job 使用 PAT 创建 PR，模型永远不接收 PAT。
   设计/实现提交只落在本地 `fix/sync-upstream-ancestry`。
 - Windows 下所有 Python 命令使用 `python`，不用 `python3`。
 - 不在 `skills/ppt-master/scripts/tests/` 之外创建测试；workflow 文本用沙盘和真实 Git 命令验证。
+
+---
+
+## Task 5A Final Contract
+
+Task 5A 的最终架构覆盖下方早期 Task 1–2 记录中的旧单 job 发布示例；早期条目保留作为历史决策轨迹，不能作为当前 workflow 的实现指令。
+
+### Job 1: `prepare-candidate`
+
+- 只声明 `permissions: contents: read`，不声明 `id-token`、write 权限或任何写凭据。
+- 从 `github.sha` 以无 `--depth` 的完整历史 fetch（语义等价 `fetch-depth: 0`）做无凭据
+  detached checkout，并验证 `HEAD == github.sha`；workflow_dispatch 不是 `refs/heads/main` 时立即失败。
+- 明确 fetch canonical `upstream/main`；fetch 失败立即停止，不使用 stale remote ref。
+- 无变化只写 `has_changes=false`，不运行模型、不上传 artifact、不启动 trusted job。
+- 只执行一次 `opencode-ai@1.18.30`。模型环境只有 API key、模型名、immutable target 和普通 Actions 元数据；不得注入 `github.token`、`GITHUB_TOKEN`、`GH_TOKEN` 或 `PUSH_PAT`。
+- 模型退出后由 base checkout 快照的 checker 做防御性验证，验证 clean worktree、marker blob、唯一严格双父 merge、版本 bump 和 protected gate policy。
+- 只生成 `candidate.bundle` 与严格三字段 `manifest.json`；bundle 使用 `git bundle create <candidate-ref> <candidate-ref> ^<base-sha>`，不归档 worktree 或 `.git/config`。
+
+### Job 2: `verify-and-open-pr`
+
+- 仅在 `has_changes == true` 时运行，使用新 runner，并只声明 `contents: read` 与 artifact download 所需的 `actions: read`。
+- 从 base SHA 做无凭据 trusted checkout；下载的 bundle 和 manifest 只作为不可信 Git object data，
+  绝不 checkout、import、执行 candidate 文件、hook、workflow 或 action。
+- 由 base helper 严格拒绝额外/缺失 manifest key、非法或不匹配 SHA、缺失 base/target/candidate object、candidate tip mismatch、protected gate diff、非严格 parent order、marker symlink 和版本形状错误。
+- 复核 canonical upstream 和 `origin/main == base_sha`；发布前立即重新读取 candidate ref，要求等于 authoritative `verified_sha`。
+- 只有最后的 publication step 获得 `PUSH_PAT`。该 step 使用 `GIT_CONFIG_GLOBAL=/dev/null`、`GIT_CONFIG_SYSTEM=/dev/null`、`core.hooksPath=/dev/null`，推明确 verified SHA 到唯一 sync branch，再用相同 PAT 创建 `elvisw/ppt-master` → `main` PR。
+
+### Artifact/output semantics decision
+
+Job output 只传递不敏感的 immutable SHA 和固定 artifact name；artifact 本身只传 bundle 与 manifest。trusted job 不依赖跨 job 的普通 shell 变量，也不把 `HEAD` 当作候选身份。若 artifact service materializes unexpected files、manifest parse、bundle import 或 output/ref equality 任一不满足，流程 fail-closed；不将其解释为“无变化”，不降级到同 runner 注入 PAT。
+
+### Bootstrap boundary
+
+首次把本 workflow/helper 部署到 main 的 PR，其 base 可能没有当前 trusted gate，因此不能声称该 PR 已由新 gate 自身保护。Task 5A 依靠人工 diff 审查、独立 unit/YAML/CLI/deps/attribution 验证和真实临时 Git/artifact 沙盘；部署到 main 后，protected gate 文件只能通过显式 trusted maintenance/bootstrap 流程修改，普通同步 PR 必须 fail-closed。
 
 ---
 
@@ -71,9 +109,9 @@
   `expected-upstream-sha`、`original-head`、`marker-original-state`、tracked marker 的
   `marker-snapshot` 和 `merge-started`；成功或安全失败终止时清理整个目录，后续独立
   shell 通过 `git rev-parse --git-path` 重新定位并读取。
-- Contract: OpenCode 创建真实 merge commit；workflow_dispatch 只由 workflow push。
-- Contract: manual workflow 只能从 `refs/heads/main` 运行；无变化时 manual OpenCode、
-  Verify、Push 全部跳过。
+- Contract: OpenCode 创建真实 merge commit；两个触发器都由 fresh trusted job 推唯一分支并创建 PR。
+- Contract: workflow_dispatch 只能从 `refs/heads/main` 运行；无变化时模型、artifact、trusted job
+  和 PR 全部跳过。
 - Contract: Verify 只接受一个恰好双父的 merge commit，且父序严格为
   `[BASE_SHA, EXPECTED_UPSTREAM_SHA]`，同时两个 SHA 都必须是 HEAD 祖先。
 
@@ -475,24 +513,17 @@ OpenCode manual step 后新增：
           fi
           echo "Verified two-parent merge commit $MATCHES with ^1=$BASE_SHA and ^2=$EXPECTED_UPSTREAM_SHA"
 
-      - name: Push verified manual sync
-        if: github.event_name == 'workflow_dispatch' && steps.upstream.outputs.has_changes == 'true'
-        env:
-          PUSH_PAT: ${{ secrets.PUSH_PAT }}
-        run: |
-          if [ -z "${PUSH_PAT:-}" ]; then
-            echo "::error::PUSH_PAT is required for the verified manual push"
-            exit 1
-          fi
-          git remote set-url origin "https://x-access-token:${PUSH_PAT}@github.com/elvisw/ppt-master.git"
-          git push origin HEAD:main
+      - name: Publish verified candidate
+        # Task 5A replaces the historical single-job manual publication sample:
+        # only the fresh trusted runner receives PUSH_PAT, and it pushes the
+        # authoritative verified SHA to a unique branch before creating a PR.
 ```
 
-workflow 的 manual OpenCode、Verify、Push 三个 step 的 if 必须逐字满足
-`github.event_name == 'workflow_dispatch' && steps.upstream.outputs.has_changes == 'true'`。
-目标文件必须从 `HEAD` 读取并等于 output SHA；工作树和 index 必须干净；BASE/目标必须
-是 HEAD 祖先；`${{ github.sha }}..HEAD` 中必须存在且仅存在一个恰好双父、直接父序为
-`^1=BASE_SHA`、`^2=EXPECTED_UPSTREAM_SHA` 的 merge commit。PAT 只在最后一个 step 注入。
+Task 5A 的 workflow 不再拆分 schedule/manual 的模型、verify、push step；两者共用同一个
+`has_changes` 条件、bundle manifest 和 fresh trusted publication step。目标必须从 immutable
+output 与 manifest 绑定；工作树和 index 必须干净；BASE/目标必须是 HEAD 祖先；candidate range
+中必须存在且仅存在一个恰好双父、直接父序为 `^1=BASE_SHA`、`^2=EXPECTED_UPSTREAM_SHA` 的
+merge commit。PAT 只在 trusted runner 的最后一个 step 注入。
 
 - [x] **Step 8: 静态验证并提交**
 

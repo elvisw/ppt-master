@@ -14,8 +14,35 @@ upstream  → https://github.com/hugohe3/ppt-master.git   (原作者)
 | 方式 | 触发 | 适用场景 | 自动发布 |
 |------|------|----------|----------|
 | **定时自动 (schedule)** | 每日 UTC 18:00 | 定期维护，无需人工干预 | ✅ 创建 PR |
-| **手动 (workflow_dispatch)** | 仅允许从 `main` 分支运行 | 需要立即同步到 `main` | ✅ 验证后由 workflow 推送 |
+| **手动 (workflow_dispatch)** | 仅允许从 `main` 分支运行 | 需要立即生成同步 PR | ✅ trusted job 创建 PR |
 | **本地 CLI** | `.opencode/command/sync-upstream.md` | 本地开发时手动执行 | ❌ 手动打 tag |
+
+---
+
+## Task 5A 最终安全边界
+
+`sync-upstream.yml` 使用固定 `sync-upstream` concurrency group，`cancel-in-progress: false`。
+schedule 和 workflow_dispatch 共用相同的两 job 路径：
+
+1. `prepare-candidate` 只声明 `contents: read`，以 `${{ github.sha }}` 完整检出并验证 immutable
+   base；workflow_dispatch 非 `refs/heads/main` 时 fail-closed。
+2. 该 job 明确 fetch canonical `upstream/main`；fetch 失败不使用 stale ref。无变化时模型、artifact、
+   trusted job、分支和 PR 全部跳过。
+3. 有变化时只执行一次固定 `opencode-ai@1.18.30`。模型只获得 API key、模型名、immutable target
+   和普通 Actions 元数据；不获得 `github.token`、`GITHUB_TOKEN`、`GH_TOKEN`、`PUSH_PAT` 或
+   `id-token: write`，也不能 push 或创建 PR。
+4. 模型提交后只上传 `candidate.bundle` 与严格三字段 `manifest.json`；不上传 worktree 或 `.git/config`。
+5. `verify-and-open-pr` 在 fresh runner 上从 base SHA 检出 trusted helper，只将 bundle/manifest 当作
+   不可信 Git object data。它不 checkout 或执行 candidate 文件、hook、workflow、配置、action 或进程。
+6. trusted helper 重新验证 manifest key/SHA、bundle ref tip、base/target/candidate object、marker、
+   upstream ancestry、唯一严格双父 merge、版本 bump 和 protected gate policy。
+7. 最终 publication step 才注入 `PUSH_PAT`，使用 null global/system Git config 和 disabled hooks，
+   将明确 verified SHA 推到 `opencode/sync-<run-id>-<attempt>`，再创建 `elvisw/ppt-master` → `main` PR。
+   绝不推送 `main`；main 前进、non-fast-forward 或任意 artifact mismatch 都 fail-closed。
+
+普通 PR 不得修改 protected workflow/helper/command/gate/test 文件；这些文件必须通过显式 trusted
+maintenance/bootstrap 流程维护。首次部署该 gate 的 PR 可能没有被 base 自身保护，必须依靠人工审查、
+独立测试和真实 Git/artifact 沙盘证明，不能声称新 gate 已保护它。
 
 ---
 
@@ -25,14 +52,13 @@ upstream  → https://github.com/hugohe3/ppt-master.git   (原作者)
 
 ```
 schedule cron → 检测 upstream/main → 无变化则跳过；有变化则注入 immutable SHA
-→ OpenCode Action 合并/适配 → Step 4e 门禁 → 创建分支和 PR
+→ prepare-candidate 运行 OpenCode → 上传 bundle/manifest → fresh trusted runner 复核
+→ 推唯一同步分支并创建 PR
 → PR 门禁通过并合并到 main → auto-tag.yml → publish-pypi.yml
 ```
 
-schedule 路径的 OpenCode Action 负责创建分支和 PR，不直接推送 `main`。PR 必须经过
-仓库现有门禁；Task 1 只建立同步提交的 immutable SHA 和真实双父 merge 契约，后续
-main/PR ancestry 门禁由独立任务接入。上游无变化时 OpenCode、提交和 PR 步骤均正常
-跳过。
+schedule 路径不使用 OpenCode GitHub Action。模型只准备候选提交；trusted job 使用 PAT 创建
+同步 PR，不直接推送 `main`。上游无变化时所有后续步骤均正常跳过。
 
 `EXPECTED_UPSTREAM_SHA` 由 workflow 注入 OpenCode 环境；Actions 中缺失或与 fetch 后
 的 `upstream/main` 不一致会 fail-closed。只有本地执行时，变量为空才允许回退到 fetch
@@ -45,15 +71,13 @@ main/PR ancestry 门禁由独立任务接入。上游无变化时 OpenCode、提
 
 1. 在 GitHub Actions 中选择 `Sync Upstream` 的 `workflow_dispatch`
 2. 选择 `main`；非 `refs/heads/main` 会被前置 guard 拒绝
-3. 有上游变化时，workflow 将 immutable `EXPECTED_UPSTREAM_SHA` 和模型变量注入 CLI
-4. OpenCode 只合并、适配和提交，不获得 `PUSH_PAT`，也不得执行 push
-5. OpenCode 退出后，Verify 先运行 `git diff --quiet && git diff --cached --quiet`，再运行
-   `git status --porcelain=v1 --untracked-files=all`；随后从 `HEAD:.github/upstream-main.sha`
-   读取记录，确认 `BASE_SHA` 与目标都是 HEAD 祖先，并找到恰好双父且父序为
-   `^1=BASE_SHA`、`^2=EXPECTED_UPSTREAM_SHA` 的 merge commit
-6. 以上 workflow 验证通过后，最后的 workflow step 才注入 `PUSH_PAT` 并执行
-   `git push origin HEAD:main`；缺少 PAT 或验证失败均停止，不 force-push
-7. 上游无变化时 OpenCode、Verify、Push 均跳过
+3. 有上游变化时，workflow 将 immutable `EXPECTED_UPSTREAM_SHA` 和模型变量注入固定 CLI
+4. OpenCode 只合并、适配和提交，不获得任何 GitHub 写凭据，也不得执行 push
+5. 新 trusted runner 下载并验证严格 manifest、Git bundle、base/target/candidate object、唯一双父
+   merge、版本形状和 protected gate policy
+6. 最后一个 workflow step 才注入 `PUSH_PAT`，显式推 verified SHA 到唯一分支并创建 PR；缺少 PAT、
+   main 前进或验证失败均停止，不 force-push、不 push main
+7. 上游无变化时 OpenCode、artifact、trusted job、branch 和 PR 均跳过
 
 ### 方式三：本地 OpenCode CLI
 
@@ -76,7 +100,7 @@ foreign HEAD 或 ignored/untracked marker 会保留现场并停止。
 
 | 工作流文件 | 触发 | 功能 |
 |-----------|------|------|
-| `sync-upstream.yml` | schedule / workflow_dispatch（仅 main） | 检测 immutable 上游目标；schedule 创建 PR，manual 验证后由 workflow 使用 PAT 推送 |
+| `sync-upstream.yml` | schedule / workflow_dispatch（仅 main） | 两 job 隔离模型与凭据；trusted job 推唯一分支并创建 PR |
 | `auto-tag.yml` | push to main (pyproject.toml 变更) | 7 道门禁校验 + 自动打 tag → 触发 PyPI 发布 |
 | `publish-pypi.yml` | tag push `v*` | 构建 wheel + 发布到 PyPI |
 | `opencode.yml` | issue_comment `/oc` | 通用 OpenCode Agent 入口 |
@@ -189,15 +213,15 @@ git tag vX.Y.Z && git push origin vX.Y.Z
 - **`.gitignore` 必须包含 `!uv.lock` 例外规则**（`*.lock` 会匹配 `uv.lock`）
 - **`workflow_dispatch` 只允许 `refs/heads/main`** — 前置 guard 缺失或 ref 不匹配时
   fail-closed；这不是可从功能分支绕过的同步入口
-- **OpenCode 不 push** — schedule 由 Action 基础设施创建分支和 PR；manual 的模型不
-  接触 `PUSH_PAT`，由 workflow 在 Verify 成功后最后注入 PAT 并运行
-  `git push origin HEAD:main`
-- **manual 无变化正常跳过** — OpenCode、Verify、Push 三步都要求
-  `workflow_dispatch && steps.upstream.outputs.has_changes == 'true'`
-- **验证必须针对提交对象** — Verify 先运行
-  `git diff --quiet && git diff --cached --quiet`，再读取
-  `git show HEAD:.github/upstream-main.sha | tr -d '\r\n'`；工作树中的未提交 marker
-  不能冒充已提交记录
+- **OpenCode 不 push** — schedule 和 manual 的模型都不接触任何 GitHub 写凭据；fresh trusted
+  runner 只有在所有 object/ref/ancestry 门禁通过后才注入 `PUSH_PAT`，推明确 SHA 到唯一同步分支
+  并创建 PR，绝不推送 `main`
+- **无变化正常跳过** — OpenCode、artifact、trusted job、branch 和 PR 统一由
+  `has_changes == 'true'` 控制
+- **artifact 必须严格** — 只允许 `candidate.bundle` 与 manifest；manifest 只能有
+  `base_sha`、`target_sha`、`verified_sha` 三个合法且匹配的 SHA，bundle tip 必须匹配 `verified_sha`
+- **验证必须针对提交对象** — trusted helper 只从 base checkout 执行，candidate 只作为 Git object
+  data 导入；工作树中的未提交 marker 不能冒充已提交记录
 - **验证必须拒绝未跟踪文件** — `git status --porcelain=v1 --untracked-files=all` 非空
   时 Verify 立即失败
 - **命令代码块不得共享普通变量** — 每个独立 shell 都通过 `git rev-parse --git-path`
@@ -215,6 +239,8 @@ git tag vX.Y.Z && git push origin vX.Y.Z
 
 | 文件 | 说明 |
 |------|------|
+| `.github/workflows/sync-upstream.yml` | 两 job 的 candidate bundle、trusted verification 和 PR publication |
+| `.github/scripts/check_upstream_ancestry.py` | base checkout 中执行的 ancestry、manifest、版本和 protected-file helper |
 | `.opencode/command/sync-upstream.md` | OpenCode sync-upstream 命令定义 |
 | `cli.py` | CLI 命令映射（根目录） |
 | `skills/ppt-master/cli.py` | CLI 命令映射（skill 目录） |

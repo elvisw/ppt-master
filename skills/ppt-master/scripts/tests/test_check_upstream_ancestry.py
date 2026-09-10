@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import tempfile
@@ -73,6 +74,8 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
         base: str | None,
         head: str,
         cwd: Path | None = None,
+        expected_target: str | None = None,
+        require_version_bump: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         args = [
             sys.executable,
@@ -86,6 +89,10 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
         ]
         if base is not None:
             args.extend(["--base-sha", base])
+        if expected_target is not None:
+            args.extend(["--expected-target-sha", expected_target])
+        if require_version_bump:
+            args.append("--require-version-bump")
         return subprocess.run(args, cwd=cwd or repo, text=True, capture_output=True, check=False)
 
     def _set_index_mode(self, repo: Path, mode: str, content: bytes) -> None:
@@ -191,10 +198,20 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
     def test_candidate_changes_to_protected_gate_files_fail_closed(self) -> None:
         protected_files = (
             ".github/scripts/check_upstream_ancestry.py",
+            ".github/workflows/sync-upstream.yml",
             ".github/workflows/check-upstream-ancestry.yml",
             ".github/workflows/check-uvx-migration.yml",
             ".github/workflows/auto-tag.yml",
             ".github/workflows/publish-pypi.yml",
+            ".opencode/command/sync-upstream.md",
+            "skills/ppt-master/scripts/check_cli_sync.py",
+            "skills/ppt-master/scripts/check_deps_sync.py",
+            "skills/ppt-master/scripts/check_uvx_migration.py",
+            "skills/ppt-master/scripts/attribution_guard.py",
+            "skills/ppt-master/scripts/auto_fix_uvx.py",
+            "skills/ppt-master/scripts/tests/test_check_upstream_ancestry.py",
+            "skills/ppt-master/scripts/tests/test_sync_upstream_ownership.py",
+            "skills/ppt-master/scripts/tests/test_sync_upstream_workflow.py",
         )
         for relative in protected_files:
             with self.subTest(relative=relative):
@@ -227,6 +244,9 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
             result = self._run_check(repo, base=base, head=head)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("two-parent merge", result.stdout)
+            rejected = self._run_check(repo, base=base, head=head, expected_target="0" * 40)
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("immutable expected target", rejected.stderr)
 
     def test_single_parent_with_valid_target_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -298,3 +318,99 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
             result = self._run_check(trusted, base=base, head=head, cwd=ROOT)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("two-parent merge", result.stdout)
+
+    def test_manifest_validator_accepts_exact_immutable_sha_set(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "manifest.json"
+            values = {
+                "base_sha": "a" * 40,
+                "target_sha": "b" * 40,
+                "verified_sha": "c" * 40,
+            }
+            path.write_text(json.dumps(values), encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(HELPER),
+                    "--manifest",
+                    str(path),
+                    "--expected-base-sha",
+                    values["base_sha"],
+                    "--expected-target-sha",
+                    values["target_sha"],
+                    "--expected-verified-sha",
+                    values["verified_sha"],
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_sync_candidate_requires_matching_forward_package_version_bump(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo, base = self._new_repo(
+                Path(temporary),
+                marker=f"{OLD_TARGET}\n".encode(),
+                extra_files={
+                    "pyproject.toml": b'[project]\nversion = "1.2.3"\n',
+                    "skills/ppt-master/pyproject.toml": b'[project]\nversion = "1.2.3"\n',
+                },
+            )
+            run_git(repo, "checkout", "-b", "upstream-branch")
+            target = self._commit_file(repo, "upstream.txt", "upstream\n", "upstream")
+            self._set_upstream(repo, target)
+            run_git(repo, "checkout", "-b", "sync", base)
+            run_git(repo, "merge", "--no-ff", "--no-commit", target)
+            (repo / MARKER).write_text(f"{target}\n", encoding="ascii")
+            run_git(repo, "add", MARKER)
+            run_git(repo, "commit", "-m", "sync merge")
+            for relative in ("pyproject.toml", "skills/ppt-master/pyproject.toml"):
+                (repo / relative).write_text('[project]\nversion = "1.2.4"\n', encoding="utf-8")
+                run_git(repo, "add", relative)
+            run_git(repo, "commit", "-m", "bump version")
+            head = git_output(repo, "rev-parse", "HEAD")
+            result = self._run_check(repo, base=base, head=head, require_version_bump=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+            bad_root = Path(temporary) / "bad"
+            bad_root.mkdir()
+            bad_repo, bad_base = self._new_repo(
+                bad_root,
+                marker=f"{OLD_TARGET}\n".encode(),
+                extra_files={
+                    "pyproject.toml": b'[project]\nversion = "1.2.3"\n',
+                    "skills/ppt-master/pyproject.toml": b'[project]\nversion = "1.2.3"\n',
+                },
+            )
+            run_git(bad_repo, "checkout", "-b", "upstream-branch")
+            bad_target = self._commit_file(bad_repo, "upstream.txt", "upstream\n", "upstream")
+            self._set_upstream(bad_repo, bad_target)
+            run_git(bad_repo, "checkout", "-b", "sync", bad_base)
+            run_git(bad_repo, "merge", "--no-ff", "--no-commit", bad_target)
+            (bad_repo / MARKER).write_text(f"{bad_target}\n", encoding="ascii")
+            run_git(bad_repo, "add", MARKER)
+            run_git(bad_repo, "commit", "-m", "sync merge")
+            bad_head = git_output(bad_repo, "rev-parse", "HEAD")
+            bad_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(HELPER),
+                    "--repo",
+                    str(bad_repo),
+                    "--base-sha",
+                    bad_base,
+                    "--head-sha",
+                    bad_head,
+                    "--upstream-ref",
+                    "upstream/main",
+                    "--require-version-bump",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(bad_result.returncode, 0)
+            self.assertIn("bump", bad_result.stderr)
