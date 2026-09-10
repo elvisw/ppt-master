@@ -25,7 +25,11 @@ agent: general
 ### Step 1: 拉取上游
 
 ```bash
-git fetch upstream
+if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+  echo "GitHub Actions: reusing upstream/main already fetched by the workflow"
+else
+  git fetch upstream
+fi
 git log main..upstream/main --oneline
 ```
 
@@ -73,6 +77,10 @@ if ! mkdir -- "$SYNC_STATE_DIR"; then
 fi
 
 cleanup_sync_state() {
+  if [ ! -d "$SYNC_STATE_DIR" ]; then
+    echo "Git-internal sync state directory is missing" >&2
+    return 1
+  fi
   if ! rm -rf -- "$SYNC_STATE_DIR"; then
     echo "Unable to clean the Git-internal sync state directory" >&2
     return 1
@@ -1328,9 +1336,7 @@ fi
 
 fail_after_commit() {
   FAILURE_STATUS="${1:-1}"
-  if ! cleanup_sync_state; then
-    FAILURE_STATUS=1
-  fi
+  echo "Post-commit verification failed; preserving Git-internal state for manual inspection" >&2
   exit "$FAILURE_STATUS"
 }
 

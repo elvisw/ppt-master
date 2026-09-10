@@ -286,6 +286,40 @@ git() {
             self.assertTrue(paths["dir"].exists())
 
     @unittest.skipUnless(BASH_AVAILABLE, "Git Bash is required for the ownership sandbox")
+    def test_foreign_orig_head_is_not_aborted_and_preserves_scene(self) -> None:
+        for step_name, step in (("Step 4e", self.step4e), ("Step 6", self.step6)):
+            with self.subTest(step=step_name):
+                with tempfile.TemporaryDirectory() as temporary:
+                    repo, base = self._new_repo(Path(temporary))
+                    run_git(repo, "checkout", "-b", "foreign-branch")
+                    (repo / "foreign.txt").write_text("foreign\n", encoding="utf-8")
+                    run_git(repo, "add", "foreign.txt")
+                    run_git(repo, "commit", "-m", "foreign")
+                    foreign = run_git(repo, "rev-parse", "HEAD").stdout.decode().strip()
+                    run_git(repo, "checkout", "main")
+                    target = self._add_target(repo, base=base)
+                    self._run_step1(repo, target)
+                    result = self._run_step2(repo)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    paths = self._state_paths(repo)
+                    run_git(repo, "update-ref", "ORIG_HEAD", foreign)
+
+                    result = run_bash(step, repo, {"GITHUB_ACTIONS": "false"})
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertTrue(paths["dir"].exists())
+                    self.assertTrue(paths["merge_head"].exists())
+                    self.assertEqual(paths["merge_head"].read_text(encoding="utf-8").strip(), target)
+                    self.assertEqual(
+                        run_git(repo, "rev-parse", "--verify", "HEAD").stdout.decode().strip(),
+                        base,
+                    )
+                    self.assertEqual(
+                        run_git(repo, "rev-parse", "--verify", "ORIG_HEAD").stdout.decode().strip(),
+                        foreign,
+                    )
+                    self.assertEqual(self._marker_bytes(repo), f"{target}\n".encode())
+
+    @unittest.skipUnless(BASH_AVAILABLE, "Git Bash is required for the ownership sandbox")
     def test_missing_merge_head_safely_restores_marker_and_cleans_state(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repo, base = self._new_repo(Path(temporary))
