@@ -29,13 +29,36 @@ git log main..upstream/main --oneline
 
 记录上游新增的提交数量和主题。
 
+**建立本次同步的 immutable upstream 目标。** GitHub Actions 环境中，prompt 提供的
+`EXPECTED_UPSTREAM_SHA` 就是本次运行必须合并的确切提交；本地运行中该变量为空时取
+fetch 后的 upstream tip。两者都必须等于 fetch 后的 `upstream/main`，否则立即停止：
+
+```bash
+FETCHED_UPSTREAM_SHA=$(git rev-parse upstream/main)
+if [ -z "${EXPECTED_UPSTREAM_SHA:-}" ]; then
+  EXPECTED_UPSTREAM_SHA="$FETCHED_UPSTREAM_SHA"
+fi
+if [ "$EXPECTED_UPSTREAM_SHA" != "$FETCHED_UPSTREAM_SHA" ]; then
+  echo "Expected upstream SHA does not match fetched upstream/main" >&2
+  exit 1
+fi
+printf '%s\n' "$EXPECTED_UPSTREAM_SHA" > .github/upstream-main.sha
+```
+
+写入 `.github/upstream-main.sha` 的值必须是 40 位小写十六进制 SHA；该文件随后由
+Step 4e 门禁 7 与 Step 6 的提交程序共同消费。
+
 ---
 
 ### Step 2: 合并上游
 
 ```bash
-git merge upstream/main
+git merge --no-ff --no-commit "$EXPECTED_UPSTREAM_SHA"
 ```
+
+**历史改写禁令（不可绕过）**：从 merge 开始到 merge commit 创建完成，禁止
+reset、rebase、squash、cherry-pick、切换分支和清除 `MERGE_HEAD`。失败时唯一允许的
+中止路径是 `git merge --abort`，中止后立即停止整个流程。
 
 **如果合并失败且冲突无法解决**（如上游大规模重构导致 fork 的 cli.py/uvx 适配完全冲突），立即中止：
 
@@ -43,7 +66,8 @@ git merge upstream/main
 git merge --abort
 ```
 
-中止后向用户报告失败原因和具体冲突范围，由用户决定下一步。
+中止后向用户报告失败原因和具体冲突范围，由用户决定下一步。merge 未提交前
+`MERGE_HEAD` 必须始终等于 `"$EXPECTED_UPSTREAM_SHA"`。
 
 ---
 
@@ -244,7 +268,7 @@ python skills/ppt-master/scripts/check_cli_sync.py
 
 #### 4e. 提交前门禁（必须通过）
 
-在 `git commit` 之前，**必须**确认以下六项全部通过：
+在 `git commit` 之前，**必须**确认以下七项全部通过：
 
 1. **全仓库扫描零残留**：重复 Step 4d 的 `rg` 命令，确认输出为空
 2. **cli.py 同步**：`python skills/ppt-master/scripts/check_cli_sync.py` 确认 OK
@@ -282,8 +306,16 @@ python skills/ppt-master/scripts/check_cli_sync.py
    ```
 
    门禁 4 的 grep 只验证适配标记存在，无法发现"标记在但代码坏"（如 `launch_token = uuid.uuid4().hex` 缺 `import uuid`）。F821 静态分析不执行导入，可捕获此类错误。任一失败必须修复后再提交。
+7. **merge-state 门禁**：在 `git commit` 创建 merge commit 之前验证 merge 状态与目标文件仍然成立：
 
-**六项有任何一项不通过，禁止提交。** 回到对应步骤修复后重新验证。
+   ```bash
+   test "$(git rev-parse -q --verify MERGE_HEAD)" = "$EXPECTED_UPSTREAM_SHA"
+   test "$(tr -d '\r\n' < .github/upstream-main.sha)" = "$EXPECTED_UPSTREAM_SHA"
+   ```
+
+   任一命令非零（`MERGE_HEAD` 被清除/改写，或目标文件与选定 SHA 不一致）都停止，不提交。
+
+**七项有任何一项不通过，禁止提交。** 回到对应步骤修复后重新验证。
 
 ### Step 5: 依赖同步
 
@@ -302,14 +334,23 @@ python skills/ppt-master/scripts/check_deps_sync.py
 
 ### Step 6: 提交、打版本号、推送
 
-**提交前确认 Step 4e 门禁已通过（全仓库扫描零残留 + cli.py 同步 + Skill 完整性 guard）。**
+**提交前确认 Step 4e 门禁已通过（七项全部通过，含 merge-state 门禁）。**
 
 ```bash
-# 提交合并和适配（仅已追踪文件的更新 + 新文件）
+# 提交合并和适配（仅已追踪文件的更新 + 新文件 + 目标文件）
+PRE_MERGE_HEAD=$(git rev-parse HEAD)
 git add -u
-git add cli.py skills/ppt-master/cli.py pyproject.toml skills/ppt-master/pyproject.toml
+git add .github/upstream-main.sha cli.py skills/ppt-master/cli.py pyproject.toml skills/ppt-master/pyproject.toml
 git commit -m "merge upstream/main: resolve conflicts, adapt to uvx, sync cli.py mappings"
+SYNC_MERGE_COMMIT=$(git rev-parse HEAD)
+test "$(git rev-parse "$SYNC_MERGE_COMMIT^1")" = "$PRE_MERGE_HEAD"
+test "$(git rev-parse "$SYNC_MERGE_COMMIT^2")" = "$EXPECTED_UPSTREAM_SHA"
+git merge-base --is-ancestor "$EXPECTED_UPSTREAM_SHA" "$SYNC_MERGE_COMMIT"
+```
 
+三条验证任一失败，说明 merge commit 的提交关系被破坏（非双亲 merge 或上游提交不是祖先），禁止继续发布，回到 Step 4e 门禁排查。
+
+```bash
 # 查看当前版本
 python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
 
@@ -320,18 +361,16 @@ git add pyproject.toml skills/ppt-master/pyproject.toml
 git commit -m "chore: bump version to X.Y.Z"
 ```
 
+版本提交保持独立，与 merge commit 分离。版本提交完成后再次验证 ancestry 仍然成立：
+
+```bash
+git merge-base --is-ancestor "$EXPECTED_UPSTREAM_SHA" HEAD
+```
+
 **如果在 GitHub Actions 环境中运行：**
 
-- **OpenCode Action 路径（schedule 触发）**：跳过 push — action 会自动创建分支和 PR，PR 合并后触发下游 CI 链（`check-uvx-migration` → `auto-tag` → `publish-pypi`）
-- **CLI 路径（workflow_dispatch / `opencode run`）**：直接 push 到 main。git remote 已配置为 `secrets.PUSH_PAT`，PAT 推送会自然触发下游 CI 链
-
-CLI 路径执行：
-```bash
-git push origin main
-```
-push 后下游自动触发，无需手动 `gh workflow run`。
-
-> ⚠️ 无论是哪种路径，都不要手动 `git tag`。tag 由 `auto-tag.yml` 统一管理。
+- **OpenCode Action 路径（schedule 触发）**：不 push — 由 action 基础设施自动创建分支和 PR，PR 合并后触发下游 CI 链（`check-uvx-migration` → `auto-tag` → `publish-pypi`）
+- **CLI 路径（workflow_dispatch）**：不 push — 由 workflow 在 OpenCode 退出后验证 ancestry 并执行 push；模型不得获得 push 凭据，也不得执行任何 push
 
 **如果本地运行：**
 ```bash
@@ -348,7 +387,7 @@ git push origin vX.Y.Z
 
 **schedule 触发路径：** 输出 "PR 已创建，合并后 auto-tag → publish-pypi 自动触发。查看 https://github.com/elvisw/ppt-master/actions"
 
-**workflow_dispatch 路径：** 输出 "Push 成功，下游 CI 链自动触发。查看 https://github.com/elvisw/ppt-master/actions"
+**workflow_dispatch 路径：** 输出 "同步提交完成，workflow 将验证 ancestry 并自动 push，下游 CI 链自动触发。查看 https://github.com/elvisw/ppt-master/actions"
 
 **本地流程：** 输出 Actions 页面 URL，提醒用户运行 `uvx ppt-master --version` 验证。
 
