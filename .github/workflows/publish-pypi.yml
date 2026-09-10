@@ -13,19 +13,87 @@ jobs:
       id-token: write
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - name: Guard manual publish ref
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          if [ "${GITHUB_REF:-}" != "refs/heads/main" ]; then
+            echo "::error::workflow_dispatch publish must run from refs/heads/main"
+            exit 1
+          fi
+
+      - name: Checkout tag commit
+        if: github.event_name == 'push'
+        uses: actions/checkout@v6
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout selected manual main commit
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch release gate refs
+        run: |
+          git fetch --no-tags origin main
+          git remote add upstream https://github.com/hugohe3/ppt-master.git
+          git fetch --no-tags upstream main
+
+      - name: Verify selected publish commit
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          if ! git cat-file -e "${RELEASE_SHA}^{commit}"; then
+            echo "::error::Selected publish commit is unavailable"
+            exit 1
+          fi
+          if [ "$(git rev-parse HEAD)" != "$RELEASE_SHA" ]; then
+            echo "::error::Checked out commit does not match the selected publish commit"
+            exit 1
+          fi
+          if [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ] &&
+             [ "$(git rev-parse refs/remotes/origin/main)" != "$RELEASE_SHA" ]; then
+            echo "::error::Manual publish commit is not the current origin/main tip"
+            exit 1
+          fi
+
+      - name: Verify recorded upstream ancestry
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          python3 .github/scripts/check_upstream_ancestry.py \
+            --head-sha "$RELEASE_SHA" \
+            --upstream-ref upstream/main
+
+      - name: Run uvx migration check (manual dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          EXIT=0
+          python3 skills/ppt-master/scripts/check_uvx_migration.py HEAD || EXIT=$?
+          if [ "$EXIT" -eq 2 ]; then
+            echo "::notice::Not a merge commit — skipped (no upstream code to check)"
+          elif [ "$EXIT" -ne 0 ]; then
+            echo "::error::python3 remnants found in merge commit — uvx adaptation incomplete"
+            exit 1
+          fi
       - uses: astral-sh/setup-uv@v5
 
       - name: Verify version matches tag
         run: |
-          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
           ROOT_VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
           SKILLS_VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('skills/ppt-master/pyproject.toml','rb'))['project']['version'])")
-          if [ "$TAG_VERSION" != "$ROOT_VERSION" ]; then
-            echo "::error::Tag v${TAG_VERSION} != pyproject.toml version ${ROOT_VERSION}"
-            exit 1
+          if [ "${GITHUB_EVENT_NAME:-}" = "push" ]; then
+            TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+            if [ "$TAG_VERSION" != "$ROOT_VERSION" ]; then
+              echo "::error::Tag v${TAG_VERSION} != pyproject.toml version ${ROOT_VERSION}"
+              exit 1
+            fi
+          else
+            echo "Manual publish from verified main uses version ${ROOT_VERSION}"
           fi
           if [ "$ROOT_VERSION" != "$SKILLS_VERSION" ]; then
             echo "::error::Root version ${ROOT_VERSION} != skills version ${SKILLS_VERSION}"

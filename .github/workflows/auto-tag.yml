@@ -16,11 +16,70 @@ jobs:
       contents: write
       actions: write
     steps:
-      - uses: actions/checkout@v6
+      - name: Guard manual auto-tag ref
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          if [ "${GITHUB_REF:-}" != "refs/heads/main" ]; then
+            echo "::error::workflow_dispatch auto-tag must run from refs/heads/main"
+            exit 1
+          fi
+
+      - name: Checkout verified workflow-run commit
+        if: github.event_name == 'workflow_run'
+        uses: actions/checkout@v6
         with:
-          ref: main
+          ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
+
+      - name: Checkout selected manual main commit
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch release gate refs
+        run: |
+          git fetch --no-tags origin main
+          git remote add upstream https://github.com/hugohe3/ppt-master.git
+          git fetch --no-tags upstream main
+
+      - name: Verify selected release commit
+        env:
+          RELEASE_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          if ! git cat-file -e "${RELEASE_SHA}^{commit}"; then
+            echo "::error::Selected release commit is unavailable"
+            exit 1
+          fi
+          CHECKED_OUT_SHA=$(git rev-parse HEAD)
+          ORIGIN_MAIN_SHA=$(git rev-parse refs/remotes/origin/main)
+          if [ "$CHECKED_OUT_SHA" != "$RELEASE_SHA" ] || [ "$ORIGIN_MAIN_SHA" != "$RELEASE_SHA" ]; then
+            echo "::error::The selected release commit is not the current origin/main tip"
+            exit 1
+          fi
+
+      - name: Verify recorded upstream ancestry
+        env:
+          RELEASE_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          python3 .github/scripts/check_upstream_ancestry.py \
+            --head-sha "$RELEASE_SHA" \
+            --upstream-ref upstream/main
+
+      - name: Run uvx migration check (manual dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          EXIT=0
+          python3 skills/ppt-master/scripts/check_uvx_migration.py HEAD || EXIT=$?
+          if [ "$EXIT" -eq 2 ]; then
+            echo "::notice::Not a merge commit — skipped (no upstream code to check)"
+          elif [ "$EXIT" -ne 0 ]; then
+            echo "::error::python3 remnants found in merge commit — uvx adaptation incomplete"
+            exit 1
+          fi
 
       - name: Read version
         id: version
@@ -58,6 +117,8 @@ jobs:
       - name: Commit OpenCode fixes
         if: steps.check.outputs.exists == 'false'
         id: commit
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -67,11 +128,34 @@ jobs:
           else
             git add -u
             git commit -m "fix: opencode auto-correct uvx command format" || true
+            git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
             git pull --rebase origin main
             git push origin main
             echo "changed=true" >> $GITHUB_OUTPUT
             echo "Committed OpenCode fixes and pushed."
           fi
+
+      - name: Recheck selected release commit before tagging
+        if: steps.check.outputs.exists == 'false'
+        env:
+          RELEASE_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          git fetch --no-tags origin main
+          CHECKED_OUT_SHA=$(git rev-parse HEAD)
+          ORIGIN_MAIN_SHA=$(git rev-parse refs/remotes/origin/main)
+          if [ "$CHECKED_OUT_SHA" != "$RELEASE_SHA" ] || [ "$ORIGIN_MAIN_SHA" != "$RELEASE_SHA" ]; then
+            echo "::error::Release commit changed during preparation; refusing to tag"
+            exit 1
+          fi
+
+      - name: Re-verify recorded upstream ancestry before tagging
+        if: steps.check.outputs.exists == 'false'
+        env:
+          RELEASE_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          python3 .github/scripts/check_upstream_ancestry.py \
+            --head-sha "$RELEASE_SHA" \
+            --upstream-ref upstream/main
 
       # ── Gate 0: 版本一致性 ──
       - name: Gate — Version sync
@@ -152,9 +236,12 @@ jobs:
       # ── 通过所有门禁，创建 tag → 触发 publish-pypi.yml ──
       - name: Create tag
         if: steps.check.outputs.exists == 'false'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.tag }}"
           git push origin "${{ steps.version.outputs.tag }}"
           echo "✅ Tag ${{ steps.version.outputs.tag }} created"
@@ -162,7 +249,7 @@ jobs:
       - name: Trigger PyPI publish
         if: steps.check.outputs.exists == 'false'
         run: |
-          gh workflow run publish-pypi.yml --ref "${{ steps.version.outputs.tag }}"
-          echo "✅ Triggered publish-pypi.yml for ${{ steps.version.outputs.tag }}"
+          gh workflow run publish-pypi.yml --ref main
+          echo "✅ Triggered publish-pypi.yml from verified main"
         env:
           GH_TOKEN: ${{ github.token }}
