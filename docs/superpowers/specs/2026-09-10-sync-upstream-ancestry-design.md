@@ -101,11 +101,13 @@ git merge-base --is-ancestor "$EXPECTED_UPSTREAM_SHA" HEAD
 `${{ steps.upstream.outputs.upstream_sha }}`。OpenCode action 仍负责创建分支和 PR。
 
 新增 `.github/workflows/check-upstream-ancestry.yml`，不配置 `paths` filter，使用
-`pull_request_target`。它先在独立 `trusted/` 目录以 base SHA 检出受信任脚本，
-再在独立 `candidate/` 目录以 head SHA 检出仅作为 Git object 数据的候选树；两个
-checkout 都使用 `persist-credentials: false`。workflow 只执行 `trusted/` 中的
-shell 与 helper，并以 `--repo candidate` 指向候选对象，绝不执行候选脚本、action
-或 shell。base/head 必须是非空 40 位小写 SHA，且 checkout 结果必须逐一等于事件值。
+`pull_request_target`。它只在 `trusted/` 目录以 base SHA 检出受信任脚本，并使用
+`persist-credentials: false`；校验 PR number/base/head 后，从 base repo 的
+`refs/pull/<number>/head` 精确 fetch PR head object 到同一 trusted object store，
+机械确认 `FETCH_HEAD == event HEAD_SHA`。workflow 只执行 `trusted/` 中的 shell 与
+helper，以 `--repo trusted` 指向同一对象库，绝不 checkout 或执行候选脚本、action
+或 shell。base/head 必须是非空 40 位小写 SHA，且 trusted checkout/fetched object
+必须逐一等于事件值。
 
 trusted helper 在 PR 模式先检查 base..head diff 不得修改任何受保护门禁文件：
 `.github/scripts/check_upstream_ancestry.py`、四个 ancestry/release workflow；任一

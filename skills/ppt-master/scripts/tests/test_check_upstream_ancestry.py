@@ -262,3 +262,39 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
             rejected = self._run_check(repo, base=None, head=rejected_head)
             self.assertNotEqual(rejected.returncode, 0)
             self.assertIn("upstream/main history", rejected.stderr)
+
+    def test_trusted_object_store_verifies_head_without_candidate_base_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            candidate, base = self._new_repo(root, marker=f"{OLD_TARGET}\n".encode())
+            run_git(candidate, "checkout", "-b", "upstream-branch")
+            target = self._commit_file(candidate, "upstream.txt", "upstream\n", "upstream")
+            run_git(candidate, "checkout", "-b", "sync", base)
+            run_git(candidate, "merge", "--no-ff", "--no-commit", target)
+            (candidate / MARKER).write_bytes(f"{target}\n".encode("ascii"))
+            run_git(candidate, "add", MARKER)
+            run_git(candidate, "commit", "-m", "sync merge")
+            head = git_output(candidate, "rev-parse", "HEAD")
+            run_git(candidate, "update-ref", "refs/remotes/upstream/main", target)
+
+            trusted = root / "trusted"
+            trusted.mkdir()
+            run_git(trusted, "init", "-b", "main")
+            run_git(trusted, "config", "user.name", "Trusted User")
+            run_git(trusted, "config", "user.email", "trusted@example.invalid")
+            run_git(trusted, "remote", "add", "origin", str(candidate))
+            run_git(trusted, "fetch", "origin", "refs/heads/main:refs/remotes/origin/base")
+            run_git(trusted, "checkout", "-b", "main", "refs/remotes/origin/base")
+
+            run_git(candidate, "update-ref", "-d", "refs/heads/main")
+            self.assertNotEqual(
+                run_git(candidate, "rev-parse", "--verify", "refs/heads/main", check=False).returncode,
+                0,
+            )
+            run_git(trusted, "fetch", "origin", "refs/heads/sync", check=True)
+            self.assertEqual(git_output(trusted, "rev-parse", "FETCH_HEAD"), head)
+            run_git(trusted, "update-ref", "refs/remotes/upstream/main", target)
+
+            result = self._run_check(trusted, base=base, head=head, cwd=ROOT)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("two-parent merge", result.stdout)

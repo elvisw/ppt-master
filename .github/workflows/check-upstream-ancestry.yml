@@ -18,33 +18,18 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Checkout candidate as inert data
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          ref: ${{ github.event.pull_request.head.sha }}
-          path: candidate
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Fetch upstream into trusted checkout
+      - name: Validate pull request object identity
         working-directory: trusted
         env:
-          CANDIDATE_DIR: ${{ github.workspace }}/candidate
-        run: |
-          git remote add upstream https://github.com/hugohe3/ppt-master.git
-          git fetch --no-tags upstream main
-          git -C "$CANDIDATE_DIR" remote add upstream https://github.com/hugohe3/ppt-master.git
-          git -C "$CANDIDATE_DIR" fetch --no-tags upstream main
-
-      - name: Verify event identities and trusted ancestry
-        working-directory: trusted
-        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          CANDIDATE_DIR: ${{ github.workspace }}/candidate
         run: |
           set -euo pipefail
+          if [[ -z "$PR_NUMBER" || ! "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::pull_request_target number is missing or malformed"
+            exit 1
+          fi
           if [[ -z "$BASE_SHA" || ! "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::pull_request_target base SHA is missing or malformed"
             exit 1
@@ -57,14 +42,45 @@ jobs:
             echo "::error::Trusted checkout is not the pull request base SHA"
             exit 1
           fi
-          if [ "$(git -C "$CANDIDATE_DIR" rev-parse HEAD)" != "$HEAD_SHA" ]; then
-            echo "::error::Candidate checkout is not the pull request head SHA"
+          git cat-file -e "${BASE_SHA}^{commit}"
+
+      - name: Fetch PR head object into trusted store
+        working-directory: trusted
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git -c "http.extraheader=AUTHORIZATION: bearer ${GITHUB_TOKEN}" \
+            fetch --no-tags origin "refs/pull/${PR_NUMBER}/head"
+          FETCHED_HEAD=$(git rev-parse FETCH_HEAD)
+          if [ "$FETCHED_HEAD" != "$HEAD_SHA" ]; then
+            echo "::error::Fetched pull request head does not match the event head SHA"
             exit 1
           fi
-          git cat-file -e "${BASE_SHA}^{commit}"
-          git -C "$CANDIDATE_DIR" cat-file -e "${HEAD_SHA}^{commit}"
+          git cat-file -e "${HEAD_SHA}^{commit}"
+
+      - name: Fetch upstream into trusted checkout
+        working-directory: trusted
+        run: |
+          git remote add upstream https://github.com/hugohe3/ppt-master.git
+          git fetch --no-tags upstream main
+
+      - name: Verify event identities and trusted ancestry
+        working-directory: trusted
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$(git rev-parse HEAD)" != "$BASE_SHA" ]; then
+            echo "::error::Trusted checkout is not the pull request base SHA"
+            exit 1
+          fi
+          git cat-file -e "${HEAD_SHA}^{commit}"
           python3 .github/scripts/check_upstream_ancestry.py \
-            --repo "$CANDIDATE_DIR" \
+            --repo "$GITHUB_WORKSPACE/trusted" \
             --base-sha "$BASE_SHA" \
             --head-sha "$HEAD_SHA" \
             --upstream-ref upstream/main

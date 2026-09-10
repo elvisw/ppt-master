@@ -720,11 +720,12 @@ git commit -m "ci: gate upstream ancestry before publish"
 
 **Exact contract:**
 
-- PR gate 使用 `pull_request_target`：base SHA checkout 到 `trusted/`，head SHA
-  checkout 到 `candidate/`，两者独立且 `persist-credentials: false`；所有 shell、
-  helper 和解析逻辑从 trusted base 执行，candidate 只作为 Git object 数据传给
-  `--repo`，绝不执行 candidate 脚本、action 或 shell。base/head 必须显式非空、40
-  位小写 hex，并逐一等于事件 SHA。
+- PR gate 使用 `pull_request_target`：只将 base SHA checkout 到 `trusted/`，使用
+  `persist-credentials: false`；先校验 PR number/base/head，再从 base repo 的
+  `refs/pull/<number>/head` 精确 fetch PR head object 到同一 trusted object store，
+  并机械确认 `FETCH_HEAD == event HEAD_SHA`。不 checkout candidate、不执行任何
+  candidate 内容；所有 shell、helper 和解析逻辑从 trusted base 执行，helper 使用
+  `--repo trusted`。base/head 必须显式非空、40 位小写 hex，并逐一等于事件对象。
 - trusted helper 的 PR 模式先机械拒绝 base..head 修改五个 protected gate 文件：
   `.github/scripts/check_upstream_ancestry.py`、
   `.github/workflows/check-upstream-ancestry.yml`、
@@ -738,7 +739,7 @@ git commit -m "ci: gate upstream ancestry before publish"
   PR 状态保持 absent/absent skip、deleted fail、added/changed 完整验证、相同普通
   blob skip；changed 仍要求 upstream history、head ancestry 和唯一严格双父 merge。
 - `.github/scripts/check_upstream_ancestry.py` 是唯一 ancestry owner，支持 `--repo`
-  供 trusted script 检查 candidate；不加入用户 CLI。
+  供 trusted script 检查同一 trusted object store；不加入用户 CLI。
 - auto-tag 在 tag 前最后一步再次 fetch `origin/main`，确认 `HEAD == origin/main`，
   再将 tag 指向该 HEAD。发布 owner 选择 **tag-push**：使用现有 `PUSH_PAT` 让 tag
   push 触发 publish；移除 auto-tag 的显式 publish dispatch，避免 tag push 与 dispatch
@@ -752,8 +753,8 @@ git commit -m "ci: gate upstream ancestry before publish"
 
 **Files:**
 
-- [x] `.github/workflows/check-upstream-ancestry.yml`：trusted/candidate 双 checkout、
-  event identity、trusted helper 与 protected diff gate。
+- [x] `.github/workflows/check-upstream-ancestry.yml`：trusted-only checkout、PR head
+  object fetch/identity、trusted helper 与 protected diff gate。
 - [x] `.github/workflows/check-uvx-migration.yml`：object-only main gate、权限与 checkout
   hardening。
 - [x] `.github/workflows/auto-tag.yml`：immutable tag 前复核、PUSH_PAT tag owner、移除
@@ -762,8 +763,8 @@ git commit -m "ci: gate upstream ancestry before publish"
   binding、ancestry/migration-before-build gate。
 - [x] `.github/scripts/check_upstream_ancestry.py`：`--repo`、protected diff、严格 marker
   LF 与 explicit empty base 防降级。
-- [x] `skills/ppt-master/scripts/tests/test_check_upstream_ancestry.py`：trusted repo、
-  candidate protected tamper、空 base、严格 marker 内容回归。
+- [x] `skills/ppt-master/scripts/tests/test_check_upstream_ancestry.py`：trusted object
+  store fetch、candidate refs 缺 base、protected tamper、空 base、严格 marker 内容回归。
 - [x] `docs/superpowers/specs/2026-09-10-sync-upstream-ancestry-design.md`：trusted
   bootstrap 边界与维护流程。
 - [x] `.superpowers/sdd/sync-upstream-task-2-report.md`：追加本轮测试、owner 决策与残余
@@ -771,13 +772,14 @@ git commit -m "ci: gate upstream ancestry before publish"
 
 **Verification:**
 
-- [x] 四个 workflow YAML parse、`git diff --check`、trusted workflow 不执行 candidate
-  内容的静态审计。
+- [x] 四个 workflow YAML parse、`git diff --check`、trusted-only workflow 不执行
+  candidate 内容的静态审计。
 - [x] helper/ownership unit tests：candidate helper/workflow 篡改 fail、trusted base
   helper 实际执行、empty `--base-sha` fail、无 LF/CRLF/多行 fail、正确 LF pass。
-- [x] 真实 Git 沙盘：trusted/candidate 双 checkout、tag 前 main 前进 fail、tag 后 main
-  前进仍发布 tag SHA、tag/SHA mismatch fail、重复自动发布入口不可达。
-- [x] 新提交 `fix(ci): bind trusted ancestry gates to release sha`；不 amend、不 push、
+- [x] 真实 Git 沙盘：candidate refs 缺 base 但 head fetch 到 trusted 后通过、FETCH_HEAD
+  与 event HEAD_SHA 不一致 fail、tag 前 main 前进 fail、tag 后 main 前进仍发布 tag SHA、
+  tag/SHA mismatch fail、重复自动发布入口不可达。
+- [x] 新提交 `fix(ci): verify fork prs in trusted object store`；不 amend、不 push、
   不建 PR、不做 Task 3/4、不 bump 版本、不改 progress.md。
 
 ---
