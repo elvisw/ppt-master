@@ -12,6 +12,34 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/hugohe3/ppt-master.git
+          git fetch --no-tags upstream main
+
+      - name: Verify recorded upstream ancestry
+        run: |
+          TARGET_FILE=.github/upstream-main.sha
+          if [ ! -f "$TARGET_FILE" ]; then
+            echo "::error::Missing $TARGET_FILE"
+            exit 1
+          fi
+          TARGET=$(tr -d '\r\n' < "$TARGET_FILE")
+          if ! printf '%s\n' "$TARGET" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::Invalid recorded upstream SHA: $TARGET"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$TARGET" upstream/main; then
+            echo "::error::Recorded SHA is not in upstream/main history: $TARGET"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$TARGET" HEAD; then
+            echo "::error::Recorded upstream SHA is not an ancestor of main HEAD"
+            git log --graph --oneline --decorate --max-count=30 HEAD upstream/main
+            exit 1
+          fi
+          echo "Verified recorded upstream ancestor $TARGET"
+
       - name: Run uvx migration check
         id: check
         run: |

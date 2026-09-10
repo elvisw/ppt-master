@@ -538,11 +538,18 @@ git commit -m "fix(ci): preserve merge abort ownership"
   `ORIG_HEAD` 作为原始第一父；marker 只在此后写入/暂存。already-up-to-date、冲突、
   marker 写入失败、git add 失败和提交前 gate 失败都统一按 ownership 结果处理：安全拥有
   时 abort/恢复 marker/清理整个 state dir，foreign 场景不 abort、不恢复并保留现场；提交
-  后验证 `HEAD^1`/`HEAD^2` 后清理状态。
+  后验证 `HEAD^1`/`HEAD^2`，仅成功路径清理状态，post-commit 校验失败保留 ownership 现场。
 - [x] 追加独立 shell、state lock、already-up-to-date、foreign target/original、缺失
   MERGE_HEAD 安全恢复、tracked/absent marker、ignored marker、marker/add failure、
   untracked 和成功双父行为沙盘；记录到
   `.superpowers/sdd/sync-upstream-task-1-report.md`。临时测试验证后删除，不纳入提交。
+
+### Task 1 复审 Minor 收口
+
+- [x] Actions 环境复用 workflow 已 fetch 的 `upstream/main`，仅本地执行 `git fetch upstream`，并保留 `EXPECTED_UPSTREAM_SHA` 与 fetched tip 的相等校验。
+- [x] Step 1、Step 2、Step 4e、Step 6 统一使用目录不存在即失败的 `cleanup_sync_state` 实现。
+- [x] `fail_after_commit` 在 post-commit 校验失败时保留 ownership 状态目录，仅成功路径清理。
+- [x] foreign `ORIG_HEAD` 沙盘同时覆盖 Step 4e 与 Step 6：拒绝 abort 并保留 `MERGE_HEAD`、marker、HEAD 与状态目录。
 
 ---
 
@@ -557,7 +564,7 @@ git commit -m "fix(ci): preserve merge abort ownership"
 - Produces: PR check `Check Upstream Ancestry / check`。
 - Produces: main gate `Verify recorded upstream ancestry`，位于现有 uvx migration check 之前。
 
-- [ ] **Step 1: 写入 PR check workflow**
+- [x] **Step 1: 写入 PR check workflow**
 
 `.github/workflows/check-upstream-ancestry.yml` 完整内容：
 
@@ -574,7 +581,7 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
@@ -613,19 +620,33 @@ jobs:
             git log --graph --oneline --decorate "$BASE_SHA..$HEAD_SHA"
             exit 1
           fi
-          MERGE_COMMIT=$(git rev-list --merges --parents "$BASE_SHA..$HEAD_SHA" |
-            awk -v target="$TARGET" '{ for (i = 2; i <= NF; i++) if ($i == target) { print $1; exit } }')
-          if [ -z "$MERGE_COMMIT" ]; then
-            echo "::error::No new merge commit has recorded upstream SHA as a direct parent"
+          if ! MERGE_LINES=$(git rev-list --merges --parents "$BASE_SHA..$HEAD_SHA"); then
+            echo "::error::Unable to enumerate merge commits after PR base"
             git log --graph --oneline --decorate "$BASE_SHA..$HEAD_SHA"
             exit 1
           fi
-          echo "Verified merge commit $MERGE_COMMIT with upstream parent $TARGET"
+          if ! MATCHES=$(printf '%s\n' "$MERGE_LINES" |
+            awk -v base="$BASE_SHA" -v target="$TARGET" 'NF == 3 && $2 == base && $3 == target { print $1 }'); then
+            echo "::error::Unable to inspect merge commit parents"
+            git log --graph --oneline --decorate "$BASE_SHA..$HEAD_SHA"
+            exit 1
+          fi
+          if ! MATCH_COUNT=$(printf '%s\n' "$MATCHES" | awk 'NF { count += 1 } END { print count + 0 }'); then
+            echo "::error::Unable to count matching merge commits"
+            git log --graph --oneline --decorate "$BASE_SHA..$HEAD_SHA"
+            exit 1
+          fi
+          if [ "$MATCH_COUNT" -ne 1 ]; then
+            echo "::error::Expected exactly one two-parent merge with ^1=$BASE_SHA and ^2=$TARGET"
+            git log --graph --oneline --decorate "$BASE_SHA..$HEAD_SHA"
+            exit 1
+          fi
+          echo "Verified two-parent merge commit $MATCHES with ^1=$BASE_SHA and ^2=$TARGET"
 ```
 
-该 workflow 不带 `paths` filter，也不依赖同步分支命名。
+该 workflow 不带 `paths` filter，也不依赖同步分支命名；普通 PR 在目标文件相对 base 未变化时直接 skip。
 
-- [ ] **Step 2: 在 main 发布入口增加记录目标门禁**
+- [x] **Step 2: 在 main 发布入口增加记录目标门禁**
 
 `check-uvx-migration.yml` checkout 后、现有 Python check 前新增：
 
@@ -661,7 +682,7 @@ jobs:
 
 不得改变现有 `check_uvx_migration.py` 的 exit 0/1/2 处理。
 
-- [ ] **Step 3: YAML 与结构验证**
+- [x] **Step 3: YAML 与结构验证**
 
 Run:
 
@@ -672,21 +693,22 @@ git diff --check
 
 Expected: `ancestry workflows: OK`，无 diff whitespace 错误。
 
-- [ ] **Step 4: 沙盘验证 PR check 核心逻辑**
+- [x] **Step 4: 沙盘验证 PR check 核心逻辑**
 
 在 `C:\Users\elvis\AppData\Local\Temp\opencode` 创建临时 bare/clone 沙盘，构造：
 
 - 目标文件不变的普通提交：check 成功并输出 skip。
 - 目标文件更新 + `git merge --no-ff --no-commit` + commit：check 成功并找到 merge commit。
 - 目标文件更新 + 普通单父 commit：check exit 1。
+- 目标位于第一父或多父 merge：check exit 1（严格父序与恰好双父）。
 - 非 40 位或不属于 upstream 历史的目标：check exit 1。
 
 每种情况记录命令、exit code、parents 和输出；不得只做 YAML 文本匹配。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```powershell
-git add .github/workflows/check-upstream-ancestry.yml .github/workflows/check-uvx-migration.yml
+git add .github/workflows/check-upstream-ancestry.yml .github/workflows/check-uvx-migration.yml docs/superpowers/plans/2026-09-10-sync-upstream-ancestry.md
 git commit -m "ci: gate upstream ancestry before publish"
 ```
 

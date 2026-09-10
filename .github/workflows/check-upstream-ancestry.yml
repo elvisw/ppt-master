@@ -1,0 +1,73 @@
+name: Check Upstream Ancestry
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/hugohe3/ppt-master.git
+          git fetch --no-tags upstream main
+
+      - name: Verify changed upstream target
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          TARGET_FILE=.github/upstream-main.sha
+          if [ ! -f "$TARGET_FILE" ]; then
+            echo "::error::Missing $TARGET_FILE"
+            exit 1
+          fi
+          TARGET=$(tr -d '\r\n' < "$TARGET_FILE")
+          BASE_TARGET=$(git show "$BASE_SHA:$TARGET_FILE" 2>/dev/null | tr -d '\r\n' || true)
+          if [ "$TARGET" = "$BASE_TARGET" ]; then
+            echo "Recorded upstream SHA unchanged; this is not an upstream sync PR."
+            exit 0
+          fi
+          if ! printf '%s\n' "$TARGET" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::Invalid recorded upstream SHA: $TARGET"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$TARGET" upstream/main; then
+            echo "::error::Recorded SHA is not in upstream/main history: $TARGET"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$TARGET" "$HEAD_SHA"; then
+            echo "::error::Recorded upstream SHA is not an ancestor of PR head"
+            git log --graph --oneline --decorate "$BASE_SHA..$HEAD_SHA"
+            exit 1
+          fi
+          if ! MERGE_LINES=$(git rev-list --merges --parents "$BASE_SHA..$HEAD_SHA"); then
+            echo "::error::Unable to enumerate merge commits after PR base"
+            git log --graph --oneline --decorate "$BASE_SHA..$HEAD_SHA"
+            exit 1
+          fi
+          if ! MATCHES=$(printf '%s\n' "$MERGE_LINES" |
+            awk -v base="$BASE_SHA" -v target="$TARGET" 'NF == 3 && $2 == base && $3 == target { print $1 }'); then
+            echo "::error::Unable to inspect merge commit parents"
+            git log --graph --oneline --decorate "$BASE_SHA..$HEAD_SHA"
+            exit 1
+          fi
+          if ! MATCH_COUNT=$(printf '%s\n' "$MATCHES" | awk 'NF { count += 1 } END { print count + 0 }'); then
+            echo "::error::Unable to count matching merge commits"
+            git log --graph --oneline --decorate "$BASE_SHA..$HEAD_SHA"
+            exit 1
+          fi
+          if [ "$MATCH_COUNT" -ne 1 ]; then
+            echo "::error::Expected exactly one two-parent merge with ^1=$BASE_SHA and ^2=$TARGET"
+            git log --graph --oneline --decorate "$BASE_SHA..$HEAD_SHA"
+            exit 1
+          fi
+          echo "Verified two-parent merge commit $MATCHES with ^1=$BASE_SHA and ^2=$TARGET"
