@@ -14,7 +14,6 @@ jobs:
     permissions:
       id-token: write
       contents: write
-      actions: write
     steps:
       - name: Guard manual auto-tag ref
         if: github.event_name == 'workflow_dispatch'
@@ -233,23 +232,40 @@ jobs:
           done
           echo "✅ Both MANIFEST.in files include all attribution files"
 
-      # ── 通过所有门禁，创建 tag → 触发 publish-pypi.yml ──
-      - name: Create tag
+      # ── 通过所有门禁，创建 immutable tag；tag push 是唯一自动发布 owner ──
+      - name: Create and push immutable tag
         if: steps.check.outputs.exists == 'false'
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          PUSH_PAT: ${{ secrets.PUSH_PAT }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
         run: |
+          set -euo pipefail
+          if [ -z "${PUSH_PAT:-}" ]; then
+            echo "::error::PUSH_PAT is required so the tag push triggers publish-pypi.yml"
+            exit 1
+          fi
+          git fetch --no-tags origin main
+          HEAD_SHA=$(git rev-parse HEAD)
+          ORIGIN_MAIN_SHA=$(git rev-parse refs/remotes/origin/main)
+          if [ "$HEAD_SHA" != "$ORIGIN_MAIN_SHA" ]; then
+            echo "::error::main advanced before the immutable release tag was created"
+            exit 1
+          fi
+          if [[ ! "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Release HEAD is not a 40-character lowercase SHA"
+            exit 1
+          fi
+          if git ls-remote --exit-code --refs origin "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "::error::Release tag already exists on origin"
+            exit 1
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.tag }}"
-          git push origin "${{ steps.version.outputs.tag }}"
-          echo "✅ Tag ${{ steps.version.outputs.tag }} created"
-
-      - name: Trigger PyPI publish
-        if: steps.check.outputs.exists == 'false'
-        run: |
-          gh workflow run publish-pypi.yml --ref main
-          echo "✅ Triggered publish-pypi.yml from verified main"
-        env:
-          GH_TOKEN: ${{ github.token }}
+          git tag -a "$RELEASE_TAG" "$HEAD_SHA" -m "Release $RELEASE_TAG"
+          if [ "$(git rev-parse "$RELEASE_TAG^{commit}")" != "$HEAD_SHA" ]; then
+            echo "::error::The local release tag does not point to the verified HEAD"
+            exit 1
+          fi
+          git remote set-url origin "https://x-access-token:${PUSH_PAT}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin "refs/tags/$RELEASE_TAG"
+          echo "✅ Immutable tag $RELEASE_TAG pushed for $HEAD_SHA"

@@ -1,7 +1,7 @@
 name: Check Upstream Ancestry
 
 on:
-  pull_request:
+  pull_request_target:
 
 permissions:
   contents: read
@@ -10,23 +10,61 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout trusted base
+        uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Fetch upstream
+      - name: Checkout candidate as inert data
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch upstream into trusted checkout
+        working-directory: trusted
+        env:
+          CANDIDATE_DIR: ${{ github.workspace }}/candidate
         run: |
           git remote add upstream https://github.com/hugohe3/ppt-master.git
           git fetch --no-tags upstream main
+          git -C "$CANDIDATE_DIR" remote add upstream https://github.com/hugohe3/ppt-master.git
+          git -C "$CANDIDATE_DIR" fetch --no-tags upstream main
 
-      - name: Verify changed upstream target
+      - name: Verify event identities and trusted ancestry
+        working-directory: trusted
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CANDIDATE_DIR: ${{ github.workspace }}/candidate
         run: |
+          set -euo pipefail
+          if [[ -z "$BASE_SHA" || ! "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::pull_request_target base SHA is missing or malformed"
+            exit 1
+          fi
+          if [[ -z "$HEAD_SHA" || ! "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::pull_request_target head SHA is missing or malformed"
+            exit 1
+          fi
+          if [ "$(git rev-parse HEAD)" != "$BASE_SHA" ]; then
+            echo "::error::Trusted checkout is not the pull request base SHA"
+            exit 1
+          fi
+          if [ "$(git -C "$CANDIDATE_DIR" rev-parse HEAD)" != "$HEAD_SHA" ]; then
+            echo "::error::Candidate checkout is not the pull request head SHA"
+            exit 1
+          fi
+          git cat-file -e "${BASE_SHA}^{commit}"
+          git -C "$CANDIDATE_DIR" cat-file -e "${HEAD_SHA}^{commit}"
           python3 .github/scripts/check_upstream_ancestry.py \
+            --repo "$CANDIDATE_DIR" \
             --base-sha "$BASE_SHA" \
             --head-sha "$HEAD_SHA" \
             --upstream-ref upstream/main

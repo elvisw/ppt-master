@@ -716,55 +716,69 @@ git add .github/workflows/check-upstream-ancestry.yml .github/workflows/check-uv
 git commit -m "ci: gate upstream ancestry before publish"
 ```
 
-### Task 2 reviewer repair：发布入口 fail-closed 收口
+### Task 2 reviewer repair：trusted ancestry 与不可变发布身份
 
 **Exact contract:**
 
-- 所有 ancestry gate 只从 commit object 读取 `.github/upstream-main.sha`：先用
-  `git ls-tree` 要求 entry 是普通 `100644 blob`，再按需用
-  `git show "$SHA:$TARGET_FILE"` 读取内容；不读取工作树、不跟随 symlink、不回显
-  原始 marker 内容。
-- PR marker 状态必须区分：base/head 均 absent → 普通 PR skip；head deleted → fail；
-  added → 完整验证；两端 present 且同一普通 blob → skip；changed → 完整验证。
-  完整验证继续要求 40 位小写 SHA、属于 `upstream/main` 历史、是 head 祖先，且 PR
-  必须存在唯一恰好双父 merge，父序严格为 `[BASE_SHA, TARGET]`。
-- `.github/scripts/check_upstream_ancestry.py` 是四个 workflow 的唯一 ancestry
-  owner，不加入用户 CLI；main/tag/manual 入口使用单 commit 模式，PR 使用 base/head
-  模式。
-- `auto-tag.yml` 的 `workflow_run` 固定 checkout `workflow_run.head_sha` 并要求它仍等于
-  `origin/main`；manual 固定 `refs/heads/main` 并要求 selected SHA 等于 `origin/main`。
-  两入口在版本/tag 前运行 ancestry gate；manual 还运行既有 `check_uvx_migration.py`
-  的 exit 0/1/2 语义。准备阶段若 selected SHA 改变则 fail-closed，不给新 tip 打 tag。
-- `publish-pypi.yml` 的 tag push 使用 tag commit 运行 ancestry gate；manual 只允许
-  `refs/heads/main`、确认 `HEAD == origin/main`、运行 ancestry gate 和既有 migration
-  check；wheel attribution guard 与 `uv publish` 顺序保持不变。所有 checkout 使用
-  `persist-credentials: false`，main gate 显式声明 `contents: read`。
+- PR gate 使用 `pull_request_target`：base SHA checkout 到 `trusted/`，head SHA
+  checkout 到 `candidate/`，两者独立且 `persist-credentials: false`；所有 shell、
+  helper 和解析逻辑从 trusted base 执行，candidate 只作为 Git object 数据传给
+  `--repo`，绝不执行 candidate 脚本、action 或 shell。base/head 必须显式非空、40
+  位小写 hex，并逐一等于事件 SHA。
+- trusted helper 的 PR 模式先机械拒绝 base..head 修改五个 protected gate 文件：
+  `.github/scripts/check_upstream_ancestry.py`、
+  `.github/workflows/check-upstream-ancestry.yml`、
+  `.github/workflows/check-uvx-migration.yml`、`.github/workflows/auto-tag.yml`、
+  `.github/workflows/publish-pypi.yml`。本次首次部署的 base 尚无 trusted workflow
+  是 bootstrap 缺口，必须由人工 review + main gate 证明；部署后只能通过受信任维护
+  流程修改，普通 PR 不得静默自修改。
+- helper 的 `--base-sha` 必须区分 omitted 与 explicit empty；explicit empty fail，
+  不得降级到单 commit 模式。marker entry 必须是普通 `100644 blob`，内容严格为
+  40 位小写 hex 加一个 LF；无 LF、CRLF、多行和空内容均 fail 且不回显原文。
+  PR 状态保持 absent/absent skip、deleted fail、added/changed 完整验证、相同普通
+  blob skip；changed 仍要求 upstream history、head ancestry 和唯一严格双父 merge。
+- `.github/scripts/check_upstream_ancestry.py` 是唯一 ancestry owner，支持 `--repo`
+  供 trusted script 检查 candidate；不加入用户 CLI。
+- auto-tag 在 tag 前最后一步再次 fetch `origin/main`，确认 `HEAD == origin/main`，
+  再将 tag 指向该 HEAD。发布 owner 选择 **tag-push**：使用现有 `PUSH_PAT` 让 tag
+  push 触发 publish；移除 auto-tag 的显式 publish dispatch，避免 tag push 与 dispatch
+  双发布。publish 的 workflow_dispatch 保留为显式人工恢复入口，但必须提供并校验
+  `release_sha`/`release_tag`，从 tag ref checkout 同一不可变身份。
+- publish 的 tag push/manual 两入口都校验 release SHA/tag、remote tag 恰好指向 SHA、
+  HEAD 等于 SHA、tag 与 pyproject 版本一致，然后运行 ancestry gate 和 migration
+  check，最后才 build、attribution guard、publish；tag 后 main 前进仍构建 tag SHA，
+  tag 前 main 前进则 auto-tag fail-closed。所有 checkout 使用 `persist-credentials:
+  false`，main gate 显式 `contents: read`。
 
 **Files:**
 
-- [x] `.github/workflows/check-upstream-ancestry.yml`：object-only marker 状态机、
-  persist-credentials gate、helper 调用。
+- [x] `.github/workflows/check-upstream-ancestry.yml`：trusted/candidate 双 checkout、
+  event identity、trusted helper 与 protected diff gate。
 - [x] `.github/workflows/check-uvx-migration.yml`：object-only main gate、权限与 checkout
   hardening。
-- [x] `.github/workflows/auto-tag.yml`：workflow_run/dispatch selected-SHA 锁定、manual
-  migration gate、tag 前复核与显式 push auth。
-- [x] `.github/workflows/publish-pypi.yml`：tag/manual ancestry gate、manual migration
-  gate、main ref guard，保留 attribution/publish 顺序。
-- [x] `.github/scripts/check_upstream_ancestry.py`：唯一可测试 CI helper，不暴露用户 CLI。
-- [x] `skills/ppt-master/scripts/tests/test_check_upstream_ancestry.py`：覆盖 marker 状态、
-  object mode、严格 merge 与单 commit ancestry。
-- [x] `.superpowers/sdd/sync-upstream-task-2-report.md`：追加 reviewer repair 的测试和
-  sandbox 证据（gitignored）。
+- [x] `.github/workflows/auto-tag.yml`：immutable tag 前复核、PUSH_PAT tag owner、移除
+  explicit publish dispatch。
+- [x] `.github/workflows/publish-pypi.yml`：required release inputs、tag/manual identity
+  binding、ancestry/migration-before-build gate。
+- [x] `.github/scripts/check_upstream_ancestry.py`：`--repo`、protected diff、严格 marker
+  LF 与 explicit empty base 防降级。
+- [x] `skills/ppt-master/scripts/tests/test_check_upstream_ancestry.py`：trusted repo、
+  candidate protected tamper、空 base、严格 marker 内容回归。
+- [x] `docs/superpowers/specs/2026-09-10-sync-upstream-ancestry-design.md`：trusted
+  bootstrap 边界与维护流程。
+- [x] `.superpowers/sdd/sync-upstream-task-2-report.md`：追加本轮测试、owner 决策与残余
+  bootstrap 风险（gitignored）。
 
 **Verification:**
 
-- [x] 四个 workflow YAML parse 与 `git diff --check`。
-- [x] helper unit tests 与既有 ownership tests。
-- [x] 真实 Git sandbox：base/head absent skip、base absent + empty fail、symlink fail
-  且不读取目标、head deleted fail、unchanged regular blob skip、changed strict merge
-  pass、workflow_run SHA 等于/不等于 origin/main、manual non-main fail、tag commit
-  ancestry pass/fail，以及 attribution/publish 步骤和顺序仍存在。
-- [x] 创建新提交 `fix(ci): close ancestry release bypasses`，不 amend、不 push、不建 PR。
+- [x] 四个 workflow YAML parse、`git diff --check`、trusted workflow 不执行 candidate
+  内容的静态审计。
+- [x] helper/ownership unit tests：candidate helper/workflow 篡改 fail、trusted base
+  helper 实际执行、empty `--base-sha` fail、无 LF/CRLF/多行 fail、正确 LF pass。
+- [x] 真实 Git 沙盘：trusted/candidate 双 checkout、tag 前 main 前进 fail、tag 后 main
+  前进仍发布 tag SHA、tag/SHA mismatch fail、重复自动发布入口不可达。
+- [x] 新提交 `fix(ci): bind trusted ancestry gates to release sha`；不 amend、不 push、
+  不建 PR、不做 Task 3/4、不 bump 版本、不改 progress.md。
 
 ---
 

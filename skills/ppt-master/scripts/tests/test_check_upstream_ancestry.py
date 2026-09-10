@@ -31,7 +31,13 @@ def git_output(repo: Path, *args: str) -> str:
 
 
 class UpstreamAncestryHelperTests(unittest.TestCase):
-    def _new_repo(self, root: Path, *, marker: bytes | None = None) -> tuple[Path, str]:
+    def _new_repo(
+        self,
+        root: Path,
+        *,
+        marker: bytes | None = None,
+        extra_files: dict[str, bytes] | None = None,
+    ) -> tuple[Path, str]:
         repo = root / "repo"
         repo.mkdir()
         run_git(repo, "init", "-b", "main")
@@ -41,6 +47,10 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
         (repo / "base.txt").write_text("base\n", encoding="utf-8")
         if marker is not None:
             (repo / MARKER).write_bytes(marker)
+        for relative, content in (extra_files or {}).items():
+            path = repo / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
         run_git(repo, "add", ".")
         run_git(repo, "commit", "-m", "base")
         return repo, git_output(repo, "rev-parse", "HEAD")
@@ -62,10 +72,13 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
         *,
         base: str | None,
         head: str,
+        cwd: Path | None = None,
     ) -> subprocess.CompletedProcess[str]:
         args = [
             sys.executable,
             str(HELPER),
+            "--repo",
+            str(repo),
             "--head-sha",
             head,
             "--upstream-ref",
@@ -73,7 +86,7 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
         ]
         if base is not None:
             args.extend(["--base-sha", base])
-        return subprocess.run(args, cwd=repo, text=True, capture_output=True, check=False)
+        return subprocess.run(args, cwd=cwd or repo, text=True, capture_output=True, check=False)
 
     def _set_index_mode(self, repo: Path, mode: str, content: bytes) -> None:
         blob = subprocess.run(
@@ -103,6 +116,14 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
             result = self._run_check(repo, base=base, head=head)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("marker content", result.stderr)
+
+    def test_explicit_empty_base_sha_fails_instead_of_downgrading(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo, _ = self._new_repo(Path(temporary))
+            head = git_output(repo, "rev-parse", "HEAD")
+            result = self._run_check(repo, base="", head=head)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("base-sha", result.stderr)
 
     def test_symlink_marker_fails_without_echoing_link_content(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -147,6 +168,50 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("unchanged", result.stdout)
 
+    def test_marker_requires_exact_lowercase_sha_with_one_lf(self) -> None:
+        invalid_contents = (
+            b"1" * 40,
+            b"1" * 40 + b"\r\n",
+            b"1" * 40 + b"\nextra\n",
+            b"",
+        )
+        for content in invalid_contents:
+            with self.subTest(content=content):
+                with tempfile.TemporaryDirectory() as temporary:
+                    repo, base = self._new_repo(Path(temporary))
+                    self._set_index_mode(repo, "100644", content)
+                    run_git(repo, "commit", "-m", "invalid marker")
+                    head = git_output(repo, "rev-parse", "HEAD")
+                    result = self._run_check(repo, base=base, head=head)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("marker content", result.stderr)
+                    if content:
+                        self.assertNotIn(content.decode("ascii", errors="ignore"), result.stderr)
+
+    def test_candidate_changes_to_protected_gate_files_fail_closed(self) -> None:
+        protected_files = (
+            ".github/scripts/check_upstream_ancestry.py",
+            ".github/workflows/check-upstream-ancestry.yml",
+            ".github/workflows/check-uvx-migration.yml",
+            ".github/workflows/auto-tag.yml",
+            ".github/workflows/publish-pypi.yml",
+        )
+        for relative in protected_files:
+            with self.subTest(relative=relative):
+                with tempfile.TemporaryDirectory() as temporary:
+                    repo, base = self._new_repo(
+                        Path(temporary),
+                        extra_files={relative: b"trusted base\n"},
+                    )
+                    path = repo / relative
+                    path.write_bytes(b"candidate override\n")
+                    run_git(repo, "add", relative)
+                    run_git(repo, "commit", "-m", "candidate gate change")
+                    head = git_output(repo, "rev-parse", "HEAD")
+                    result = self._run_check(repo, base=base, head=head)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("protected", result.stderr)
+
     def test_changed_marker_requires_strict_two_parent_merge(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repo, base = self._new_repo(Path(temporary), marker=f"{OLD_TARGET}\n".encode())
@@ -182,7 +247,7 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
             target = self._commit_file(repo, "upstream.txt", "upstream\n", "upstream")
             self._set_upstream(repo, target)
             head = self._commit_file(repo, str(MARKER), f"{target}\n", "record target")
-            accepted = self._run_check(repo, base=None, head=head)
+            accepted = self._run_check(repo, base=None, head=head, cwd=ROOT)
             self.assertEqual(accepted.returncode, 0, accepted.stderr)
 
             run_git(repo, "checkout", "-b", "foreign-target", head)

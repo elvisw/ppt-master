@@ -88,8 +88,8 @@ git merge-base --is-ancestor "$EXPECTED_UPSTREAM_SHA" HEAD
 
 非零结果是阻断失败，不得通过文件内容相同、提交消息含 `merge`、或模型报告
 成功来降级。同步分支还必须证明至少一个新增 merge commit 的直接父节点等于
-`EXPECTED_UPSTREAM_SHA`。失败日志打印 `HEAD`、目标 SHA、目标文件内容和相关
-提交图。
+`EXPECTED_UPSTREAM_SHA`。失败日志可打印安全的提交图和状态，但不得回显 marker
+原始内容。
 
 ## 4. GitHub Actions 边界
 
@@ -100,18 +100,26 @@ git merge-base --is-ancestor "$EXPECTED_UPSTREAM_SHA" HEAD
 两个 prompt 的 `CRITICAL` 块都传入并引用
 `${{ steps.upstream.outputs.upstream_sha }}`。OpenCode action 仍负责创建分支和 PR。
 
-新增 `.github/workflows/check-upstream-ancestry.yml`，不配置 `paths` filter。它对
-所有 PR 先比较 base 与 head 的 `.github/upstream-main.sha`；文件未变化时明确
-输出“非上游同步 PR”并成功结束，文件新增或变化时：
+新增 `.github/workflows/check-upstream-ancestry.yml`，不配置 `paths` filter，使用
+`pull_request_target`。它先在独立 `trusted/` 目录以 base SHA 检出受信任脚本，
+再在独立 `candidate/` 目录以 head SHA 检出仅作为 Git object 数据的候选树；两个
+checkout 都使用 `persist-credentials: false`。workflow 只执行 `trusted/` 中的
+shell 与 helper，并以 `--repo candidate` 指向候选对象，绝不执行候选脚本、action
+或 shell。base/head 必须是非空 40 位小写 SHA，且 checkout 结果必须逐一等于事件值。
 
-1. 以完整历史检出 PR head SHA，而不是 GitHub 临时 merge ref。
-2. fetch `hugohe3/ppt-master` 的 `main` 为 `upstream/main`。
-3. 验证目标文件格式、目标 SHA 属于真实上游历史，并且是 PR head 的祖先。
-4. 验证 base..head 范围内存在以目标 SHA 为直接父节点的 merge commit。
-5. 失败时输出 base/head/目标 SHA 与提交图，并以非零状态阻止该 PR 被视为有效同步。
+trusted helper 在 PR 模式先检查 base..head diff 不得修改任何受保护门禁文件：
+`.github/scripts/check_upstream_ancestry.py`、四个 ancestry/release workflow；任一
+变化即 fail-closed。随后对 base/head 的 marker 区分 absent、deleted、added、
+unchanged 和 changed 状态，并验证目标文件格式、目标 SHA 属于真实上游历史、是
+PR head 的祖先，以及 base..head 范围内存在唯一恰好双父 merge（父序为
+`[BASE_SHA, TARGET]`）。marker 必须是普通 `100644 blob`，内容严格为 40 位小写
+hex 加一个 LF；失败不得回显原始内容。
 
-验证使用目标文件中的固定 SHA，不要求 PR head 包含检查时最新的 upstream tip。
-因此普通 PR 和上游在审阅期继续前进都不会误报；分支命名变化也不会绕过检查。
+该 trusted `pull_request_target` gate 的首次部署存在 bootstrap 边界：本次 PR 的
+base 尚无该 trusted workflow/helper，因此本次安全性由人工审查、本地真实沙盘和
+合并后的 main gate 证明，不能声称当前 PR 已被新 workflow 保护。部署到 main 后，
+普通 PR 不得自修改上述 protected gate 文件；修改必须通过受信任维护流程（例如
+受信任分支/管理员审查后落地），不得静默绕过。
 
 ### 4.2 Workflow Dispatch 路径
 
@@ -136,6 +144,12 @@ manual 的 OpenCode 环境也不再注入可写 `GH_TOKEN`。`opencode run` 返�
 任何失败都让 `Check UVX Migration` 失败。`auto-tag.yml` 已只在该 workflow 成功时
 继续，因此 ancestry 损坏会阻断 tag 与 PyPI 发布。该门禁验证最后一次已登记的
 同步目标，不要求 fork 在每次普通 main push 时追平实时 upstream tip。
+
+发布 owner 固定为 tag push：`auto-tag.yml` 在最终 fetch/HEAD 锁定后使用现有
+`PUSH_PAT` 推送 immutable tag，使 `publish-pypi.yml` 的 tag 入口成为唯一自动发布
+触发器；auto-tag 不再显式 dispatch publish。`publish-pypi.yml` 仍保留带必填
+`release_sha`/`release_tag` 的 workflow_dispatch 作为人工恢复入口，但必须从相同
+tag ref 检出并验证 remote tag、HEAD、版本和 ancestry 全部绑定到同一 SHA。
 
 ### 4.4 仓库合并设置与落盘方式
 

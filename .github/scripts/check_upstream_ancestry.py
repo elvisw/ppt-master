@@ -23,11 +23,21 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 
 TARGET_FILE = ".github/upstream-main.sha"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
-MARKER_CONTENT_RE = re.compile(rb"^[0-9a-f]{40}\n?$")
+MARKER_CONTENT_RE = re.compile(rb"^[0-9a-f]{40}\n$")
+PROTECTED_PATHS = frozenset(
+    {
+        ".github/scripts/check_upstream_ancestry.py",
+        ".github/workflows/check-upstream-ancestry.yml",
+        ".github/workflows/check-uvx-migration.yml",
+        ".github/workflows/auto-tag.yml",
+        ".github/workflows/publish-pypi.yml",
+    }
+)
 
 
 class CheckError(RuntimeError):
@@ -41,10 +51,11 @@ class TreeEntry:
     object_name: str
 
 
-def _run_git(*args: str) -> subprocess.CompletedProcess[bytes]:
+def _run_git(repo: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
     try:
         return subprocess.run(
             ["git", *args],
+            cwd=repo,
             capture_output=True,
             check=False,
         )
@@ -57,15 +68,15 @@ def _validate_sha(value: str, label: str) -> None:
         raise CheckError(f"{label} must be a 40-character lowercase SHA")
 
 
-def _require_commit(value: str, label: str) -> None:
+def _require_commit(repo: Path, value: str, label: str) -> None:
     _validate_sha(value, label)
-    result = _run_git("cat-file", "-e", f"{value}^{{commit}}")
+    result = _run_git(repo, "cat-file", "-e", f"{value}^{{commit}}")
     if result.returncode != 0:
         raise CheckError(f"{label} commit object is unavailable")
 
 
-def _read_tree_entry(commit_sha: str, label: str) -> TreeEntry | None:
-    result = _run_git("ls-tree", "-z", "--full-tree", commit_sha, "--", TARGET_FILE)
+def _read_tree_entry(repo: Path, commit_sha: str, label: str) -> TreeEntry | None:
+    result = _run_git(repo, "ls-tree", "-z", "--full-tree", commit_sha, "--", TARGET_FILE)
     if result.returncode != 0:
         raise CheckError(f"Unable to inspect the {label} commit object")
 
@@ -91,8 +102,8 @@ def _require_regular_blob(entry: TreeEntry, label: str) -> None:
         raise CheckError(f"The {label} marker entry must be a regular 100644 blob")
 
 
-def _read_marker(commit_sha: str, label: str) -> str:
-    result = _run_git("show", f"{commit_sha}:{TARGET_FILE}")
+def _read_marker(repo: Path, commit_sha: str, label: str) -> str:
+    result = _run_git(repo, "show", f"{commit_sha}:{TARGET_FILE}")
     if result.returncode != 0 or not MARKER_CONTENT_RE.fullmatch(result.stdout):
         raise CheckError(
             f"The {label} marker content is invalid; expected one lowercase 40-character SHA"
@@ -100,8 +111,8 @@ def _read_marker(commit_sha: str, label: str) -> str:
     return result.stdout.rstrip(b"\n").decode("ascii")
 
 
-def _is_ancestor(ancestor: str, descendant: str, message: str) -> None:
-    result = _run_git("merge-base", "--is-ancestor", ancestor, descendant)
+def _is_ancestor(repo: Path, ancestor: str, descendant: str, message: str) -> None:
+    result = _run_git(repo, "merge-base", "--is-ancestor", ancestor, descendant)
     if result.returncode == 0:
         return
     if result.returncode == 1:
@@ -109,13 +120,13 @@ def _is_ancestor(ancestor: str, descendant: str, message: str) -> None:
     raise CheckError("Git could not evaluate the required ancestry relationship")
 
 
-def _verify_target_ancestry(target: str, head_sha: str, upstream_ref: str) -> None:
-    _is_ancestor(target, upstream_ref, "The recorded upstream target is not in upstream/main history")
-    _is_ancestor(target, head_sha, "The recorded upstream target is not an ancestor of the checked commit")
+def _verify_target_ancestry(repo: Path, target: str, head_sha: str, upstream_ref: str) -> None:
+    _is_ancestor(repo, target, upstream_ref, "The recorded upstream target is not in upstream/main history")
+    _is_ancestor(repo, target, head_sha, "The recorded upstream target is not an ancestor of the checked commit")
 
 
-def _verify_strict_merge(base_sha: str, head_sha: str, target: str) -> str:
-    result = _run_git("rev-list", "--merges", "--parents", f"{base_sha}..{head_sha}")
+def _verify_strict_merge(repo: Path, base_sha: str, head_sha: str, target: str) -> str:
+    result = _run_git(repo, "rev-list", "--merges", "--parents", f"{base_sha}..{head_sha}")
     if result.returncode != 0:
         raise CheckError("Unable to enumerate merge commits after the PR base")
 
@@ -132,24 +143,40 @@ def _verify_strict_merge(base_sha: str, head_sha: str, target: str) -> str:
     return matches[0]
 
 
-def verify_head_commit(head_sha: str, upstream_ref: str) -> str:
+def _assert_no_protected_changes(repo: Path, base_sha: str, head_sha: str) -> None:
+    result = _run_git(
+        repo,
+        "diff",
+        "--name-only",
+        f"{base_sha}..{head_sha}",
+        "--",
+        *sorted(PROTECTED_PATHS),
+    )
+    if result.returncode != 0:
+        raise CheckError("Unable to inspect protected CI files in the PR diff")
+    if result.stdout.strip():
+        raise CheckError("The PR changes a protected CI gate file")
+
+
+def verify_head_commit(repo: Path, head_sha: str, upstream_ref: str) -> str:
     """Verify a recorded marker in one commit object and its ancestry."""
-    _require_commit(head_sha, "HEAD")
-    head_entry = _read_tree_entry(head_sha, "HEAD")
+    _require_commit(repo, head_sha, "HEAD")
+    head_entry = _read_tree_entry(repo, head_sha, "HEAD")
     if head_entry is None:
         raise CheckError("The HEAD marker is missing")
     _require_regular_blob(head_entry, "HEAD")
-    target = _read_marker(head_sha, "HEAD")
-    _verify_target_ancestry(target, head_sha, upstream_ref)
+    target = _read_marker(repo, head_sha, "HEAD")
+    _verify_target_ancestry(repo, target, head_sha, upstream_ref)
     return "Verified recorded upstream ancestry"
 
 
-def verify_pull_request(base_sha: str, head_sha: str, upstream_ref: str) -> str:
+def verify_pull_request(repo: Path, base_sha: str, head_sha: str, upstream_ref: str) -> str:
     """Verify the marker transition and strict merge ancestry for a PR."""
-    _require_commit(base_sha, "base")
-    _require_commit(head_sha, "head")
-    base_entry = _read_tree_entry(base_sha, "base")
-    head_entry = _read_tree_entry(head_sha, "head")
+    _require_commit(repo, base_sha, "base")
+    _require_commit(repo, head_sha, "head")
+    _assert_no_protected_changes(repo, base_sha, head_sha)
+    base_entry = _read_tree_entry(repo, base_sha, "base")
+    head_entry = _read_tree_entry(repo, head_sha, "head")
 
     if base_entry is None and head_entry is None:
         return "Recorded upstream marker absent at both ends; ordinary PR skipped"
@@ -162,14 +189,19 @@ def verify_pull_request(base_sha: str, head_sha: str, upstream_ref: str) -> str:
     if base_entry is not None and base_entry.object_name == head_entry.object_name:
         return "Recorded upstream marker unchanged; ordinary PR skipped"
 
-    target = _read_marker(head_sha, "head")
-    _verify_target_ancestry(target, head_sha, upstream_ref)
-    merge_commit = _verify_strict_merge(base_sha, head_sha, target)
+    target = _read_marker(repo, head_sha, "head")
+    _verify_target_ancestry(repo, target, head_sha, upstream_ref)
+    merge_commit = _verify_strict_merge(repo, base_sha, head_sha, target)
     return f"Verified two-parent merge commit {merge_commit}"
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Internal CI upstream ancestry check.")
+    parser.add_argument(
+        "--repo",
+        default=".",
+        help="Git repository containing the objects to inspect (default: current directory)",
+    )
     parser.add_argument("--head-sha", required=True, help="Commit object to verify")
     parser.add_argument("--base-sha", help="PR base commit; enables marker transition checks")
     parser.add_argument(
@@ -183,10 +215,15 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        if args.base_sha:
-            message = verify_pull_request(args.base_sha, args.head_sha, args.upstream_ref)
+        repo = Path(args.repo).resolve()
+        if not repo.is_dir():
+            raise CheckError("The Git repository path is unavailable")
+        if args.base_sha is not None:
+            if not args.base_sha:
+                raise CheckError("--base-sha was provided with an empty value")
+            message = verify_pull_request(repo, args.base_sha, args.head_sha, args.upstream_ref)
         else:
-            message = verify_head_commit(args.head_sha, args.upstream_ref)
+            message = verify_head_commit(repo, args.head_sha, args.upstream_ref)
     except CheckError as exc:
         print(f"::error::{exc}", file=sys.stderr)
         return 1
