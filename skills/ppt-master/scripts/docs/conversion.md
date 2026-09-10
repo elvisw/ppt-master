@@ -621,6 +621,9 @@ Error: PPTX-to-SVG conversion failed: Invalid DrawingML sRGB color structure
 
 Convert web pages to Markdown and download images locally by default. Use
 `--no-images` to retain remote image links without downloading their files.
+Pages, images, and redirect targets must be public HTTP(S) hosts with valid
+TLS; `--insecure` skips certificate checks, `--allow-private-hosts` admits
+intranet and loopback addresses.
 
 ```bash
 uvx ppt-master web-to-md https://example.com/article

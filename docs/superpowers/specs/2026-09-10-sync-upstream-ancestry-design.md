@@ -163,28 +163,33 @@ repair 分支如创建 PR，必须使用 `gh pr merge --merge`；不得使用 sq
 合并后必须 fetch `origin/main` 并在远端主分支上重跑 ancestry 门禁。当前任务不自动
 push 或创建 PR，仓库设置修改和本地提交除外。
 
-## 5. 当前历史修复
+## 5. 当前历史修复与执行目标更新
 
-在已包含设计和实现提交的 `fix/sync-upstream-ancestry` 分支上执行：
+原始设计中的 repair target 是 `64b65839`；由于 upstream 在实际执行前已推进，用户批准
+将本次 Task 4 的 immutable replacement target 更新为
+`09ad58f0d58decc9d30799ca83374ff2604ef16b`。在已包含设计和实现提交的
+`fix/sync-upstream-ancestry` 分支上执行：
 
 ```bash
-git merge --no-ff --no-commit 64b65839c7f8096a534c872c03d688a2b2491c8f
+git merge --no-ff --no-commit 09ad58f0d58decc9d30799ca83374ff2604ef16b
 ```
 
 保留 fork 的 `svg-pipeline.md` uvx 适配和所有现有 fork marker，审查合并树后创建
 真实 merge commit，并把该 SHA 写入 `.github/upstream-main.sha`。该提交用于记录
-`64b65839` 的 ancestry；不通过 reset、rebase、squash 或 cherry-pick 重建。
+`09ad58f0d58decc9d30799ca83374ff2604ef16b` 的 ancestry；不通过 reset、rebase、squash 或
+cherry-pick 重建。merge commit 完成后，再以独立单父提交将两个 fork 包版本 bump 到
+动态计算的下一个未占用 patch 版本。
 
 历史修复后，本地 `HEAD` 必须满足：
 
 ```bash
-git merge-base --is-ancestor 64b65839c7f8096a534c872c03d688a2b2491c8f HEAD
-git log HEAD..64b65839c7f8096a534c872c03d688a2b2491c8f --oneline
+git merge-base --is-ancestor 09ad58f0d58decc9d30799ca83374ff2604ef16b HEAD
+git log HEAD..09ad58f0d58decc9d30799ca83374ff2604ef16b --oneline
 ```
 
 第一条返回 0，第二条无输出。修复只在本地分支提交，不自动推送。
 
-下一次 schedule 在 repair merge 到达远端 `main` 前仍会把 `64b65839` 识别为缺失；
+下一次 schedule 在 repair merge 到达远端 `main` 前仍会把 `09ad58f0` 识别为缺失；
 这期间若产生冗余同步 PR，应关闭而非合并。repair 落地后检测自然恢复为空。
 
 ## 6. 错误处理
@@ -200,10 +205,10 @@ git log HEAD..64b65839c7f8096a534c872c03d688a2b2491c8f --oneline
 ## 7. 验证计划
 
 1. 静态审查提交关系规则由 `.opencode/command/sync-upstream.md` 所有，两个 prompt 只传入目标 SHA、指向所有者并保留必要的 CRITICAL 门禁。
-2. 对历史故障提交 `726c386b` 和目标 `64b65839` 运行 ancestry 检查，确认负向场景失败。
+2. 对历史故障提交 `726c386b` 和本次 replacement target `09ad58f0` 运行 ancestry 检查，确认负向场景失败。
 3. 在临时 clone/branch 沙盘执行完整的 Step 2→6，验证 `MERGE_HEAD`、双父 merge、目标文件和独立版本提交。
 4. 对 repair 分支最终 `HEAD` 运行 ancestry 检查，确认通过且目标缺失列表为空。
-5. 验证 repair merge commit 至少有两个父节点，其中包含实现分支原 HEAD 和 `64b65839`。
+5. 验证 repair merge commit 恰好有两个父节点，其中包含实现分支原 HEAD 和 `09ad58f0`。
 6. 校验三个 workflow YAML 可被解析，检查 schedule/manual 条件、凭据注入和 verify-before-push 顺序。
 7. 验证 PR check 的三种输入：目标文件不变时跳过、合法 repair 通过、篡改目标或单父伪 merge 失败。
 8. 验证 main 发布门禁对 repair HEAD 通过、对仅更新目标文件但没有 ancestry 的构造提交失败。

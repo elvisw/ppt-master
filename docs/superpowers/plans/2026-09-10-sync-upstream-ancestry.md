@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 让 schedule、workflow_dispatch 和发布链都机械验证选定上游提交的 ancestry，并以一次真实 merge 修复当前缺失的 `64b65839` 父关系。
+**Goal:** 让 schedule、workflow_dispatch 和发布链都机械验证选定上游提交的 ancestry，并以一次真实 merge 修复当前缺失的上游父关系。原始事件涉及 `64b65839`；Task 4 执行时的 immutable replacement target 已获批准为 `09ad58f0d58decc9d30799ca83374ff2604ef16b`。
 
 **Architecture:** `.github/upstream-main.sha` 持久化每次同步选定的 immutable upstream SHA；`.opencode/command/sync-upstream.md` 是提交关系程序的唯一所有者，两个 OpenCode prompt 只传值和强调不可绕过门禁。每次命令运行用 `git rev-parse --git-path ppt-master-sync` 定位并以原子 `mkdir` 建立独占 `.git` 状态目录，保存 target、original HEAD、marker 存在状态与字节快照；各代码块自行重读，成功或安全失败清理整个目录。PR check 验证目标 SHA、直接 merge parent 与 head ancestry，`check-uvx-migration.yml` 再在 `main` 发布边界验证登记目标，manual push 由 workflow 在验证后执行。
 
@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - 所有 GitHub 操作仅指向 `elvisw/ppt-master`，不得修改 `hugohe3/ppt-master`。
-- 当前修复目标固定为 `64b65839c7f8096a534c872c03d688a2b2491c8f`。
+- Task 4 当前修复目标固定为 `09ad58f0d58decc9d30799ca83374ff2604ef16b`；原始事件中的 `64b65839c7f8096a534c872c03d688a2b2491c8f` 仅作为历史证据保留。
 - 从 merge 开始到 merge commit 创建完成，禁止 reset、rebase、squash、cherry-pick、切换分支和清除 `MERGE_HEAD`；失败只允许 `git merge --abort` 后停止。
 - `.github/upstream-main.sha` 只含一行 40 位小写 SHA 和结尾换行。
 - schedule 的 OpenCode Action 保留建分支/PR职责；workflow_dispatch 仅允许
@@ -46,8 +46,8 @@
 - manual push 必须使用 `git push origin HEAD:main`；non-fast-forward 时停止并从最新 main 重跑，禁止 force-push。
 - fork 仓库设置仅允许 merge commit；关闭 squash merge 和 rebase merge。
 - ancestry 门禁失败必须阻断 `Check UVX Migration → auto-tag → publish-pypi`，不得以内容相同或模型声明替代。
-- 本次修复执行不 bump 版本、不执行远端 push/PR、也不做 repair；运行时契约仍是
-  schedule 由 Action 创建 PR，workflow_dispatch 仅在 Verify 成功后由 workflow push。
+- 本次修复执行在 merge commit 后动态 bump 两处 fork 包版本至下一个未占用 patch 版本；不执行远端 push/PR。
+  运行时契约仍是 schedule 由 Action 创建 PR，workflow_dispatch 仅在 Verify 成功后由 workflow push。
   设计/实现提交只落在本地 `fix/sync-upstream-ancestry`。
 - Windows 下所有 Python 命令使用 `python`，不用 `python3`。
 - 不在 `skills/ppt-master/scripts/tests/` 之外创建测试；workflow 文本用沙盘和真实 Git 命令验证。
@@ -826,8 +826,8 @@ Expected: `true/false/false`。
 - Verify: all files from Tasks 1-2 and existing fork gates
 
 **Interfaces:**
-- Consumes: implementation branch HEAD、upstream target `64b65839...`。
-- Produces: a real merge commit with parents `[pre-merge implementation HEAD, 64b65839...]`。
+- Consumes: implementation branch HEAD、upstream target `09ad58f0d58decc9d30799ca83374ff2604ef16b`。
+- Produces: a real merge commit with parents `[pre-merge implementation HEAD, 09ad58f0d58decc9d30799ca83374ff2604ef16b]`，以及其后的独立动态版本 bump commit。
 
 - [ ] **Step 1: 提交前仓库和远端确认**
 
@@ -848,10 +848,10 @@ Expected: worktree clean；upstream/main 为目标 SHA；无未知改动。
 merge 前 HEAD；然后执行：
 
 ```powershell
-git merge --no-ff --no-commit 64b65839c7f8096a534c872c03d688a2b2491c8f
+git merge --no-ff --no-commit 09ad58f0d58decc9d30799ca83374ff2604ef16b
 ```
 
-Expected: merge 成功并保留 `MERGE_HEAD=64b65839...`。若冲突，逐文件保留 fork uvx
+Expected: merge 成功并保留 `MERGE_HEAD=09ad58f0...`。若冲突，逐文件保留 fork uvx
 适配并合入上游功能；无法证明正确则 `git merge --abort` 并停止。
 
 - [ ] **Step 3: merge-state 与树审查**
@@ -869,7 +869,7 @@ Expected: `MERGE_HEAD` 等于目标；无无关文件和 whitespace 错误。即
 - [ ] **Step 4: 创建 repair merge commit**
 
 ```powershell
-git commit -m "merge upstream/main: repair preserved ancestry"
+git commit -m "merge upstream/main: resolve conflicts, adapt to uvx, sync cli.py mappings"
 ```
 
 禁止 reset/rebase/squash/cherry-pick。记录新 commit SHA。
@@ -877,14 +877,16 @@ git commit -m "merge upstream/main: repair preserved ancestry"
 - [ ] **Step 5: 正反 ancestry 和父节点验证**
 
 ```powershell
-git merge-base --is-ancestor 64b65839c7f8096a534c872c03d688a2b2491c8f HEAD
-git log HEAD..64b65839c7f8096a534c872c03d688a2b2491c8f --oneline
+git merge-base --is-ancestor 09ad58f0d58decc9d30799ca83374ff2604ef16b HEAD
+git log HEAD..09ad58f0d58decc9d30799ca83374ff2604ef16b --oneline
 git show -s --format=%P HEAD
 git log --graph --oneline --decorate --max-count=15
 ```
 
 Expected: 第一条 exit 0；第二条无输出；parents 第一项严格等于 Git 内部临时状态中的
-merge 前 HEAD、第二项为 `64b65839...`；提交图显示真实双父 merge。
+merge 前 HEAD、第二项为 `09ad58f0...`；提交图显示真实双父 merge。随后两个
+`pyproject.toml` 版本和必要的 `uv.lock` 变更单独提交，提交消息为
+`chore: bump version to <computed-version>`。
 
 - [ ] **Step 6: 运行 workflow 与 fork 门禁**
 

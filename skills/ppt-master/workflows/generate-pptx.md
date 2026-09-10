@@ -63,7 +63,7 @@ uvx ppt-master project import-sources <project_path> <source_files_or_dirs...>  
 
 **Workflow log**: initialization creates `<project_path>/validation/workflow.log`; later project-scoped Python tools record their command envelopes there automatically (prefix `PPT_MASTER_PROJECT_PATH="<project_path>"` when a helper's arguments do not identify the project). Append one concise note with `uvx ppt-master workflow-log <project_path> "<detail>"` only for a material handoff, rework reason, approved exception, or manual recovery with no owning command output. The log is cold audit evidence, never read during generation.
 
-**Import rules**: pass the source path once when Step 1 wrote Markdown beside it, both locations when `-o` wrote it elsewhere, and only the research pair when Topic Research ran (its facts JSON is imported as a file; no URL is fetched). Copy/move semantics, bitmap archiving, and the PPTX intake bundle it writes under `analysis/` (`<stem>.identity.json`, `<stem>.slide_library.json`, `source_profile.json`) are [`project.md`](../scripts/docs/project.md). Those artifacts are source facts and recommendation candidates, not replica constraints; Beautify stays single-deck.
+**Import rules**: pass the source path together with the Markdown Step 1 wrote beside it (a same-stem Markdown suppresses re-conversion and is imported with its sidecar and assets; the source alone is archived and converted again), both locations when `-o` wrote it elsewhere, and only the research pair when Topic Research ran (its facts JSON is imported as a file; no URL is fetched). Copy/move semantics, bitmap archiving, and the PPTX intake bundle it writes under `analysis/` (`<stem>.identity.json`, `<stem>.slide_library.json`, `source_profile.json`) are [`project.md`](../scripts/docs/project.md). Those artifacts are source facts and recommendation candidates, not replica constraints; Beautify stays single-deck.
 
 **✅ Checkpoint** — project created, `sources/` complete, converted materials ready. `import-sources` exits 0 when any input converts: read the printed `skipped` reasons and treat those inputs as absent. Proceed to Step 3.
 
@@ -196,7 +196,7 @@ Read ${SKILL_DIR}/references/image-base.md          # always
 | Row | Additional reference | Run |
 |---|---|---|
 | Prepared derivative | `image-generator.md` §4.4 only for registered layers | after its canonical source is terminal: `uvx ppt-master image-treat ...` for blur, desaturation/grayscale, duotone, brightness, contrast, or `--fit WxH` downscaling to the planned size, or the §4.4 preparation path |
-| `ai` | `image-generator.md` | write `images/image_prompts.json`, render `image_prompts.md` with `image_gen.py --render-md`, then follow §7 Path Selection — `image_gen.py --manifest` is Path A only, `host-native` is Path B and skips `--manifest`, `manual` writes prompts and stops; the recorded `design_spec.md §I` path wins over `IMAGE_BACKEND` |
+| `ai` | `image-generator.md` | write `images/image_prompts.json`, render `image_prompts.md` with `uvx ppt-master image-gen --render-md images/image_prompts.json`, then follow §7 Path Selection — `uvx ppt-master image-gen --manifest` is Path A only, `host-native` is Path B and skips `--manifest`, `manual` writes prompts and stops; the recorded `design_spec.md §I` path wins over `IMAGE_BACKEND` |
 | `web` | `image-searcher.md` | `uvx ppt-master image-search ...`; with ≥2 rows write `images/image_queries.json` and run `--batch` once |
 | `slice` | `image-generator.md` §4.3 | after the parent sheet is `Generated`: `uvx ppt-master slice-images <project_path>/images/<sheet>.png --grid RxC --names ... --trim --alpha --bg KEY_HEX_FROM_PROMPT --strict-alpha` |
 | `user` / `placeholder` | — | skip |
@@ -259,7 +259,7 @@ Read the core as one batch with the exact detail files named by the retained `sp
 uvx ppt-master svg-editor <project_path> --live --daemon
 ```
 
-Default first free port from `6060` (`--port N` binds strictly); read the URL from output or `<project_path>/live_preview/lock.json` and report it — or the launch failure — before the first SVG. It is a side process: never wait for it or for user confirmation, and keep it running until the user clicks **Exit preview** or asks in chat. Do not read or apply submitted annotations during generation; that window opens after Step 7 ([`live-preview.md`](stages/live-preview.md), which also describes staged direct edits).
+Default first free port from `6060` (`--port N` binds strictly); read the URL from output or `<project_path>/live_preview/lock.json` and report it — or the launch failure, or that the user or run instructions forbade starting it — before the first SVG. It is a side process: never wait for it or for user confirmation, and keep it running until the user clicks **Exit preview** or asks in chat. Do not read or apply submitted annotations during generation; that window opens after Step 7 ([`live-preview.md`](stages/live-preview.md), which also describes staged direct edits).
 
 **Cadence (Mandatory)**: P01–P05 → early gate (a planned roster of six or fewer pages skips it) → remaining pages → final gate, in one context. Every checker invocation follows one of two events: a gate point whose covered pages all exist, or the end of one consolidated repair pass. A run with neither predecessor is a pacing violation; validating an authoring pattern early is not a reason, because the same issues surface at the gate and are fixed in the same pass. Reload under Context validity above after context invalidation.
 
@@ -279,7 +279,7 @@ uvx ppt-master svg-quality-check <project_path> \
   --canonical-authoring --stage early --json
 ```
 
-`--json` writes the report file (`validation/svg_quality_early_report.json`); stdout stays the human-readable summary and is never parsed as JSON. The stage checks every authored page so far under the partial-roster rules. Repair under the consolidated-pass discipline in [`executor-base.md`](../references/executor-base.md) §3; a still-failing verification is the next batch. If terminal output is truncated, read only the issue arrays from `validation/svg_quality_early_report.json`. The gate validates the method, not just the pages — emit one line before editing:
+`--json` writes the report file (`validation/svg_quality_early_report.json`); stdout stays the human-readable summary and is never parsed as JSON. The stage checks every authored page so far under the partial-roster rules. Repair under the consolidated-pass discipline in [`executor-base.md`](../references/executor-base.md) §3; a still-failing verification is the next batch. If terminal output is truncated, extract only `categories.blocking.issues` (and `categories.introduced.issues` when needed) from `validation/svg_quality_early_report.json`. The gate validates the method, not just the pages — emit one line before editing (in the conversation, not to a file):
 
 ```
 gate-signal: method=<rule resolved, or none> | page-local=<count> | not-exercised=<list>

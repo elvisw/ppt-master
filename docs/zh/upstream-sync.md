@@ -122,7 +122,7 @@ Gate 6: wheel attribution 文件完整
 对于 `cli.py` 的 `COMMANDS` 字典中已存在的映射：
 - `python3 skills/ppt-master/scripts/xxx.py` → `uvx ppt-master <cmd>`
 - `python3 scripts/xxx.py` → `uvx ppt-master <cmd>`
-- `uv run skills/ppt-master/scripts/xxx.py` → `uvx ppt-master <cmd>`
+- `` `uv` `run` `skills/ppt-master/scripts/xxx.py` `` → `uvx ppt-master <cmd>`
 - `uv run scripts/xxx.py` → `uvx ppt-master <cmd>`
 
 **规则二：cli.py 无映射 → 添加到 cli.py**
