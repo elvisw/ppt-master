@@ -13,6 +13,8 @@ agent: general
 - `rg` (ripgrep) 已安装（Windows: `winget install BurntSushi.ripgrep.MSVC`，macOS: `brew install ripgrep`）
 - 已配置 `upstream` remote: `https://github.com/hugohe3/ppt-master.git`
 - 已配置 `origin` remote: 本 fork
+- GitHub Actions 中必须由 workflow 注入 `EXPECTED_UPSTREAM_SHA`；变量缺失或不匹配时
+  fail-closed。只有本地运行才允许从 fetch 后的 `upstream/main` 回退推导目标。
 
 ## 执行步骤
 
@@ -29,51 +31,87 @@ git log main..upstream/main --oneline
 
 记录上游新增的提交数量和主题。
 
-**建立本次同步的 immutable upstream 目标。** GitHub Actions 环境中，prompt 提供的
-`EXPECTED_UPSTREAM_SHA` 就是本次运行必须合并的确切提交；本地运行中该变量为空时取
-fetch 后的 upstream tip。两者都必须等于 fetch 后的 `upstream/main`，否则立即停止：
+**建立本次同步的 immutable upstream 目标。** GitHub Actions 环境中，workflow 注入的
+`EXPECTED_UPSTREAM_SHA` 就是本次运行必须合并的确切提交；Actions 中变量为空时立即
+停止。本地运行中该变量为空时，才允许取 fetch 后的 upstream tip。两者都必须等于
+fetch 后的 `upstream/main`，否则立即停止：
 
 ```bash
-FETCHED_UPSTREAM_SHA=$(git rev-parse upstream/main)
-if [ -z "${EXPECTED_UPSTREAM_SHA:-}" ]; then
+if ! FETCHED_UPSTREAM_SHA=$(git rev-parse upstream/main); then
+  echo "Unable to resolve fetched upstream/main" >&2
+  exit 1
+fi
+if ! printf '%s\n' "$FETCHED_UPSTREAM_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+  echo "Fetched upstream tip is not a 40-character lowercase SHA" >&2
+  exit 1
+fi
+if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+  if [ -z "${EXPECTED_UPSTREAM_SHA:-}" ]; then
+    echo "EXPECTED_UPSTREAM_SHA is required in GitHub Actions" >&2
+    exit 1
+  fi
+elif [ -z "${EXPECTED_UPSTREAM_SHA:-}" ]; then
   EXPECTED_UPSTREAM_SHA="$FETCHED_UPSTREAM_SHA"
+fi
+if ! printf '%s\n' "$EXPECTED_UPSTREAM_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+  echo "Expected upstream SHA is not a 40-character lowercase SHA" >&2
+  exit 1
 fi
 if [ "$EXPECTED_UPSTREAM_SHA" != "$FETCHED_UPSTREAM_SHA" ]; then
   echo "Expected upstream SHA does not match fetched upstream/main" >&2
   exit 1
 fi
-printf '%s\n' "$EXPECTED_UPSTREAM_SHA" > .github/upstream-main.sha
 ```
 
-写入 `.github/upstream-main.sha` 的值必须是 40 位小写十六进制 SHA；该文件随后由
-Step 4e 门禁 7 与 Step 6 的提交程序共同消费。
+目标值必须是 40 位小写十六进制 SHA。目标文件只能在 Step 2 的 merge 成功后写入并
+暂存；Step 4e 门禁 7 与 Step 6 的提交程序共同消费该已暂存值。
 
 ---
 
 ### Step 2: 合并上游
 
 ```bash
-git merge --no-ff --no-commit "$EXPECTED_UPSTREAM_SHA"
+if ! PRE_MERGE_HEAD=$(git rev-parse HEAD); then
+  echo "Unable to record the pre-merge HEAD" >&2
+  exit 1
+fi
+if git merge --no-ff --no-commit "$EXPECTED_UPSTREAM_SHA"; then
+  :
+else
+  MERGE_EXIT=$?
+  if ! git merge --abort; then
+    echo "Merge failed and git merge --abort also failed" >&2
+    exit 1
+  fi
+  echo "Merge failed; merge aborted. Stop without changing the upstream marker." >&2
+  exit "$MERGE_EXIT"
+fi
+if ! printf '%s\n' "$EXPECTED_UPSTREAM_SHA" > .github/upstream-main.sha; then
+  echo "Unable to write the upstream marker after merge" >&2
+  exit 1
+fi
+if ! git add .github/upstream-main.sha; then
+  echo "Unable to stage the upstream marker" >&2
+  exit 1
+fi
 ```
 
 **历史改写禁令（不可绕过）**：从 merge 开始到 merge commit 创建完成，禁止
 reset、rebase、squash、cherry-pick、切换分支和清除 `MERGE_HEAD`。失败时唯一允许的
 中止路径是 `git merge --abort`，中止后立即停止整个流程。
 
-**如果合并失败且冲突无法解决**（如上游大规模重构导致 fork 的 cli.py/uvx 适配完全冲突），立即中止：
-
-```bash
-git merge --abort
-```
-
-中止后向用户报告失败原因和具体冲突范围，由用户决定下一步。merge 未提交前
+**如果合并失败（包括冲突）**，上面的程序会先执行 `git merge --abort`，然后立即
+停止；不得继续适配、提交或修改 marker。向用户报告失败原因和具体冲突范围，由用户
+决定下一步。merge 未提交前
 `MERGE_HEAD` 必须始终等于 `"$EXPECTED_UPSTREAM_SHA"`。
 
 ---
 
-### Step 3: 解决冲突
+### Step 3: 适配与检查
 
-**核心原则：保留 fork 的 uvx 适配，合入上游的新功能。`skills/ppt-master/scripts/*.py` 除 `attribution_guard.py` 与下方「fork 修改文件清单」列出的文件外零改动。**
+Step 2 成功才允许进入本步；失败（包括冲突）已经 abort 并停止，禁止手动解冲突后
+继续本次运行。成功后，核心原则是保留 fork 的 uvx 适配，合入上游的新功能。
+`skills/ppt-master/scripts/*.py` 除 `attribution_guard.py` 与下方「fork 修改文件清单」列出的文件外零改动。
 
 **fork 修改文件清单**（这些文件含 fork 独有的 Windows/uvx 适配，上游更新时**保留 fork 适配标记、合入上游功能改动**，不得整文件回退）：
 
@@ -309,11 +347,31 @@ python skills/ppt-master/scripts/check_cli_sync.py
 7. **merge-state 门禁**：在 `git commit` 创建 merge commit 之前验证 merge 状态与目标文件仍然成立：
 
    ```bash
-   test "$(git rev-parse -q --verify MERGE_HEAD)" = "$EXPECTED_UPSTREAM_SHA"
-   test "$(tr -d '\r\n' < .github/upstream-main.sha)" = "$EXPECTED_UPSTREAM_SHA"
+   if ! MERGE_HEAD_SHA=$(git rev-parse -q --verify MERGE_HEAD); then
+     echo "MERGE_HEAD is missing" >&2
+     exit 1
+   fi
+   if [ "$MERGE_HEAD_SHA" != "$EXPECTED_UPSTREAM_SHA" ]; then
+     echo "MERGE_HEAD does not equal EXPECTED_UPSTREAM_SHA" >&2
+     exit 1
+   fi
+   if ! WORKTREE_TARGET_SHA=$(tr -d '\r\n' < .github/upstream-main.sha); then
+     echo "Unable to read .github/upstream-main.sha" >&2
+     exit 1
+   fi
+   if ! INDEX_TARGET_SHA=$(git show :".github/upstream-main.sha" | tr -d '\r\n'); then
+     echo "Unable to read the staged upstream marker" >&2
+     exit 1
+   fi
+   if [ "$WORKTREE_TARGET_SHA" != "$EXPECTED_UPSTREAM_SHA" ] ||
+      [ "$INDEX_TARGET_SHA" != "$EXPECTED_UPSTREAM_SHA" ]; then
+     echo "The upstream marker is not staged with EXPECTED_UPSTREAM_SHA" >&2
+     exit 1
+   fi
    ```
 
-   任一命令非零（`MERGE_HEAD` 被清除/改写，或目标文件与选定 SHA 不一致）都停止，不提交。
+   任一命令非零（`MERGE_HEAD` 被清除/改写，或工作树/索引目标文件与选定 SHA 不一致）
+   都停止，不提交。
 
 **七项有任何一项不通过，禁止提交。** 回到对应步骤修复后重新验证。
 
@@ -338,17 +396,62 @@ python skills/ppt-master/scripts/check_deps_sync.py
 
 ```bash
 # 提交合并和适配（仅已追踪文件的更新 + 新文件 + 目标文件）
-PRE_MERGE_HEAD=$(git rev-parse HEAD)
-git add -u
-git add .github/upstream-main.sha cli.py skills/ppt-master/cli.py pyproject.toml skills/ppt-master/pyproject.toml
-git commit -m "merge upstream/main: resolve conflicts, adapt to uvx, sync cli.py mappings"
-SYNC_MERGE_COMMIT=$(git rev-parse HEAD)
-test "$(git rev-parse "$SYNC_MERGE_COMMIT^1")" = "$PRE_MERGE_HEAD"
-test "$(git rev-parse "$SYNC_MERGE_COMMIT^2")" = "$EXPECTED_UPSTREAM_SHA"
-git merge-base --is-ancestor "$EXPECTED_UPSTREAM_SHA" "$SYNC_MERGE_COMMIT"
+if [ -z "${PRE_MERGE_HEAD:-}" ]; then
+  echo "PRE_MERGE_HEAD was not recorded before merge" >&2
+  exit 1
+fi
+if ! git add -u; then
+  echo "Unable to stage tracked sync changes" >&2
+  exit 1
+fi
+if ! git add .github/upstream-main.sha cli.py skills/ppt-master/cli.py pyproject.toml skills/ppt-master/pyproject.toml; then
+  echo "Unable to stage sync files" >&2
+  exit 1
+fi
+if ! git commit -m "merge upstream/main: resolve conflicts, adapt to uvx, sync cli.py mappings"; then
+  echo "Unable to create the upstream merge commit" >&2
+  exit 1
+fi
+if ! SYNC_MERGE_COMMIT=$(git rev-parse HEAD); then
+  echo "Unable to resolve the new merge commit" >&2
+  exit 1
+fi
+if ! MERGE_PARENTS=$(git show -s --format=%P "$SYNC_MERGE_COMMIT"); then
+  echo "Unable to inspect merge commit parents" >&2
+  exit 1
+fi
+if ! PARENT_COUNT=$(printf '%s\n' "$MERGE_PARENTS" | awk '{ print NF }'); then
+  echo "Unable to count merge commit parents" >&2
+  exit 1
+fi
+if [ "$PARENT_COUNT" -ne 2 ]; then
+  echo "The sync commit must have exactly two parents" >&2
+  exit 1
+fi
+if ! FIRST_PARENT=$(git rev-parse "$SYNC_MERGE_COMMIT^1"); then
+  echo "Unable to resolve the first merge parent" >&2
+  exit 1
+fi
+if ! SECOND_PARENT=$(git rev-parse "$SYNC_MERGE_COMMIT^2"); then
+  echo "Unable to resolve the second merge parent" >&2
+  exit 1
+fi
+if [ "$FIRST_PARENT" != "$PRE_MERGE_HEAD" ]; then
+  echo "The first merge parent is not PRE_MERGE_HEAD" >&2
+  exit 1
+fi
+if [ "$SECOND_PARENT" != "$EXPECTED_UPSTREAM_SHA" ]; then
+  echo "The second merge parent is not EXPECTED_UPSTREAM_SHA" >&2
+  exit 1
+fi
+if ! git merge-base --is-ancestor "$EXPECTED_UPSTREAM_SHA" "$SYNC_MERGE_COMMIT"; then
+  echo "Expected upstream SHA is not an ancestor of the sync commit" >&2
+  exit 1
+fi
 ```
 
-三条验证任一失败，说明 merge commit 的提交关系被破坏（非双亲 merge 或上游提交不是祖先），禁止继续发布，回到 Step 4e 门禁排查。
+以上检查任一失败，说明 merge commit 的提交关系被破坏（不是恰好双亲 merge、父序不对，
+或上游提交不是祖先），禁止继续发布，回到 Step 4e 门禁排查。
 
 ```bash
 # 查看当前版本
@@ -364,7 +467,10 @@ git commit -m "chore: bump version to X.Y.Z"
 版本提交保持独立，与 merge commit 分离。版本提交完成后再次验证 ancestry 仍然成立：
 
 ```bash
-git merge-base --is-ancestor "$EXPECTED_UPSTREAM_SHA" HEAD
+if ! git merge-base --is-ancestor "$EXPECTED_UPSTREAM_SHA" HEAD; then
+  echo "Expected upstream SHA is not an ancestor of HEAD after version commit" >&2
+  exit 1
+fi
 ```
 
 **如果在 GitHub Actions 环境中运行：**

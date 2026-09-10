@@ -13,32 +13,43 @@ upstream  → https://github.com/hugohe3/ppt-master.git   (原作者)
 
 | 方式 | 触发 | 适用场景 | 自动发布 |
 |------|------|----------|----------|
-| **定时自动 (schedule)** | 每周一 UTC 8:00 | 定期维护，无需人工干预 | ✅ 全自动 |
-| **Issue 评论 (`/oc`)** | 在 Issue 下评论 `/oc /sync-upstream` | 临时手动触发，需要立刻同步 | ✅ PR 合并后自动 |
+| **定时自动 (schedule)** | 每日 UTC 18:00 | 定期维护，无需人工干预 | ✅ 创建 PR |
+| **手动 (workflow_dispatch)** | 仅允许从 `main` 分支运行 | 需要立即同步到 `main` | ✅ 验证后由 workflow 推送 |
 | **本地 CLI** | `.opencode/command/sync-upstream.md` | 本地开发时手动执行 | ❌ 手动打 tag |
 
 ---
 
 ### 方式一：定时自动（GitHub Actions schedule）
 
-`sync-upstream.yml` 每周一 UTC 8:00（北京时间 16:00）自动运行：
+`sync-upstream.yml` 每日 UTC 18:00（北京时间次日 02:00）自动运行：
 
 ```
-schedule cron → OpenCode Agent 拉取上游 → 合并 → 适配 uvx → 创建 PR
-→ PR 合并到 main → auto-tag.yml 门禁校验 → 打 tag → publish-pypi.yml 发布
+schedule cron → 检测 upstream/main → 无变化则跳过；有变化则注入 immutable SHA
+→ OpenCode Action 合并/适配 → Step 4e 门禁 → 创建分支和 PR
+→ PR 门禁通过并合并到 main → auto-tag.yml → publish-pypi.yml
 ```
 
-**不需要任何手动操作。** PR 合并后全自动发布到 PyPI。
+schedule 路径的 OpenCode Action 负责创建分支和 PR，不直接推送 `main`。PR 必须经过
+仓库现有门禁；Task 1 只建立同步提交的 immutable SHA 和真实双父 merge 契约，后续
+main/PR ancestry 门禁由独立任务接入。上游无变化时 OpenCode、提交和 PR 步骤均正常
+跳过。
 
-> **注意**: `schedule` 事件在 GitHub Actions 中自动跳过权限检查（无需人工批准），不会卡住。`workflow_dispatch` 事件需要权限批准，会无限等待 —— 因此 sync-upstream.yml **仅使用 schedule** 触发。
+`EXPECTED_UPSTREAM_SHA` 由 workflow 注入 OpenCode 环境；Actions 中缺失或与 fetch 后
+的 `upstream/main` 不一致会 fail-closed。只有本地执行时，变量为空才允许回退到 fetch
+后的 upstream tip。
 
-### 方式二：Issue 评论触发
+### 方式二：手动触发（workflow_dispatch）
 
-1. 在仓库中创建一个 Issue
-2. 评论 `/oc /sync-upstream`
-3. `opencode.yml` 触发 OpenCode Agent，读取 `.opencode/command/sync-upstream.md` 执行全流程
-4. Agent 创建分支 → 提交 → 创建 PR
-5. 合并 PR → `auto-tag.yml` → `publish-pypi.yml` → PyPI
+1. 在 GitHub Actions 中选择 `Sync Upstream` 的 `workflow_dispatch`
+2. 选择 `main`；非 `refs/heads/main` 会被前置 guard 拒绝
+3. 有上游变化时，workflow 将 immutable `EXPECTED_UPSTREAM_SHA` 和模型变量注入 CLI
+4. OpenCode 只合并、适配和提交，不获得 `PUSH_PAT`，也不得执行 push
+5. OpenCode 退出后，Verify 先确认工作树/索引干净，再从 `HEAD:.github/upstream-main.sha`
+   读取记录，确认 `BASE_SHA` 与目标都是 HEAD 祖先，并找到恰好双父且父序为
+   `^1=BASE_SHA`、`^2=EXPECTED_UPSTREAM_SHA` 的 merge commit
+6. 以上 workflow 验证通过后，最后的 workflow step 才注入 `PUSH_PAT` 并执行
+   `git push origin HEAD:main`；缺少 PAT 或验证失败均停止，不 force-push
+7. 上游无变化时 OpenCode、Verify、Push 均跳过
 
 ### 方式三：本地 OpenCode CLI
 
@@ -48,7 +59,7 @@ opencode
 # 然后输入: /sync-upstream
 ```
 
-或直接通过 comment 触发上方的 Issue 评论方式。
+本地执行不会触发 GitHub Actions 的 main-ref/PAT 推送路径。
 
 ---
 
@@ -56,8 +67,8 @@ opencode
 
 | 工作流文件 | 触发 | 功能 |
 |-----------|------|------|
-| `sync-upstream.yml` | schedule (每周一) | OpenCode Agent 拉取上游、合并、适配 uvx、创建 PR |
-| `auto-tag.yml` | push to main (pyproject.toml 变更) | 5 道门禁校验 + 自动打 tag → 触发 PyPI 发布 |
+| `sync-upstream.yml` | schedule / workflow_dispatch（仅 main） | 检测 immutable 上游目标；schedule 创建 PR，manual 验证后由 workflow 使用 PAT 推送 |
+| `auto-tag.yml` | push to main (pyproject.toml 变更) | 7 道门禁校验 + 自动打 tag → 触发 PyPI 发布 |
 | `publish-pypi.yml` | tag push `v*` | 构建 wheel + 发布到 PyPI |
 | `opencode.yml` | issue_comment `/oc` | 通用 OpenCode Agent 入口 |
 | `check-uvx-migration.yml` | push to main (merge commit) | 检测合并提交中 `python3` 命令残留 |
@@ -70,6 +81,8 @@ Gate 1: cli.py 映射完整 (check_cli_sync.py)
 Gate 2: .md 文件中无 python3 残留
 Gate 3: .md 文件中无 uv run 残留
 Gate 4: 依赖清单一致 (check_deps_sync.py)
+Gate 5: Skill 完整性 guard
+Gate 6: wheel attribution 文件完整
 → 全部通过 → git tag vX.Y.Z → publish-pypi.yml
 ```
 
@@ -165,8 +178,19 @@ git tag vX.Y.Z && git push origin vX.Y.Z
 ## 重要注意事项
 
 - **`.gitignore` 必须包含 `!uv.lock` 例外规则**（`*.lock` 会匹配 `uv.lock`）
-- **`sync-upstream.yml` 不使用 `workflow_dispatch`** — OpenCode action 在 `workflow_dispatch` 事件下会卡在权限 `ask` 状态
-- **`issue_comment` 权限问题** — OpenCode Agent 在 issue_comment 事件下可能也需要权限批准（依赖 actor 角色）。如果 repo 所有者在 issue 下评论，权限通常自动放行
+- **`workflow_dispatch` 只允许 `refs/heads/main`** — 前置 guard 缺失或 ref 不匹配时
+  fail-closed；这不是可从功能分支绕过的同步入口
+- **OpenCode 不 push** — schedule 由 Action 基础设施创建分支和 PR；manual 的模型不
+  接触 `PUSH_PAT`，由 workflow 在 Verify 成功后最后注入 PAT 并运行
+  `git push origin HEAD:main`
+- **manual 无变化正常跳过** — OpenCode、Verify、Push 三步都要求
+  `workflow_dispatch && steps.upstream.outputs.has_changes == 'true'`
+- **验证必须针对提交对象** — Verify 先运行
+  `git diff --quiet && git diff --cached --quiet`，再读取
+  `git show HEAD:.github/upstream-main.sha | tr -d '\r\n'`；工作树中的未提交 marker
+  不能冒充已提交记录
+- **合并关系必须精确** — `BASE_SHA` 与 immutable 目标都必须是 HEAD 祖先，并且必须
+  找到恰好双父 merge，第一父为 `BASE_SHA`、第二父为 `EXPECTED_UPSTREAM_SHA`
 - **`skills/ppt-master/scripts/*.py` 的 `python3` 残留** — `check_uvx_migration.yml` 已豁免该目录
 - **合并后必须运行 `python skills/ppt-master/scripts/attribution_guard.py` 且 exit 0** — 上游若更新 attribution 约束（`_SKILL_GATE_MARKER`、`_REQUIRED_GATE_FILES`、metadata 字段、LICENSE 摘要），必须同步适配：SKILL.md 只保留一次 `uvx ppt-master attribution-guard`、`skills/ppt-master/` 下 LICENSE/SPONSORS.md/SPONSORS_CN.md 存在、MANIFEST.in（根与 skill）仍包含 4 个 attribution 文件。`auto-tag.yml` 的 Gate 5/6 会拦截发布
 - 合并后运行 `uvx ppt-master check-deps-sync` 验证依赖一致性

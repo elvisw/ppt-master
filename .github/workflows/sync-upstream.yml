@@ -42,13 +42,20 @@ jobs:
           echo "Upstream tip: $UPSTREAM_SHA"
           CHANGES=$(git log main..upstream/main --oneline)
           if [ -z "$CHANGES" ]; then
-            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
             echo "No upstream changes — skipping sync."
           else
-            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
             echo "Upstream changes detected:"
             echo "$CHANGES"
           fi
+
+      # Both OpenCode paths may create a commit; configure commit author metadata only.
+      - name: Configure git identity
+        if: steps.upstream.outputs.has_changes == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       # schedule 事件：OpenCode action 自动跳过权限，创建分支+PR
       - name: Run OpenCode Sync (auto)
@@ -57,6 +64,7 @@ jobs:
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           GH_TOKEN: ${{ github.token }}
+          EXPECTED_UPSTREAM_SHA: ${{ steps.upstream.outputs.upstream_sha }}
         with:
           model: ${{ vars.OPENCODE_MODEL || 'deepseek/deepseek-v4-flash' }}
           prompt: |
@@ -65,7 +73,8 @@ jobs:
             If no upstream changes, stop immediately.
 
             The immutable upstream commit for this run is `${{ steps.upstream.outputs.upstream_sha }}`.
-            Set `EXPECTED_UPSTREAM_SHA` to that exact value and follow `.opencode/command/sync-upstream.md`.
+            `EXPECTED_UPSTREAM_SHA` is injected into the environment; it must equal that exact value.
+            Follow `.opencode/command/sync-upstream.md`'s fail-closed Actions contract.
             CRITICAL: preserve a real merge commit whose second parent is that SHA. Never reset, rebase,
             squash, cherry-pick, switch branches, or clear MERGE_HEAD after merge starts. Do not report
             success unless the recorded SHA is an ancestor of HEAD.
@@ -82,12 +91,7 @@ jobs:
 
             CRITICAL: After the python3 gate, you MUST also run the Skill integrity guard:
             `python3 skills/ppt-master/scripts/attribution_guard.py` must exit 0 (no output).
-            If it exits non-zero (e.g. 78), fix the attribution/uvx conflict before committing:
-            keep `_SKILL_GATE_MARKER` as `uvx ppt-master attribution-guard` in
-            attribution_guard.py, ensure SKILL.md contains it exactly once, ensure
-            LICENSE/SPONSORS.md/SPONSORS_CN.md exist under skills/ppt-master/, and ensure
-            MANIFEST.in (root and skills/ppt-master/) still includes SKILL.md/LICENSE/
-            SPONSORS.md/SPONSORS_CN.md. Re-run the guard until it exits 0.
+            If it exits non-zero, fix the attribution/uvx conflict and re-run the guard.
             Do NOT commit or push until BOTH gates pass.
 
             CRITICAL: After the python3 and skill guard gates, verify fork adaptation markers
@@ -109,29 +113,67 @@ jobs:
             run `python3 -m py_compile` on confirm_ui/server.py, svg_editor/server.py, visual_review.py,
             server_common.py, config.py, project_management/paths.py, project_manager.py, and
             register_template.py (all under skills/ppt-master/scripts/), then run
-            `uvx ruff check --select F821` on the same 8 files. F821 catches undefined names such as
-            a missing `import uuid` next to a launch-token line — the marker grep alone cannot detect
-            "marker present but code broken". Both checks must pass with zero errors before committing;
-            fix any failure and re-run until clean.
+            `uvx ruff check --select F821` on the same 8 files. Both checks must pass with zero
+            errors before committing; fix any failure and re-run until clean.
 
-      # workflow_dispatch 事件：opencode CLI 非交互模式
+      # workflow_dispatch 事件：只允许从 main 运行，模型不接触 push 凭据
+      - name: Guard manual sync ref
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          if [ "${GITHUB_REF:-}" != "refs/heads/main" ]; then
+            echo "::error::workflow_dispatch sync must run from refs/heads/main; got '${GITHUB_REF:-}'"
+            exit 1
+          fi
+          echo "Manual sync ref is refs/heads/main"
+
       - name: Run OpenCode Sync (manual)
         if: github.event_name == 'workflow_dispatch' && steps.upstream.outputs.has_changes == 'true'
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          OPENCODE_MODEL: ${{ vars.OPENCODE_MODEL || 'deepseek/deepseek-v4-flash' }}
+          EXPECTED_UPSTREAM_SHA: ${{ steps.upstream.outputs.upstream_sha }}
         run: |
           npm install -g opencode-ai@latest
-          opencode run --dangerously-skip-permissions -m ${{ vars.OPENCODE_MODEL || 'deepseek/deepseek-v4-flash' }} "Read .opencode/command/sync-upstream.md and follow ALL steps. Use python3. No tags. Stop if no upstream changes. Do not push; the workflow verifies and pushes after OpenCode exits. The immutable upstream commit for this run is ${{ steps.upstream.outputs.upstream_sha }}. Set EXPECTED_UPSTREAM_SHA to that exact value and follow .opencode/command/sync-upstream.md. CRITICAL: preserve a real merge commit whose second parent is that SHA. Never reset, rebase, squash, cherry-pick, switch branches, or clear MERGE_HEAD after merge starts. Do not report success unless the recorded SHA is an ancestor of HEAD. CRITICAL: Step 4 must scan ALL .md files in the entire repo. Before committing, run Step 4e gate — rg 'python3' across all .md files (excluding .opencode/, docs/superpowers/). Do NOT commit until clean. CRITICAL: also run the skill integrity guard via python3 skills/ppt-master/scripts/attribution_guard.py and require exit 0; if it fails, fix the attribution/uvx conflict (keep _SKILL_GATE_MARKER as uvx ppt-master attribution-guard, keep SKILL.md/LICENSE/SPONSORS files and MANIFEST.in includes) and re-run until exit 0. Do NOT commit or push until both gates pass. Also verify fork adaptation markers (PPT_MASTER_LAUNCH_TOKEN in confirm_ui/server.py + svg_editor/server.py, normalized_project_key in server_common.py, projects_root in paths.py/config.py, PPT_MASTER_TEMPLATES_DIR in register_template.py) and the fork notice blocks (Fork notice / Fork 声明 with uvx install note in README.md + README_CN.md, fork maintainer + sponsor attribution note in PYPI_README.md, uvx (PyPI) row in docs/faq.md + docs/zh/faq.md update table, fork uvx note in docs/windows-installation.md + docs/zh/windows-installation.md, fork note after uv paragraph in docs/roadmap.md + docs/zh/roadmap.md, fork note after Setup in CONTRIBUTING.md) still exist; restore them if missing before committing. CRITICAL: also verify the 8 fork-modified Python files are runnable — run python3 -m py_compile on confirm_ui/server.py, svg_editor/server.py, visual_review.py, server_common.py, config.py, project_management/paths.py, project_manager.py, register_template.py (all under skills/ppt-master/scripts/), then run uvx ruff check --select F821 on the same 8 files; F821 catches undefined names like a missing import uuid next to a launch-token line, which the marker grep cannot detect. Both checks must pass with zero errors before committing; fix any failure and re-run until clean."
+          opencode run --dangerously-skip-permissions -m "$OPENCODE_MODEL" \
+            "Read .opencode/command/sync-upstream.md and follow ALL steps. Use python3. No tags. Stop if no upstream changes. Do not push; the workflow verifies and pushes after OpenCode exits. The immutable upstream commit for this run is $EXPECTED_UPSTREAM_SHA. The workflow injected EXPECTED_UPSTREAM_SHA; follow the command's Actions fail-closed contract. CRITICAL: preserve a real merge commit whose second parent is that SHA. Never reset, rebase, squash, cherry-pick, switch branches, or clear MERGE_HEAD after merge starts. Do not report success unless the recorded SHA is an ancestor of HEAD. CRITICAL: Step 4 must scan ALL .md files in the entire repo, including root .md files, skills/ppt-master/, docs/, examples/, projects/, and any other directory with .md files; exclude only .opencode/, docs/superpowers/, and docs/zh/upstream-sync.md. Before committing, require zero python3 remnants with rg, the skill integrity guard, all fork adaptation and fork notice markers, py_compile for the eight fork-modified Python files, and uvx ruff check --select F821 on those files. Do NOT commit or push until every gate passes."
 
       - name: Verify upstream ancestry
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && steps.upstream.outputs.has_changes == 'true'
         env:
           BASE_SHA: ${{ github.sha }}
           EXPECTED_UPSTREAM_SHA: ${{ steps.upstream.outputs.upstream_sha }}
         run: |
-          RECORDED_SHA=$(tr -d '\r\n' < .github/upstream-main.sha)
+          if ! (git diff --quiet && git diff --cached --quiet); then
+            echo "::error::OpenCode left the worktree or index dirty"
+            git status --short
+            exit 1
+          fi
+
+          if [ -z "${BASE_SHA:-}" ] || [ -z "${EXPECTED_UPSTREAM_SHA:-}" ]; then
+            echo "::error::BASE_SHA and EXPECTED_UPSTREAM_SHA are required"
+            exit 1
+          fi
+          if ! printf '%s\n' "$EXPECTED_UPSTREAM_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::Invalid expected upstream SHA: $EXPECTED_UPSTREAM_SHA"
+            exit 1
+          fi
+
+          if ! git cat-file -e "HEAD:.github/upstream-main.sha"; then
+            echo "::error::HEAD does not contain .github/upstream-main.sha"
+            exit 1
+          fi
+          if ! RECORDED_SHA=$(git show HEAD:.github/upstream-main.sha | tr -d '\r\n'); then
+            echo "::error::Unable to read committed upstream marker from HEAD"
+            exit 1
+          fi
           if [ "$RECORDED_SHA" != "$EXPECTED_UPSTREAM_SHA" ]; then
             echo "::error::Recorded SHA $RECORDED_SHA does not match expected $EXPECTED_UPSTREAM_SHA"
+            exit 1
+          fi
+
+          if ! git merge-base --is-ancestor "$BASE_SHA" HEAD; then
+            echo "::error::BASE_SHA is not an ancestor of HEAD"
+            git log --graph --oneline --decorate "$BASE_SHA..HEAD"
             exit 1
           fi
           if ! git merge-base --is-ancestor "$EXPECTED_UPSTREAM_SHA" HEAD; then
@@ -139,21 +181,35 @@ jobs:
             git log --graph --oneline --decorate "$BASE_SHA..HEAD"
             exit 1
           fi
-          MERGE_COMMIT=$(git rev-list --merges --parents "$BASE_SHA..HEAD" |
-            awk -v target="$EXPECTED_UPSTREAM_SHA" '{ for (i = 2; i <= NF; i++) if ($i == target) { print $1; exit } }')
-          if [ -z "$MERGE_COMMIT" ]; then
-            echo "::error::No new merge commit has expected upstream SHA as a direct parent"
+
+          if ! MERGE_LINES=$(git rev-list --merges --parents "$BASE_SHA..HEAD"); then
+            echo "::error::Unable to enumerate merge commits after BASE_SHA"
+            exit 1
+          fi
+          if ! MATCHES=$(printf '%s\n' "$MERGE_LINES" | awk -v base="$BASE_SHA" -v expected="$EXPECTED_UPSTREAM_SHA" 'NF == 3 && $2 == base && $3 == expected { print $1 }'); then
+            echo "::error::Unable to inspect merge commit parents"
+            exit 1
+          fi
+          if ! MATCH_COUNT=$(printf '%s\n' "$MATCHES" | awk 'NF { count += 1 } END { print count + 0 }'); then
+            echo "::error::Unable to count matching merge commits"
+            exit 1
+          fi
+          if [ "$MATCH_COUNT" -ne 1 ]; then
+            echo "::error::Expected exactly one two-parent merge with ^1=$BASE_SHA and ^2=$EXPECTED_UPSTREAM_SHA; found $MATCH_COUNT"
             git log --graph --oneline --decorate "$BASE_SHA..HEAD"
             exit 1
           fi
-          echo "Verified merge commit $MERGE_COMMIT with upstream parent $EXPECTED_UPSTREAM_SHA"
+          MERGE_COMMIT="$MATCHES"
+          echo "Verified two-parent merge commit $MERGE_COMMIT with ^1=$BASE_SHA and ^2=$EXPECTED_UPSTREAM_SHA"
 
       - name: Push verified manual sync
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && steps.upstream.outputs.has_changes == 'true'
         env:
           PUSH_PAT: ${{ secrets.PUSH_PAT }}
         run: |
+          if [ -z "${PUSH_PAT:-}" ]; then
+            echo "::error::PUSH_PAT is required for the verified manual push"
+            exit 1
+          fi
           git remote set-url origin "https://x-access-token:${PUSH_PAT}@github.com/elvisw/ppt-master.git"
           git push origin HEAD:main
-
-
