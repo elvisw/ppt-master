@@ -960,3 +960,38 @@ gh api repos/elvisw/ppt-master --jq '{allow_merge_commit,allow_squash_merge,allo
 
 Expected: worktree clean；仅计划内文件；本地提交含两份设计提交、实现提交、CI 提交和
 repair merge；GitHub 设置为 `true/false/false`；没有 push 或远端 PR。
+
+---
+
+## Task 5B：不可变 release gate 与发布隔离（实现记录）
+
+Task 5B 在 Task 5A 的 trusted ancestry 边界之后增加一条只读 release chain；它不改写
+Task 4 ancestry/history、版本或 `progress.md`，也不执行远端 tag/push/PR/publish。
+
+### 实现合同
+
+- [x] `.github/scripts/check_release_gates.py` 成为 auto-tag 与 publish 共用的唯一 release
+  gate owner；workflow-run API evidence 在所有本地 gate 前 fail-closed，`check_uvx_migration.py`
+  exit 2 只输出 notice。
+- [x] 版本通过 `tomllib` 从两份 pyproject 读取，严格 canonical grammar 绑定 `v<version>`；
+  release SHA、exact tag ref、origin/main tip/history 和 upstream marker 都按 object/ref 验证。
+- [x] `check_cli_sync.py` 比较 root/Skill 每个 command/alias 的完整映射值，规范化路径并
+  保持 aliases 位于 `COMMANDS` 之外；新增 `check-uvx-repository` 为用户可调用的只读扫描器。
+- [x] scanner 只从 `git ls-files -z` 读取 tracked 文档/workflow/prompt，覆盖 root、docs、
+  examples、`.github`、`.opencode`、skills；allowlist 为精确规范化路径+规则，`auto_fix_uvx.py`
+  只指向 scanner-owned policy，不再维护 content-keyword exclusions。
+- [x] auto-tag 仅由成功的 `Check UVX Migration` `workflow_run` 触发，checkout immutable
+  `head_sha`，最后一步才注入 PAT，只推 exact tag；publish 的 tag/manual 两入口都重新查询
+  exact successful push run 并重新运行完整 gate。
+- [x] publish 拆为无 OIDC build/gate、无 OIDC fresh artifact verifier、`environment: pypi`
+  OIDC publish 三个 job；artifact 只含一个 wheel、一个 sdist 和 strict SHA-256 manifest。
+  verifier 输出文件名与 SHA-256 摘要；OIDC job 不 checkout/导入/执行 wheel，只在 fresh runner
+  重新核对完整 artifact 文件集合和这些摘要后发布确切路径。
+- [x] privileged workflow actions 固定为 GitHub API 解析出的 immutable commit SHA，并在行尾
+  标注 upstream release；新 release helpers/tests 加入 ancestry protected set。
+
+### 同步后的验证与 residual
+
+运行清单、命令和结果写入 `.superpowers/sdd/sync-upstream-task-5b-report.md`。上游 SSRF
+redirect/DNS-rebinding 与 SVG SMIL sanitizer 仍明确列为 upstream residual，Task 5B 不修复、
+不改写、不宣称已解决。

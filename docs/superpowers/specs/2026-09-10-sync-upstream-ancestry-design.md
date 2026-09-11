@@ -1,7 +1,7 @@
 # 设计文档：上游同步提交关系修复
 
 **日期**: 2026-09-10
-**状态**: 已确认，审阅后修订，待复审
+**状态**: 已确认，Task 5A/5B 实现后待复审
 **来源**: GitHub Actions 运行 `34400493716` 与 PR #65
 
 ## 1. 背景
@@ -186,7 +186,36 @@ trusted maintenance/bootstrap 流程修改。
 Task 5A 不修改 release workflows；现有 `check-uvx-migration`、`auto-tag` 和 `publish-pypi` 的
 ancestry/release owner 继续由 Task 2/5B 管理。同步 PR 进入 `main` 后才由既有发布链处理。
 
-### 4.7 仓库合并设置与落盘方式
+### 4.7 Task 5B 不可变发布链
+
+Task 5B 将发布边界收敛为一个 trusted、只读的
+`.github/scripts/check_release_gates.py` owner。`auto-tag` 与 `publish-pypi` 都必须在
+精确 release SHA 上调用它；它依次验证 marker/type/SHA/upstream ancestry、完整 root/Skill
+`COMMANDS` 与 `ALIASES` 映射、依赖与双 lock、repository-wide tracked-file UVX 扫描、归因/许可证
+摘要/sponsors/frontmatter/manifest、八个 fork marker/import 与 `py_compile`/Ruff F821、workflow
+YAML/action pin/protected policy，以及严格版本/tag 语法。`check_uvx_migration.py` 的 exit 2
+只能是提示，不能替代 immutable successful workflow-run API 证据。
+
+`auto-tag` 只接受同一仓库 `Check UVX Migration` 的 completed/successful `push` run，且
+`head_sha`、`head_branch=main`、workflow path 与 repository 全部精确匹配；它 checkout 该
+`head_sha`，在最后一个 tag step 重新确认 `origin/main` 未前进，且只用 PAT 推送
+`refs/tags/<tag>`，绝不修复文件或推送 `main`。版本由 trusted TOML 解析写入环境并以安全的
+canonical grammar 绑定为 `v<version>`。
+
+`publish-pypi` 的 tag push 与 manual recovery 都必须提供/推导相同的 release SHA/tag，精确
+fetch tag ref，确认 tag 指向 SHA 且 SHA 在 `origin/main` 历史中，再查询同一成功 migration run
+并重新运行完整 gate。build/gate job 没有 OIDC；它只把一个 wheel、一个 sdist 和严格的
+SHA-256/release identity manifest 交给后续 jobs。无 OIDC 的 fresh verifier 先静态检查文件名、
+hash、metadata、归因文件和归档路径，并输出已验证的文件名与 SHA-256 摘要；只有其成功依赖之后
+才启动 `environment: pypi` 的 OIDC publish job。该 job 不 checkout 或执行包代码，只在另一个
+fresh runner 下载同一 immutable artifact，重新核对完整文件集合和 verifier outputs 的摘要，再
+对确切路径调用 `uv publish --trusted-publishing always`。
+
+所有 privileged workflow action 都以 GitHub API 解析到的 40 位 commit SHA 固定，并在 YAML
+旁标注 upstream release；workflow-run API 返回值也作为 report 证据保留。上游 SSRF redirect/
+DNS-rebinding 与 SVG SMIL sanitizer 风险仍是显式 out-of-scope residual，本次不宣称修复。
+
+### 4.8 仓库合并设置与落盘方式
 
 通过 fork API 关闭 `allow_squash_merge` 和 `allow_rebase_merge`，保留
 `allow_merge_commit=true`，并在修改前后读取 API 回执。该设置只作用于
@@ -260,5 +289,15 @@ git log HEAD..09ad58f0d58decc9d30799ca83374ff2604ef16b --oneline
 - `docs/zh/upstream-sync.md`
 - `docs/superpowers/specs/2026-09-10-sync-upstream-ancestry-design.md`
 - `docs/superpowers/plans/2026-09-10-sync-upstream-ancestry.md`
+- `.github/scripts/check_release_gates.py`
+- `skills/ppt-master/scripts/check_uvx_repository.py`
+- `skills/ppt-master/scripts/tests/test_check_cli_sync.py`
+- `skills/ppt-master/scripts/tests/test_release_gates.py`
+- `skills/ppt-master/scripts/tests/test_release_workflows.py`
+- `skills/ppt-master/scripts/tests/test_uvx_repository_scan.py`
+- `.github/workflows/auto-tag.yml`
+- `.github/workflows/publish-pypi.yml`
+- `.github/workflows/check-uvx-migration.yml`
 
-Task 5A 不修改 release workflows、版本或 Task 3/4 历史；当前 ancestry repair 通过 Git 提交关系完成，不通过修改上游代码文件模拟。
+Task 5A 不修改版本或 Task 3/4 历史；Task 5B 只收紧 fork release workflows，不修改上游代码文件模拟
+ancestry，也不执行远端 tag、push、PR、publish 或 ruleset/environment activation。

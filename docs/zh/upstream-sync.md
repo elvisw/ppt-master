@@ -114,23 +114,28 @@ foreign HEAD 或 ignored/untracked marker 会保留现场并停止。
 | 工作流文件 | 触发 | 功能 |
 |-----------|------|------|
 | `sync-upstream.yml` | schedule / workflow_dispatch（仅 main） | 两 job 隔离模型与凭据；trusted job 推唯一分支并创建 PR |
-| `auto-tag.yml` | push to main (pyproject.toml 变更) | 7 道门禁校验 + 自动打 tag → 触发 PyPI 发布 |
-| `publish-pypi.yml` | tag push `v*` | 构建 wheel + 发布到 PyPI |
+| `auto-tag.yml` | 成功的 `Check UVX Migration` `workflow_run` | 精确 SHA 全门禁 + 自动推送 exact tag |
+| `publish-pypi.yml` | tag push `v*` / manual recovery | 精确 SHA 全门禁 + 无 OIDC 构建 + 静态 artifact 验证 + PyPI 发布 |
 | `opencode.yml` | issue_comment `/oc` | 通用 OpenCode Agent 入口 |
 | `check-uvx-migration.yml` | push to main (merge commit) | 检测合并提交中 `python3` 命令残留 |
 
-### auto-tag.yml 门禁
+### auto-tag.yml 与 publish-pypi.yml 共同门禁
 
 ```
-Gate 0: 两个 pyproject.toml 版本一致
-Gate 1: cli.py 映射完整 (check_cli_sync.py)
-Gate 2: .md 文件中无 python3 残留
-Gate 3: .md 文件中无 uv run 残留
-Gate 4: 依赖清单一致 (check_deps_sync.py)
-Gate 5: Skill 完整性 guard
-Gate 6: wheel attribution 文件完整
-→ 全部通过 → git tag vX.Y.Z → publish-pypi.yml
+Gate 0: immutable successful Check UVX Migration push run 的 head_sha/path/repo/branch/conclusion
+Gate 1: upstream marker/type/SHA/upstream membership/HEAD ancestry
+Gate 2: root/Skill 完整 COMMANDS 与 ALIASES 映射
+Gate 3: 三份依赖清单与双 uv.lock 同步
+Gate 4: git ls-files repository-wide UVX 文档/工作流/prompt 扫描
+Gate 5: attribution guard、LICENSE digest、sponsors、frontmatter、双 manifest
+Gate 6: 八个 fork marker/import、py_compile 与 Ruff F821
+Gate 7: YAML/action pin/protected policy 与 canonical version/tag
+→ 全部通过 → 只推送 refs/tags/vX.Y.Z → publish-pypi.yml 重新执行全套门禁
 ```
+
+scanner 是只读的，使用 `git ls-files -z`，不使用内容关键词豁免，也不改写文件。历史证据和
+仓库自有 Linux CI 只能通过 scanner 所有者维护的精确路径/规则 allowlist 豁免；`auto_fix_uvx.py`
+仍是离线手工工具，复用该 allowlist，不拥有第二套排除语法。
 
 ---
 
@@ -208,16 +213,31 @@ kebab-case 命名：下划线 `_` → 连字符 `-`，子目录取文件名。�
 
 打 `v*` tag 前，**必须** 更新两个 `pyproject.toml` 的 `version` 字段为同一值。
 
-### 手动发布
+### 手动恢复发布
 
 ```bash
-git tag vX.Y.Z && git push origin vX.Y.Z
+gh workflow run publish-pypi.yml \
+  -f release_sha=<exact-verified-main-sha> \
+  -f release_tag=vX.Y.Z \
+  --ref vX.Y.Z
 ```
-`publish-pypi.yml` 自动构建发布。
+workflow 会精确 fetch tag，确认 tag 指向 `release_sha` 且该 SHA 属于 `origin/main` 历史，
+查询同一 SHA 的 successful push migration run，并重新运行所有 release gates；任一项失败都不
+构建、不发布。直接手工 push 未经验证的 tag 不属于支持的发布入口。
 
 ### 自动发布
 
-`auto-tag.yml` 在门禁通过后自动打 tag。tag 推送触发 `publish-pypi.yml`。
+`auto-tag.yml` 只接受成功的 `Check UVX Migration` `workflow_run`，checkout 其 immutable
+`head_sha`，在最后一步重新确认 `origin/main` 未前进，然后只推送 `refs/tags/vX.Y.Z`。
+它不包含 manual trigger、auto-fix、main push 或 OIDC。tag 推送再触发 `publish-pypi.yml`。
+
+publish workflow 的 build/gate job 没有 `id-token: write` 或 PyPI credential；只上传 wheel、
+sdist 和严格 manifest。无 OIDC verifier 在 fresh runner 的 `runner.temp` 静态检查 hash、文件名、
+metadata、归因文件和归档路径，并输出已验证的文件名与 SHA-256 摘要；只有成功依赖后才启动
+`environment: pypi` 的 OIDC job。OIDC job 不 checkout、导入或执行 wheel，只在另一个 fresh
+runner 重新核对完整 artifact 文件集合和摘要，再调用 `uv publish --trusted-publishing always`
+发布确切路径。PyPI environment 的审批/分支保护必须在 workflow 集成后由维护者单独 bootstrap，
+本任务不通过 API 激活远端保护。
 
 ---
 
@@ -254,11 +274,13 @@ git tag vX.Y.Z && git push origin vX.Y.Z
 |------|------|
 | `.github/workflows/sync-upstream.yml` | 两 job 的 candidate bundle、trusted verification 和 PR publication |
 | `.github/scripts/check_upstream_ancestry.py` | base checkout 中执行的 ancestry、manifest、版本和 protected-file helper |
+| `.github/scripts/check_release_gates.py` | auto-tag/publish 共用的 immutable release gate 与 artifact verifier |
 | `.opencode/command/sync-upstream.md` | OpenCode sync-upstream 命令定义 |
 | `cli.py` | CLI 命令映射（根目录） |
 | `skills/ppt-master/cli.py` | CLI 命令映射（skill 目录） |
 | `skills/ppt-master/scripts/check_cli_sync.py` | CLI 映射完整性检查 |
 | `skills/ppt-master/scripts/check_deps_sync.py` | 依赖清单一致性检查 |
 | `skills/ppt-master/scripts/check_uvx_migration.py` | 合并提交中 python3 残留检测 |
+| `skills/ppt-master/scripts/check_uvx_repository.py` | 基于 git ls-files 的只读 repository-wide UVX scanner |
 | `docs/superpowers/specs/2026-06-08-uvx-refactor-design.md` | uvx 改造设计文档 |
 | `docs/superpowers/2026-06-08-uvx-refactor-final.md` | uvx 改造最终笔记 |
