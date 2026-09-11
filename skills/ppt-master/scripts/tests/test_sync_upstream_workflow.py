@@ -305,7 +305,7 @@ class PublicationRaceSandboxTests(unittest.TestCase):
             fi
             if [[ "$*" == *"api"* ]]; then
               if [[ "$*" != *"--jq .base.sha"* ]]; then exit 2; fi
-              printf '%s' "$FAKE_PR_JSON" | python -c "import json,sys; value=json.load(sys.stdin)['base']['sha']; print(value if isinstance(value, str) else '')"
+              printf '%s' "$FAKE_PR_JSON" | python -c "import json,sys; value=json.load(sys.stdin).get('base', dict()).get('sha'); print(value if isinstance(value, str) else 'null')"
               exit 0
             fi
             if [[ "$*" == *"pr close"* ]]; then
@@ -395,7 +395,7 @@ class PublicationRaceSandboxTests(unittest.TestCase):
                   fi
                   if [[ "$*" == *"api"* ]]; then
                     if [[ "$*" != *"--jq .base.sha"* ]]; then return 2; fi
-                    printf '%s' "$FAKE_PR_JSON" | python -c "import json,sys; value=json.load(sys.stdin)['base']['sha']; print(value if isinstance(value, str) else '')"
+                    printf '%s' "$FAKE_PR_JSON" | python -c "import json,sys; value=json.load(sys.stdin).get('base', dict()).get('sha'); print(value if isinstance(value, str) else 'null')"
                     return $?
                   fi
                   if [[ "$*" == *"pr close"* ]]; then
@@ -447,6 +447,7 @@ class PublicationRaceSandboxTests(unittest.TestCase):
             with self.subTest(scenario=scenario):
                 result, events = self._run_scenario(scenario)
                 self.assertNotEqual(result.returncode, 0)
+                self.assertIn("pr-closed", events)
                 self.assertIn("branch-deleted", events)
 
     def test_pr_create_failure_deletes_branch(self) -> None:
