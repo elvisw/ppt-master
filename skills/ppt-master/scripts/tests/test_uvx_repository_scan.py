@@ -170,6 +170,66 @@ class RepositoryUvxScanTests(unittest.TestCase):
                 with self.assertRaises(self.module.ScannerError):
                     self.module.scan_repository(repo)
 
+    def test_legacy_grammar_covers_windows_interpreters_and_uv_run_flags(self) -> None:
+        cases = (
+            ("python.exe skills/ppt-master/scripts/project_manager.py\n", "python-script"),
+            ("python3.12 skills/ppt-master/scripts/project_manager.py\n", "python-script"),
+            ("python ./scripts/project_manager.py\n", "python-script"),
+            ("python3.12.exe scripts/project_manager.py\n", "python-script"),
+            ("uv run --no-sync skills/ppt-master/scripts/project_manager.py\n", "uv-run-script"),
+            ("uv run --python 3.12 scripts/project_manager.py\n", "uv-run-script"),
+        )
+        for text, expected_rule in cases:
+            with self.subTest(text=text):
+                violations = self.module.scan_text("README.md", text)
+                self.assertEqual([violation.rule for violation in violations], [expected_rule])
+                self.assertEqual([violation.line for violation in violations], [1])
+
+    def test_legacy_grammar_keeps_first_line_for_flagged_continuations(self) -> None:
+        text = (
+            "python3.12 \\\n"
+            "  skills/ppt-master/scripts/project_manager.py\n"
+            "uv run --no-sync \\\n"
+            "  ./skills/ppt-master/scripts/project_manager.py\n"
+        )
+
+        violations = self.module.scan_text("README.md", text)
+
+        self.assertEqual([violation.line for violation in violations], [1, 3])
+        self.assertEqual([violation.rule for violation in violations], ["python-script", "uv-run-script"])
+
+    def test_new_document_roots_are_scanned(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = self._new_repo(Path(temporary))
+            command = "python skills/ppt-master/scripts/project_manager.py\n"
+            files = {
+                ".claude-plugin/plugin.md": command,
+                "projects/notes.md": command,
+            }
+            for relative, content in files.items():
+                path = repo / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding="utf-8")
+            self._commit(repo)
+
+            violations = self.module.scan_repository(repo)
+
+            self.assertEqual({violation.path for violation in violations}, set(files))
+
+    def test_scanner_reuses_the_trusted_cli_parser(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = self._new_repo(Path(temporary))
+            (repo / "cli.py").write_text(
+                "COMMANDS = {'project': 'project_manager.py'}\n"
+                "COMMANDS.update({'other': 'other.py'})\n"
+                "ALIASES = {}\n",
+                encoding="utf-8",
+            )
+            self._commit(repo)
+
+            with self.assertRaises(self.module.ScannerError):
+                self.module.scan_repository(repo)
+
 
 if __name__ == "__main__":
     unittest.main()

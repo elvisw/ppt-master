@@ -61,6 +61,46 @@ class CliMappingError(ValueError):
 
 
 _MUTATING_METHODS = frozenset({"clear", "pop", "popitem", "setdefault", "update"})
+_DYNAMIC_ESCAPES = frozenset(
+    {"compile", "eval", "exec", "globals", "locals", "setattr", "vars", "__import__"}
+)
+
+
+def _dynamic_escape_name(node: ast.AST) -> str | None:
+    """Return a dangerous dynamic-execution name called by one node, if any."""
+    if not isinstance(node, ast.Call):
+        return None
+    func = node.func
+    if isinstance(func, ast.Name):
+        return func.id if func.id in _DYNAMIC_ESCAPES else None
+    if isinstance(func, ast.Attribute):
+        return func.attr if func.attr in _DYNAMIC_ESCAPES else None
+    return None
+
+
+def _binding_violation(
+    tree: ast.AST,
+    name: str,
+    allowed_targets: frozenset[int],
+) -> str | None:
+    """Detect any Store/Del binding or dynamic escape beyond the one assignment."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id == name:
+            if isinstance(node.ctx, (ast.Store, ast.Del)) and id(node) not in allowed_targets:
+                return "is rebound or deleted outside its single literal assignment"
+        elif isinstance(node, ast.ExceptHandler) and node.name == name:
+            return "is bound by an except handler"
+        elif isinstance(node, ast.arg) and node.arg == name:
+            return "is used as a function parameter"
+        elif isinstance(node, (ast.Global, ast.Nonlocal)) and name in node.names:
+            return "participates in a global or nonlocal declaration"
+        elif isinstance(node, ast.MatchAs) and node.name == name:
+            return "is bound by a match pattern"
+        elif isinstance(node, ast.MatchStar) and node.name == name:
+            return "is bound by a match star pattern"
+        elif isinstance(node, ast.MatchMapping) and node.rest == name:
+            return "is bound by a match mapping rest"
+    return None
 
 
 def _assigned_names(target: ast.expr) -> set[str]:
@@ -169,6 +209,20 @@ def parse_literal_mapping(cli_path: str, name: str) -> dict[str, str]:
         isinstance(key, str) and isinstance(item, str) for key, item in value.items()
     ):
         raise CliMappingError(f"{name} in {cli_path} must map strings to strings")
+    allowed_targets = frozenset(
+        id(node)
+        for node in ast.walk(assignment)
+        if isinstance(node, ast.Name) and node.id == name and isinstance(node.ctx, ast.Store)
+    )
+    binding_violation = _binding_violation(tree, name, allowed_targets)
+    if binding_violation is not None:
+        raise CliMappingError(f"{name} in {cli_path} {binding_violation}")
+    for node in ast.walk(tree):
+        escape = _dynamic_escape_name(node)
+        if escape is not None:
+            raise CliMappingError(
+                f"{cli_path} uses dynamic escape {escape!r} near the {name} mapping"
+            )
     for node in ast.walk(tree):
         if _mutates_mapping(node, name, assignment):
             raise CliMappingError(f"{name} in {cli_path} is dynamically mutated")

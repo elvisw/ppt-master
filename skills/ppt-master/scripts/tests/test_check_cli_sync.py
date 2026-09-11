@@ -104,6 +104,47 @@ class CliMappingTests(unittest.TestCase):
                 with self.assertRaises(self.module.CliMappingError):
                     self.module.parse_literal_mapping(path, mapping_name)
 
+    def test_parser_rejects_store_bindings_and_dynamic_escapes(self) -> None:
+        base = "COMMANDS = {'render': 'render.py'}\n"
+        snippets = (
+            base + "for COMMANDS in []:\n    pass\n",
+            base + "for _ in []:\n    pass\nasync def f():\n    async for COMMANDS in []:\n        pass\n",
+            base + "with open('x') as COMMANDS:\n    pass\n",
+            base + "try:\n    pass\nexcept Exception as COMMANDS:\n    pass\n",
+            base + "values = [COMMANDS for COMMANDS in []]\n",
+            base + "values = {COMMANDS for COMMANDS in []}\n",
+            base + "values = (COMMANDS := {})\n",
+            base + "def f(COMMANDS):\n    return COMMANDS\n",
+            base + "def f():\n    global COMMANDS\n",
+            base + "def f():\n    nonlocal COMMANDS\n",
+            base + "del COMMANDS\n",
+            base + "match value:\n    case COMMANDS:\n        pass\n",
+            base + "exec('COMMANDS = {}')\n",
+            base + "eval('{}')\n",
+            base + "globals()['COMMANDS'] = {}\n",
+            base + "locals().update({})\n",
+            base + "setattr(object(), 'COMMANDS', {})\n",
+            base + "compile('COMMANDS = {}', '<s>', 'exec')\n",
+            base + "__import__('os').system('true')\n",
+            "ALIASES = {'r': 'render'}\nsetattr(object(), 'ALIASES', {})\n",
+        )
+        for snippet in snippets:
+            with self.subTest(snippet=snippet), tempfile.TemporaryDirectory() as temporary:
+                path = Path(temporary) / "cli.py"
+                path.write_text(snippet, encoding="utf-8")
+                mapping_name = "ALIASES" if snippet.startswith("ALIASES") else "COMMANDS"
+                with self.assertRaises(self.module.CliMappingError):
+                    self.module.parse_literal_mapping(path, mapping_name)
+
+    def test_real_cli_files_still_parse_with_strict_parser(self) -> None:
+        root = Path(__file__).resolve().parents[4]
+        for relative in ("cli.py", "skills/ppt-master/cli.py"):
+            with self.subTest(relative=relative):
+                commands = self.module.parse_literal_mapping(str(root / relative), "COMMANDS")
+                aliases = self.module.parse_literal_mapping(str(root / relative), "ALIASES")
+                self.assertTrue(commands)
+                self.assertIsInstance(aliases, dict)
+
 
 if __name__ == "__main__":
     unittest.main()

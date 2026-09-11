@@ -21,7 +21,6 @@ Dependencies:
 from __future__ import annotations
 
 import argparse
-import ast
 import os
 import re
 import stat
@@ -45,10 +44,12 @@ TEXT_SUFFIXES = frozenset({
     ".yml",
 })
 DOCUMENT_ROOT_PREFIXES = (
+    ".claude-plugin/",
     ".github/",
     ".opencode/",
     "docs/",
     "examples/",
+    "projects/",
     "skills/",
 )
 ROOT_DOCUMENT_NAMES = frozenset({
@@ -93,15 +94,21 @@ EXPLICIT_ALLOWLIST: dict[str, frozenset[str]] = {
         "python-script",
         "uv-run-script",
     }),
-    # This is a repository-owned Linux CI invocation of a registered checker;
-    # new workflow files do not inherit this exception.
 }
 ALLOWED_LEGACY_PATHS = frozenset(EXPLICIT_ALLOWLIST)
 
-LEGACY_COMMAND_RE = re.compile(
-    r"(?<![\w-])(?P<interpreter>python3?|uv\s+run)\s+"
-    r"(?P<script>(?:\$\{SKILL_DIR\}/|skills/ppt-master/|scripts/)"
-    r"(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.py)\b"
+_SCRIPT_REFERENCE = (
+    r"(?:\./)*(?:\$\{SKILL_DIR\}/|skills/ppt-master/|scripts/)"
+    r"(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.py"
+)
+PYTHON_COMMAND_RE = re.compile(
+    rf"(?<![\w.-])(?P<interpreter>python(?:3(?:\.\d+)?)?(?:\.exe)?)\s+"
+    rf"(?P<script>{_SCRIPT_REFERENCE})\b"
+)
+UV_RUN_COMMAND_RE = re.compile(
+    rf"(?<![\w.-])(?P<interpreter>uv\s+run)"
+    rf"(?P<flags>(?:\s+--?[A-Za-z][\w-]*(?:=\S+|\s+\S+)?)*)"
+    rf"\s+(?P<script>{_SCRIPT_REFERENCE})\b"
 )
 
 
@@ -136,71 +143,26 @@ def allowed_rules_for_path(relative: str) -> frozenset[str]:
     return EXPLICIT_ALLOWLIST.get(relative, frozenset())
 
 
+def _trusted_cli_mapping_parser():
+    """Load the single trusted CLI mapping parser used by every gate owner."""
+    scripts_dir = str(Path(__file__).resolve().parent)
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    try:
+        import check_cli_sync
+    except ImportError as exc:
+        raise ScannerError("Trusted CLI mapping parser is unavailable") from exc
+    return check_cli_sync.parse_literal_mapping
+
+
 def _literal_commands(cli_path: Path) -> dict[str, str]:
     if cli_path.is_symlink() or not cli_path.is_file():
         raise ScannerError(f"Root CLI mapping is unavailable or is a symlink: {cli_path}")
+    parser = _trusted_cli_mapping_parser()
     try:
-        tree = ast.parse(cli_path.read_text(encoding="utf-8"), filename=str(cli_path))
-    except (OSError, SyntaxError, UnicodeError) as exc:
-        raise ScannerError(f"Unable to parse root CLI mapping: {cli_path}") from exc
-    assignments = [
-        statement
-        for statement in tree.body
-        if isinstance(statement, (ast.Assign, ast.AnnAssign))
-        and any(
-            isinstance(target, ast.Name) and target.id == "COMMANDS"
-            for target in (
-                statement.targets if isinstance(statement, ast.Assign) else [statement.target]
-            )
-        )
-    ]
-    if not assignments:
-        raise ScannerError("Root CLI COMMANDS mapping is missing")
-    if len(assignments) != 1:
-        raise ScannerError("Root CLI COMMANDS must be assigned exactly once at module level")
-    assignment = assignments[0]
-    for node in ast.walk(tree):
-        if node is assignment:
-            continue
-        if isinstance(node, (ast.Assign, ast.AnnAssign)):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            if any(
-                (isinstance(target, ast.Name) and target.id == "COMMANDS")
-                or (
-                    isinstance(target, ast.Subscript)
-                    and isinstance(target.value, ast.Name)
-                    and target.value.id == "COMMANDS"
-                )
-                for target in targets
-            ):
-                raise ScannerError("Root CLI COMMANDS is dynamically mutated")
-        elif isinstance(node, ast.AugAssign):
-            target = node.target
-            if (isinstance(target, ast.Name) and target.id == "COMMANDS") or (
-                isinstance(target, ast.Subscript)
-                and isinstance(target.value, ast.Name)
-                and target.value.id == "COMMANDS"
-            ):
-                raise ScannerError("Root CLI COMMANDS is dynamically mutated")
-        elif (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == "COMMANDS"
-            and node.func.attr in {"clear", "pop", "popitem", "setdefault", "update"}
-        ):
-            raise ScannerError("Root CLI COMMANDS is dynamically mutated")
-    if assignment.value is None:
-        raise ScannerError("Root CLI COMMANDS has no value")
-    try:
-        value = ast.literal_eval(assignment.value)
-    except (ValueError, TypeError, SyntaxError) as exc:
-        raise ScannerError("Root CLI COMMANDS is not a literal mapping") from exc
-    if not isinstance(value, dict) or not all(
-        isinstance(key, str) and isinstance(item, str) for key, item in value.items()
-    ):
-        raise ScannerError("Root CLI COMMANDS must map string commands to script paths")
-    return value
+        return parser(str(cli_path), "COMMANDS")
+    except ValueError as exc:
+        raise ScannerError(f"Root CLI COMMANDS is invalid: {exc}") from exc
 
 
 def registered_script_paths(repo: Path) -> frozenset[str]:
@@ -268,15 +230,19 @@ def scan_text(
 ) -> list[Violation]:
     """Report legacy script references in one document without rewriting it."""
     violations: list[Violation] = []
+    patterns = (
+        (PYTHON_COMMAND_RE, "python-script"),
+        (UV_RUN_COMMAND_RE, "uv-run-script"),
+    )
     for line_number, logical_line in _logical_command_lines(text):
-        for match in LEGACY_COMMAND_RE.finditer(logical_line):
-            script = normalize_script_path(match.group("script"))
-            if registered is not None and script not in registered:
-                continue
-            rule = "uv-run-script" if match.group("interpreter").startswith("uv") else "python-script"
-            if rule in allowed_rules_for_path(relative):
-                continue
-            violations.append(Violation(relative, line_number, rule, logical_line.rstrip()))
+        for pattern, rule in patterns:
+            for match in pattern.finditer(logical_line):
+                script = normalize_script_path(match.group("script"))
+                if registered is not None and script not in registered:
+                    continue
+                if rule in allowed_rules_for_path(relative):
+                    continue
+                violations.append(Violation(relative, line_number, rule, logical_line.rstrip()))
     return violations
 
 
