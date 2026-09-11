@@ -1,271 +1,141 @@
-name: Verify & Publish
+name: Auto-tag verified release
 
 on:
-  workflow_dispatch:
   workflow_run:
     workflows: ["Check UVX Migration"]
     types: [completed]
 
-jobs:
-  verify-and-publish:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
-    permissions:
-      id-token: write
-      contents: write
-    steps:
-      - name: Guard manual auto-tag ref
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          if [ "${GITHUB_REF:-}" != "refs/heads/main" ]; then
-            echo "::error::workflow_dispatch auto-tag must run from refs/heads/main"
-            exit 1
-          fi
+permissions:
+  contents: read
+  actions: read
 
-      - name: Checkout verified workflow-run commit
-        if: github.event_name == 'workflow_run'
-        uses: actions/checkout@v6
+jobs:
+  verify-and-tag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.repository.full_name == 'elvisw/ppt-master'
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout immutable workflow-run commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Checkout selected manual main commit
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Fetch release gate refs
+      - name: Fetch immutable release refs
+        env:
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          git fetch --no-tags origin main
+          set -euo pipefail
+          git -c credential.helper= -c core.hooksPath=/dev/null fetch --no-tags --prune origin main
           git remote add upstream https://github.com/hugohe3/ppt-master.git
           git fetch --no-tags upstream main
+          if [ "$(git rev-parse HEAD)" != "$RELEASE_SHA" ]; then
+            echo "::error::workflow_run checkout is not the immutable head SHA"
+            exit 1
+          fi
+          if [ "$(git rev-parse refs/remotes/origin/main)" != "$RELEASE_SHA" ]; then
+            echo "::error::main advanced before auto-tag verification"
+            exit 1
+          fi
 
-      - name: Verify selected release commit
+      - name: Parse and bind package version through environment
         env:
-          RELEASE_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          if ! git cat-file -e "${RELEASE_SHA}^{commit}"; then
-            echo "::error::Selected release commit is unavailable"
-            exit 1
-          fi
-          CHECKED_OUT_SHA=$(git rev-parse HEAD)
-          ORIGIN_MAIN_SHA=$(git rev-parse refs/remotes/origin/main)
-          if [ "$CHECKED_OUT_SHA" != "$RELEASE_SHA" ] || [ "$ORIGIN_MAIN_SHA" != "$RELEASE_SHA" ]; then
-            echo "::error::The selected release commit is not the current origin/main tip"
-            exit 1
-          fi
+          set -euo pipefail
+          python .github/scripts/check_release_gates.py \
+            --repo "$GITHUB_WORKSPACE" \
+            --release-sha "$RELEASE_SHA" \
+            --emit-release-env \
+            --env-file "$GITHUB_ENV"
 
-      - name: Verify recorded upstream ancestry
+      - name: Query immutable Check UVX Migration run evidence
         env:
-          RELEASE_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          python3 .github/scripts/check_upstream_ancestry.py \
-            --head-sha "$RELEASE_SHA" \
-            --upstream-ref upstream/main
+          set -euo pipefail
+          RUNS_FILE="$RUNNER_TEMP/check-uvx-migration-runs.json"
+          gh api --paginate --slurp \
+            "repos/elvisw/ppt-master/actions/workflows/check-uvx-migration.yml/runs?event=push&head_sha=$RELEASE_SHA&status=completed&per_page=100" \
+            > "$RUNS_FILE"
+          printf 'RUNS_FILE=%s\n' "$RUNS_FILE" >> "$GITHUB_ENV"
 
-      - name: Run uvx migration check (manual dispatch)
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          EXIT=0
-          python3 skills/ppt-master/scripts/check_uvx_migration.py HEAD || EXIT=$?
-          if [ "$EXIT" -eq 2 ]; then
-            echo "::notice::Not a merge commit — skipped (no upstream code to check)"
-          elif [ "$EXIT" -ne 0 ]; then
-            echo "::error::python3 remnants found in merge commit — uvx adaptation incomplete"
-            exit 1
-          fi
-
-      - name: Read version
-        id: version
-        run: |
-          VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Check tag exists
-        id: check
-        run: |
-          if git rev-parse "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-            echo "Tag ${{ steps.version.outputs.tag }} already exists, skipping."
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Setup uv
-        if: steps.check.outputs.exists == 'false'
-        uses: astral-sh/setup-uv@v5
+      - name: Setup uv for trusted gate tooling
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           enable-cache: false
 
-      - name: Setup Python
-        if: steps.check.outputs.exists == 'false'
-        run: uv python install 3.12 && uv python pin 3.12
+      - name: Install pinned trusted gate tooling
+        run: uv pip install --system --no-progress "PyYAML==6.0.2" "ruff==0.12.10"
 
-      # ── Step 1: 自动修复 uvx 命令格式 ──
-      - name: Auto-fix uvx commands
-        if: steps.check.outputs.exists == 'false'
-        run: python3 skills/ppt-master/scripts/auto_fix_uvx.py
-
-      # ── 提交 OpenCode 改动 ──
-      - name: Commit OpenCode fixes
-        if: steps.check.outputs.exists == 'false'
-        id: commit
+      - name: Run complete release gates for exact SHA
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet && git diff --cached --quiet; then
-            echo "changed=false" >> $GITHUB_OUTPUT
-            echo "No changes from OpenCode adaptation."
-          else
-            git add -u
-            git commit -m "fix: opencode auto-correct uvx command format" || true
-            git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-            git pull --rebase origin main
-            git push origin main
-            echo "changed=true" >> $GITHUB_OUTPUT
-            echo "Committed OpenCode fixes and pushed."
-          fi
+          set -euo pipefail
+          python .github/scripts/check_release_gates.py \
+            --repo "$GITHUB_WORKSPACE" \
+            --release-sha "$RELEASE_SHA" \
+            --release-tag "$RELEASE_TAG" \
+            --upstream-ref upstream/main \
+            --workflow-runs-json "$RUNS_FILE" \
+            --require-origin-main-tip
 
-      - name: Recheck selected release commit before tagging
-        if: steps.check.outputs.exists == 'false'
-        env:
-          RELEASE_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
-        run: |
-          git fetch --no-tags origin main
-          CHECKED_OUT_SHA=$(git rev-parse HEAD)
-          ORIGIN_MAIN_SHA=$(git rev-parse refs/remotes/origin/main)
-          if [ "$CHECKED_OUT_SHA" != "$RELEASE_SHA" ] || [ "$ORIGIN_MAIN_SHA" != "$RELEASE_SHA" ]; then
-            echo "::error::Release commit changed during preparation; refusing to tag"
-            exit 1
-          fi
-
-      - name: Re-verify recorded upstream ancestry before tagging
-        if: steps.check.outputs.exists == 'false'
-        env:
-          RELEASE_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
-        run: |
-          python3 .github/scripts/check_upstream_ancestry.py \
-            --head-sha "$RELEASE_SHA" \
-            --upstream-ref upstream/main
-
-      # ── Gate 0: 版本一致性 ──
-      - name: Gate — Version sync
-        if: steps.check.outputs.exists == 'false'
-        run: |
-          ROOT=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
-          SKILL=$(python3 -c "import tomllib; print(tomllib.load(open('skills/ppt-master/pyproject.toml','rb'))['project']['version'])")
-          if [ "$ROOT" != "$SKILL" ]; then
-            echo "::error::Version mismatch: root=$ROOT skill=$SKILL"
-            exit 1
-          fi
-          echo "✅ Versions match: $ROOT"
-
-      # ── Gate 1: CLI 映射完整性 ──
-      - name: Gate — CLI mappings
-        if: steps.check.outputs.exists == 'false'
-        run: |
-          python3 skills/ppt-master/scripts/check_cli_sync.py
-          echo "✅ CLI mappings OK"
-
-      # ── Gate 2: 无 python3 残留 ──
-      - name: Gate — No python3 remnants
-        if: steps.check.outputs.exists == 'false'
-        run: |
-          MATCHES=$(grep -rn --include='*.md' -E 'python3 (skills/ppt-master/scripts/|\$\{SKILL_DIR\}/scripts/)' skills/ppt-master/ AGENTS.md CLAUDE.md docs/ 2>/dev/null | grep -v 'superpowers' | grep -v 'windows-installation' | grep -v 'code-style' | grep -v 'upstream-sync' || true)
-          if [ -n "$MATCHES" ]; then
-            echo "$MATCHES"
-            echo "::error::python3 command remnants found — uvx adaptation incomplete"
-            exit 1
-          fi
-          echo "✅ No python3 remnants"
-
-      # ── Gate 3: 无 uv run 残留 ──
-      - name: Gate — No uv run remnants
-        if: steps.check.outputs.exists == 'false'
-        run: |
-          MATCHES=$(grep -rn --include='*.md' 'uv run skills/ppt-master/scripts/\|uv run scripts/' skills/ppt-master/ AGENTS.md CLAUDE.md docs/ 2>/dev/null | grep -v 'superpowers' | grep -v 'windows-installation' | grep -v 'code-style' | grep -v 'upstream-sync' | grep -v 'svg_finalize' || true)
-          if [ -n "$MATCHES" ]; then
-            echo "$MATCHES"
-            echo "::error::uv run remnants found — should be uvx ppt-master <command>"
-            exit 1
-          fi
-          echo "✅ No uv run remnants"
-
-      # ── Gate 4: 依赖清单一致性 ──
-      - name: Gate — Dependency sync
-        if: steps.check.outputs.exists == 'false'
-        run: |
-          python3 skills/ppt-master/scripts/check_deps_sync.py
-          echo "✅ Dependencies in sync"
-
-      # ── Gate 5: Skill 完整性 guard（防止坏版本发布到 PyPI）──
-      - name: Gate — Skill integrity guard
-        if: steps.check.outputs.exists == 'false'
-        run: |
-          if ! python3 skills/ppt-master/scripts/attribution_guard.py; then
-            echo "::error::attribution_guard failed — skill attribution bundle incomplete. Fix attribution files/marker before publishing."
-            exit 1
-          fi
-          echo "✅ Skill integrity guard passed"
-
-      # ── Gate 6: wheel 打包完整性（guard 运行所需文件必须进包）──
-      - name: Gate — Wheel attribution files packaged
-        if: steps.check.outputs.exists == 'false'
-        run: |
-          for f in SKILL.md LICENSE SPONSORS.md SPONSORS_CN.md; do
-            if ! grep -q "include skills/ppt-master/$f" MANIFEST.in; then
-              echo "::error::MANIFEST.in missing 'include skills/ppt-master/$f' — attribution guard will fail in uvx"
-              exit 1
-            fi
-            if ! grep -q "include $f" skills/ppt-master/MANIFEST.in; then
-              echo "::error::skills/ppt-master/MANIFEST.in missing 'include $f' — standalone skill build would fail its guard"
-              exit 1
-            fi
-          done
-          echo "✅ Both MANIFEST.in files include all attribution files"
-
-      # ── 通过所有门禁，创建 immutable tag；tag push 是唯一自动发布 owner ──
-      - name: Create and push immutable tag
-        if: steps.check.outputs.exists == 'false'
+      - name: Push exact release tag
         env:
           PUSH_PAT: ${{ secrets.PUSH_PAT }}
-          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_SYSTEM: /dev/null
+          GIT_TERMINAL_PROMPT: "0"
+          GIT_ASKPASS: /bin/false
+          SSH_ASKPASS: /bin/false
         run: |
           set -euo pipefail
           if [ -z "${PUSH_PAT:-}" ]; then
-            echo "::error::PUSH_PAT is required so the tag push triggers publish-pypi.yml"
+            echo "::error::PUSH_PAT is required for the final tag push"
             exit 1
           fi
-          git fetch --no-tags origin main
-          HEAD_SHA=$(git rev-parse HEAD)
-          ORIGIN_MAIN_SHA=$(git rev-parse refs/remotes/origin/main)
-          if [ "$HEAD_SHA" != "$ORIGIN_MAIN_SHA" ]; then
+          git -c credential.helper= -c core.hooksPath=/dev/null fetch --no-tags --prune origin main
+          if [ "$(git rev-parse HEAD)" != "$RELEASE_SHA" ] ||
+             [ "$(git rev-parse refs/remotes/origin/main)" != "$RELEASE_SHA" ]; then
             echo "::error::main advanced before the immutable release tag was created"
             exit 1
           fi
-          if [[ ! "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::Release HEAD is not a 40-character lowercase SHA"
+          if ! REMOTE_MAIN_SHA=$(git -c credential.helper= -c core.hooksPath=/dev/null ls-remote --exit-code --heads origin refs/heads/main | awk 'NF == 2 { print $1 }'); then
+            echo "::error::Unable to read the current origin/main tip"
             exit 1
           fi
-          if git ls-remote --exit-code --refs origin "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
-            echo "::error::Release tag already exists on origin"
+          if [ "$REMOTE_MAIN_SHA" != "$RELEASE_SHA" ]; then
+            echo "::error::origin/main advanced before the immutable release tag was created"
             exit 1
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "$RELEASE_TAG" "$HEAD_SHA" -m "Release $RELEASE_TAG"
-          if [ "$(git rev-parse "$RELEASE_TAG^{commit}")" != "$HEAD_SHA" ]; then
-            echo "::error::The local release tag does not point to the verified HEAD"
+          if git -c credential.helper= -c core.hooksPath=/dev/null ls-remote --exit-code --refs origin "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "::error::Exact release tag already exists on origin"
             exit 1
           fi
-          git remote set-url origin "https://x-access-token:${PUSH_PAT}@github.com/${GITHUB_REPOSITORY}.git"
-          git push origin "refs/tags/$RELEASE_TAG"
-          echo "✅ Immutable tag $RELEASE_TAG pushed for $HEAD_SHA"
+          git -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            -c core.hooksPath=/dev/null \
+            tag -a "$RELEASE_TAG" "$RELEASE_SHA" -m "Release $RELEASE_TAG"
+          if [ "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" != "$RELEASE_SHA" ]; then
+            echo "::error::Local exact tag does not point to release_sha"
+            exit 1
+          fi
+          GIT_CONFIG_GLOBAL=/dev/null \
+          GIT_CONFIG_SYSTEM=/dev/null \
+          GIT_TERMINAL_PROMPT=0 \
+          GIT_ASKPASS=/bin/false \
+          SSH_ASKPASS=/bin/false \
+          git -c credential.helper= -c core.hooksPath=/dev/null \
+            push "https://x-access-token:${PUSH_PAT}@github.com/elvisw/ppt-master.git" \
+            "refs/tags/$RELEASE_TAG"
