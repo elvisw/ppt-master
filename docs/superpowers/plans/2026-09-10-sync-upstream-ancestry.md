@@ -93,7 +93,7 @@ Task 5A 的最终架构覆盖下方早期 Task 1–2 记录中的旧单 job 发�
 - 由 base helper 严格拒绝额外/缺失 manifest key、非法或不匹配 SHA、缺失 base/target/candidate object、candidate tip mismatch、protected gate diff、非严格 parent order、marker symlink 和版本形状错误。
 - 复核 canonical upstream 和 `origin/main == base_sha`；发布前立即重新读取 candidate ref，要求等于 authoritative `verified_sha`。
 - 只有最后的 publication step 获得 `PUSH_PAT`。该 step 使用 `GIT_CONFIG_GLOBAL=/dev/null`、`GIT_CONFIG_SYSTEM=/dev/null`、`GIT_TERMINAL_PROMPT=0`、安全 askpass、每条 Git 命令的空 `credential.helper` 和 `core.hooksPath=/dev/null`，推明确 verified SHA 到唯一 sync branch，再用相同 PAT 创建 `elvisw/ppt-master` → `main` PR。
-- `gh pr create` 后立即通过 fork API 读取 `baseRefOid` 并要求等于 base；创建失败、push/create 间 main 前进或 OID mismatch 由 EXIT trap best-effort 关闭 PR并删除刚推分支后失败。API 检查不原子，最终由 trusted `pull_request_target` strict first-parent/required checks 阻断错误 PR。
+- `gh pr create` 后立即通过 REST fork API 的 `--jq '.base.sha'` 读取 PR base SHA 并要求等于 base；创建失败、push/create 间 main 前进或 base SHA mismatch 由 EXIT trap best-effort 关闭 PR并删除刚推分支后失败。API 检查不原子，最终由 trusted `pull_request_target` strict first-parent/required checks 阻断错误 PR。
 
 ### Artifact/output semantics decision
 

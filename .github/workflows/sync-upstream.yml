@@ -601,13 +601,13 @@ jobs:
               exit 1
               ;;
           esac
-          if ! PR_BASE_OID=$(GH_TOKEN="$PUSH_PAT" gh api \
-            "repos/elvisw/ppt-master/pulls/$PR_NUMBER" --jq '.baseRefOid'); then
-            echo "::error::Unable to read the created PR baseRefOid"
+          if ! PR_BASE_SHA=$(GH_TOKEN="$PUSH_PAT" gh api \
+            "repos/elvisw/ppt-master/pulls/$PR_NUMBER" --jq '.base.sha'); then
+            echo "::error::Unable to read the created PR base SHA"
             exit 1
           fi
-          if [ "$PR_BASE_OID" != "$BASE_SHA" ]; then
-            echo "::error::Created PR baseRefOid does not match the immutable base; closing and deleting"
+          if [ "$PR_BASE_SHA" != "$BASE_SHA" ]; then
+            echo "::error::Created PR base SHA does not match the immutable base; closing and deleting"
             exit 1
           fi
           CLEANUP_REQUIRED=0

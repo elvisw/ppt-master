@@ -139,8 +139,8 @@ candidate ref，要求仍等于 authoritative `verified_sha`。只有最后的 p
 `GIT_ASKPASS/SSH_ASKPASS` 和每条 Git 命令的空 `credential.helper` 与 `/dev/null` hooks。
 
 它将明确 SHA 推送到 `opencode/sync-<run-id>-<attempt>`，绝不推送 `main`，再用同一 PAT 创建
-`elvisw/ppt-master` 指向 `main` 的 PR。创建后立即用 `gh api` 读取该 PR 的 `baseRefOid`，要求
-严格等于 base；若创建失败、main 在 push/create 间前进或 `baseRefOid` 不匹配，EXIT trap 会尽力
+`elvisw/ppt-master` 指向 `main` 的 PR。创建后立即用 REST `gh api` 的 `--jq '.base.sha'` 读取该
+PR base SHA，要求严格等于 base；若创建失败、main 在 push/create 间前进或 base SHA 不匹配，EXIT trap 会尽力
 关闭 PR（若已有编号）并删除刚推分支，然后返回失败。GitHub API 检查不是原子操作；最终仍由
 trusted `pull_request_target` 的 strict first-parent/required checks 阻断错误 PR。任何
 non-fast-forward、manifest/object/ref mismatch 都 fail-closed，不 rebase、不 rewrite、不 force-push。

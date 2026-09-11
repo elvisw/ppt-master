@@ -44,8 +44,8 @@ schedule 和 workflow_dispatch 共用相同的两 job 路径：
    upstream ancestry、唯一严格双父 merge、版本 bump 和 protected gate policy。
 7. 最终 publication step 才注入 `PUSH_PAT`，使用 null global/system Git config、禁用终端/askpass、
    空 credential helper 和 disabled hooks，将明确 verified SHA 推到 `opencode/sync-<run-id>-<attempt>`。
-   `gh pr create` 后立即读取 fork API 的 `baseRefOid` 并要求等于 base；创建失败、push/create 间
-   main 前进或 OID mismatch 时，EXIT trap best-effort 关闭 PR并删除刚推分支后失败。API 检查不原子，
+   `gh pr create` 后立即用 REST fork API 的 `--jq '.base.sha'` 读取 PR base SHA 并要求等于 base；
+   创建失败、push/create 间 main 前进或 base SHA mismatch 时，EXIT trap best-effort 关闭 PR并删除刚推分支后失败。API 检查不原子，
    最终由 trusted `pull_request_target` strict first-parent/required checks 阻断错误 PR；绝不推送
    `main`，non-fast-forward 或任意 artifact mismatch 都 fail-closed。
 

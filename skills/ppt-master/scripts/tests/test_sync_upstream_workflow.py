@@ -165,7 +165,9 @@ class SyncUpstreamWorkflowContractTests(unittest.TestCase):
         self.assertIn("verified_sha", publish["run"])
         self.assertIn("GITHUB_SERVER_URL", publish["run"])
         self.assertIn("main advanced before PR creation", publish["run"])
-        self.assertIn("baseRefOid", publish["run"])
+        self.assertIn("--jq '.base.sha'", publish["run"])
+        self.assertIn("base.sha", publish["run"])
+        self.assertNotIn("baseRef" + "Oid", publish["run"])
         self.assertIn("gh api", publish["run"])
         self.assertIn("gh pr close", publish["run"])
         self.assertIn('"$PUSH_URL" --delete "refs/heads/$SYNC_BRANCH"', publish["run"])
@@ -197,7 +199,8 @@ class SyncUpstreamWorkflowContractTests(unittest.TestCase):
     def test_publish_step_handles_create_and_base_oid_races_with_cleanup(self) -> None:
         publish = self._step(self._job("verify-and-open-pr"), "Publish verified candidate")
         self.assertIn("PR_NUMBER=", publish["run"])
-        self.assertIn("baseRefOid", publish["run"])
+        self.assertIn("--jq '.base.sha'", publish["run"])
+        self.assertNotIn("baseRef" + "Oid", publish["run"])
 
     def test_artifact_contract_is_strict_and_bundle_is_not_a_worktree_archive(self) -> None:
         prepare = self._job("prepare-candidate")
@@ -301,7 +304,8 @@ class PublicationRaceSandboxTests(unittest.TestCase):
               exit 0
             fi
             if [[ "$*" == *"api"* ]]; then
-              printf '%s\\n' "$FAKE_PR_BASE"
+              if [[ "$*" != *"--jq .base.sha"* ]]; then exit 2; fi
+              printf '%s' "$FAKE_PR_JSON" | python -c "import json,sys; value=json.load(sys.stdin)['base']['sha']; print(value if isinstance(value, str) else '')"
               exit 0
             fi
             if [[ "$*" == *"pr close"* ]]; then
@@ -333,7 +337,15 @@ class PublicationRaceSandboxTests(unittest.TestCase):
                     "FAKE_MAIN_SECOND": "e" * 40 if scenario == "between-push-create" else self.BASE_SHA,
                     "FAKE_VERIFIED_SHA": self.VERIFIED_SHA,
                     "FAKE_CREATE": "fail" if scenario == "create-failure" else "ok",
-                    "FAKE_PR_BASE": "b" * 40 if scenario == "base-oid-mismatch" else self.BASE_SHA,
+                    "FAKE_PR_JSON": (
+                        '{"base": {"sha": null}}'
+                        if scenario == "base-sha-null"
+                        else '{"base": {}}'
+                        if scenario == "base-sha-missing"
+                        else '{"base": {"sha": "' + "b" * 40 + '"}}'
+                        if scenario == "base-sha-mismatch"
+                        else '{"base": {"sha": "' + self.BASE_SHA + '"}}'
+                    ),
                     "PUSH_PAT": "test-pat",
                     "GITHUB_RUN_ID": "123",
                     "GITHUB_RUN_ATTEMPT": "1",
@@ -349,7 +361,7 @@ class PublicationRaceSandboxTests(unittest.TestCase):
                 FAKE_MAIN_SECOND={shlex.quote(env["FAKE_MAIN_SECOND"])}
                 FAKE_VERIFIED_SHA={shlex.quote(self.VERIFIED_SHA)}
                 FAKE_CREATE={shlex.quote(env["FAKE_CREATE"])}
-                FAKE_PR_BASE={shlex.quote(env["FAKE_PR_BASE"])}
+                FAKE_PR_JSON={shlex.quote(env["FAKE_PR_JSON"])}
                 git() {{
                   printf 'git:%s\\n' "$*" >> "$FAKE_LOG"
                   if [[ "$*" == *" rev-parse --verify refs/remotes/origin/main"* ]]; then
@@ -382,8 +394,9 @@ class PublicationRaceSandboxTests(unittest.TestCase):
                     return 0
                   fi
                   if [[ "$*" == *"api"* ]]; then
-                    printf '%s\\n' "$FAKE_PR_BASE"
-                    return 0
+                    if [[ "$*" != *"--jq .base.sha"* ]]; then return 2; fi
+                    printf '%s' "$FAKE_PR_JSON" | python -c "import json,sys; value=json.load(sys.stdin)['base']['sha']; print(value if isinstance(value, str) else '')"
+                    return $?
                   fi
                   if [[ "$*" == *"pr close"* ]]; then
                     printf 'pr-closed\\n' >> "$FAKE_LOG"
@@ -415,11 +428,26 @@ class PublicationRaceSandboxTests(unittest.TestCase):
         self.assertIn("branch-deleted", events)
         self.assertNotIn("pr create", events)
 
-    def test_pr_base_oid_mismatch_closes_pr_and_deletes_branch(self) -> None:
-        result, events = self._run_scenario("base-oid-mismatch")
+    def test_pr_base_sha_mismatch_closes_pr_and_deletes_branch(self) -> None:
+        result, events = self._run_scenario("base-sha-mismatch")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("pr-closed", events)
         self.assertIn("branch-deleted", events)
+
+    def test_pr_base_sha_match_completes_without_cleanup(self) -> None:
+        result, events = self._run_scenario("base-sha-match")
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("branch-pushed", events)
+        self.assertIn("pr create", events)
+        self.assertNotIn("pr-closed", events)
+        self.assertNotIn("branch-deleted", events)
+
+    def test_pr_base_sha_null_or_missing_fails_closed_and_cleans_branch(self) -> None:
+        for scenario in ("base-sha-null", "base-sha-missing"):
+            with self.subTest(scenario=scenario):
+                result, events = self._run_scenario(scenario)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("branch-deleted", events)
 
     def test_pr_create_failure_deletes_branch(self) -> None:
         result, events = self._run_scenario("create-failure")
