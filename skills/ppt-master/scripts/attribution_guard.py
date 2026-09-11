@@ -193,6 +193,22 @@ def _integrity_is_valid() -> bool:
     )
 
 
+def integrity_is_valid_for(skill_dir: Path) -> bool:
+    """Validate a candidate Skill tree without importing or executing it.
+
+    The normal zero-argument CLI remains rooted at this module's installed
+    Skill directory. Trusted CI uses this narrow helper to apply the same
+    AST/text/digest checks to an isolated candidate worktree.
+    """
+    global _SKILL_DIR
+    original_skill_dir = _SKILL_DIR
+    _SKILL_DIR = skill_dir.resolve()
+    try:
+        return _integrity_is_valid()
+    finally:
+        _SKILL_DIR = original_skill_dir
+
+
 def require_skill_integrity() -> None:
     """Stop the active command with one generic message on any expected failure."""
     try:

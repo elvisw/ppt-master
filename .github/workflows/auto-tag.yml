@@ -1,168 +1,149 @@
-name: Verify & Publish
+name: Auto-tag verified release
 
 on:
-  workflow_dispatch:
   workflow_run:
     workflows: ["Check UVX Migration"]
     types: [completed]
 
+permissions:
+  contents: read
+  actions: read
+
 jobs:
-  verify-and-publish:
+  verify-and-tag:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    timeout-minutes: 30
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.repository.full_name == 'elvisw/ppt-master'
     permissions:
-      id-token: write
-      contents: write
-      actions: write
+      contents: read
+      actions: read
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout immutable workflow-run commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
 
-      - name: Read version
-        id: version
+      - name: Fetch immutable release refs
+        env:
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Check tag exists
-        id: check
-        run: |
-          if git rev-parse "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-            echo "Tag ${{ steps.version.outputs.tag }} already exists, skipping."
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Setup uv
-        if: steps.check.outputs.exists == 'false'
-        uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: false
-
-      - name: Setup Python
-        if: steps.check.outputs.exists == 'false'
-        run: uv python install 3.12 && uv python pin 3.12
-
-      # ── Step 1: 自动修复 uvx 命令格式 ──
-      - name: Auto-fix uvx commands
-        if: steps.check.outputs.exists == 'false'
-        run: python3 skills/ppt-master/scripts/auto_fix_uvx.py
-
-      # ── 提交 OpenCode 改动 ──
-      - name: Commit OpenCode fixes
-        if: steps.check.outputs.exists == 'false'
-        id: commit
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet && git diff --cached --quiet; then
-            echo "changed=false" >> $GITHUB_OUTPUT
-            echo "No changes from OpenCode adaptation."
-          else
-            git add -u
-            git commit -m "fix: opencode auto-correct uvx command format" || true
-            git pull --rebase origin main
-            git push origin main
-            echo "changed=true" >> $GITHUB_OUTPUT
-            echo "Committed OpenCode fixes and pushed."
-          fi
-
-      # ── Gate 0: 版本一致性 ──
-      - name: Gate — Version sync
-        if: steps.check.outputs.exists == 'false'
-        run: |
-          ROOT=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
-          SKILL=$(python3 -c "import tomllib; print(tomllib.load(open('skills/ppt-master/pyproject.toml','rb'))['project']['version'])")
-          if [ "$ROOT" != "$SKILL" ]; then
-            echo "::error::Version mismatch: root=$ROOT skill=$SKILL"
+          set -euo pipefail
+          git -c credential.helper= -c core.hooksPath=/dev/null fetch --no-tags --prune origin main
+          git remote add upstream https://github.com/hugohe3/ppt-master.git
+          git fetch --no-tags upstream main
+          if [ "$(git rev-parse HEAD)" != "$RELEASE_SHA" ]; then
+            echo "::error::workflow_run checkout is not the immutable head SHA"
             exit 1
           fi
-          echo "✅ Versions match: $ROOT"
-
-      # ── Gate 1: CLI 映射完整性 ──
-      - name: Gate — CLI mappings
-        if: steps.check.outputs.exists == 'false'
-        run: |
-          python3 skills/ppt-master/scripts/check_cli_sync.py
-          echo "✅ CLI mappings OK"
-
-      # ── Gate 2: 无 python3 残留 ──
-      - name: Gate — No python3 remnants
-        if: steps.check.outputs.exists == 'false'
-        run: |
-          MATCHES=$(grep -rn --include='*.md' -E 'python3 (skills/ppt-master/scripts/|\$\{SKILL_DIR\}/scripts/)' skills/ppt-master/ AGENTS.md CLAUDE.md docs/ 2>/dev/null | grep -v 'superpowers' | grep -v 'windows-installation' | grep -v 'code-style' | grep -v 'upstream-sync' || true)
-          if [ -n "$MATCHES" ]; then
-            echo "$MATCHES"
-            echo "::error::python3 command remnants found — uvx adaptation incomplete"
+          if ! git merge-base --is-ancestor "$RELEASE_SHA" refs/remotes/origin/main; then
+            echo "::error::release SHA is not in current origin/main history"
             exit 1
           fi
-          echo "✅ No python3 remnants"
 
-      # ── Gate 3: 无 uv run 残留 ──
-      - name: Gate — No uv run remnants
-        if: steps.check.outputs.exists == 'false'
+      - name: Parse and bind package version through environment
+        env:
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          MATCHES=$(grep -rn --include='*.md' 'uv run skills/ppt-master/scripts/\|uv run scripts/' skills/ppt-master/ AGENTS.md CLAUDE.md docs/ 2>/dev/null | grep -v 'superpowers' | grep -v 'windows-installation' | grep -v 'code-style' | grep -v 'upstream-sync' | grep -v 'svg_finalize' || true)
-          if [ -n "$MATCHES" ]; then
-            echo "$MATCHES"
-            echo "::error::uv run remnants found — should be uvx ppt-master <command>"
-            exit 1
-          fi
-          echo "✅ No uv run remnants"
+          set -euo pipefail
+          python -I .github/scripts/check_release_gates.py \
+            --repo "$GITHUB_WORKSPACE" \
+            --release-sha "$RELEASE_SHA" \
+            --emit-release-env \
+            --env-file "$GITHUB_ENV"
 
-      # ── Gate 4: 依赖清单一致性 ──
-      - name: Gate — Dependency sync
-        if: steps.check.outputs.exists == 'false'
-        run: |
-          python3 skills/ppt-master/scripts/check_deps_sync.py
-          echo "✅ Dependencies in sync"
-
-      # ── Gate 5: Skill 完整性 guard（防止坏版本发布到 PyPI）──
-      - name: Gate — Skill integrity guard
-        if: steps.check.outputs.exists == 'false'
-        run: |
-          if ! python3 skills/ppt-master/scripts/attribution_guard.py; then
-            echo "::error::attribution_guard failed — skill attribution bundle incomplete. Fix attribution files/marker before publishing."
-            exit 1
-          fi
-          echo "✅ Skill integrity guard passed"
-
-      # ── Gate 6: wheel 打包完整性（guard 运行所需文件必须进包）──
-      - name: Gate — Wheel attribution files packaged
-        if: steps.check.outputs.exists == 'false'
-        run: |
-          for f in SKILL.md LICENSE SPONSORS.md SPONSORS_CN.md; do
-            if ! grep -q "include skills/ppt-master/$f" MANIFEST.in; then
-              echo "::error::MANIFEST.in missing 'include skills/ppt-master/$f' — attribution guard will fail in uvx"
-              exit 1
-            fi
-            if ! grep -q "include $f" skills/ppt-master/MANIFEST.in; then
-              echo "::error::skills/ppt-master/MANIFEST.in missing 'include $f' — standalone skill build would fail its guard"
-              exit 1
-            fi
-          done
-          echo "✅ Both MANIFEST.in files include all attribution files"
-
-      # ── 通过所有门禁，创建 tag → 触发 publish-pypi.yml ──
-      - name: Create tag
-        if: steps.check.outputs.exists == 'false'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.tag }}"
-          git push origin "${{ steps.version.outputs.tag }}"
-          echo "✅ Tag ${{ steps.version.outputs.tag }} created"
-
-      - name: Trigger PyPI publish
-        if: steps.check.outputs.exists == 'false'
-        run: |
-          gh workflow run publish-pypi.yml --ref "${{ steps.version.outputs.tag }}"
-          echo "✅ Triggered publish-pypi.yml for ${{ steps.version.outputs.tag }}"
+      - name: Query immutable Check UVX Migration run evidence
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          RUNS_FILE="$RUNNER_TEMP/check-uvx-migration-runs.json"
+          gh api --paginate --slurp \
+            "repos/elvisw/ppt-master/actions/workflows/check-uvx-migration.yml/runs?event=push&head_sha=$RELEASE_SHA&status=completed&per_page=100" \
+            > "$RUNS_FILE"
+          printf 'RUNS_FILE=%s\n' "$RUNS_FILE" >> "$GITHUB_ENV"
+
+      - name: Setup uv for trusted gate tooling
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.13"
+          checksum: "745765a3b6e360ad76743599ae5c42e9278c7edf8bbff9fc76d05bf2623a04dd"
+          enable-cache: false
+
+      - name: Install pinned trusted gate tooling
+        run: |
+          set -euo pipefail
+          GATE_PYTHON="$(python -c 'import sys; print(sys.executable)')"
+          uv pip install --system --break-system-packages --python "$GATE_PYTHON" --no-progress "PyYAML==6.0.2" "ruff==0.12.10"
+
+      - name: Run complete release gates for exact SHA
+        env:
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          python -I .github/scripts/check_release_gates.py \
+            --repo "$GITHUB_WORKSPACE" \
+            --release-sha "$RELEASE_SHA" \
+            --release-tag "$RELEASE_TAG" \
+            --upstream-ref upstream/main \
+            --workflow-runs-json "$RUNS_FILE"
+
+      - name: Push exact release tag
+        env:
+          PUSH_PAT: ${{ secrets.PUSH_PAT }}
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_SYSTEM: /dev/null
+          GIT_TERMINAL_PROMPT: "0"
+          GIT_ASKPASS: /bin/false
+          SSH_ASKPASS: /bin/false
+        run: |
+          set -euo pipefail
+          if [ -z "${PUSH_PAT:-}" ]; then
+            echo "::error::PUSH_PAT is required for the final tag push"
+            exit 1
+          fi
+          git -c credential.helper= -c core.hooksPath=/dev/null fetch --no-tags --prune origin main
+          if [ "$(git rev-parse HEAD)" != "$RELEASE_SHA" ]; then
+            echo "::error::workflow_run checkout is not the immutable release SHA"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$RELEASE_SHA" refs/remotes/origin/main; then
+            echo "::error::release SHA is not in current origin/main history"
+            exit 1
+          fi
+          if ! REMOTE_MAIN_SHA=$(git -c credential.helper= -c core.hooksPath=/dev/null ls-remote --exit-code --heads origin refs/heads/main | awk 'NF == 2 { print $1 }'); then
+            echo "::error::Unable to read the current origin/main tip"
+            exit 1
+          fi
+          echo "Recorded origin/main at tag time: $REMOTE_MAIN_SHA"
+          if [ -z "$REMOTE_MAIN_SHA" ]; then
+            echo "::error::origin/main tip is empty at tag time"
+            exit 1
+          fi
+          if git -c credential.helper= -c core.hooksPath=/dev/null ls-remote --exit-code --refs origin "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "::error::Exact release tag already exists on origin"
+            exit 1
+          fi
+          git -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            -c core.hooksPath=/dev/null \
+            tag -a "$RELEASE_TAG" "$RELEASE_SHA" -m "Release $RELEASE_TAG"
+          if [ "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" != "$RELEASE_SHA" ]; then
+            echo "::error::Local exact tag does not point to release_sha"
+            exit 1
+          fi
+          GIT_CONFIG_GLOBAL=/dev/null \
+          GIT_CONFIG_SYSTEM=/dev/null \
+          GIT_TERMINAL_PROMPT=0 \
+          GIT_ASKPASS=/bin/false \
+          SSH_ASKPASS=/bin/false \
+          git -c credential.helper= -c core.hooksPath=/dev/null \
+            push "https://x-access-token:${PUSH_PAT}@github.com/elvisw/ppt-master.git" \
+            "refs/tags/$RELEASE_TAG"

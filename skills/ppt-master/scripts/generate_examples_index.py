@@ -5,8 +5,8 @@ PPT Master - Examples Index Generator
 Automatically scans the examples directory and generates a README.md index file.
 
 Usage:
-    uv run scripts/generate_examples_index.py
-    uv run scripts/generate_examples_index.py examples
+    uvx ppt-master generate-examples-index
+    uvx ppt-master generate-examples-index examples
 """
 
 import argparse
@@ -161,7 +161,7 @@ def generate_examples_index(examples_dir: str = 'examples') -> str:
     content.append("**Method 1: Using an HTTP server (recommended)**\n")
     content.append("```bash")
     content.append(
-        "uv run python -m http.server --directory examples/<project_name>/svg_output 8000")
+        "python -m http.server --directory examples/<project_name>/svg_output 8000")
     content.append("# Visit http://localhost:8000")
     content.append("```\n")
 
@@ -199,8 +199,8 @@ def generate_examples_index(examples_dir: str = 'examples') -> str:
     content.append("### Submission Process\n")
     content.append("1. Create a project under the `examples/` directory")
     content.append(
-        "2. Validate the project: `uv run scripts/project_manager.py validate examples/<project>`")
-    content.append("3. Update the index: `uv run scripts/generate_examples_index.py`")
+        "2. Validate the project: `uvx ppt-master project validate examples/<project>`")
+    content.append("3. Update the index: `uvx ppt-master generate-examples-index`")
     content.append("4. Submit a Pull Request\n")
 
     # Related resources

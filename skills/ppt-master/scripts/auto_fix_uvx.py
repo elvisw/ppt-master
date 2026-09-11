@@ -3,6 +3,8 @@ import ast
 import pathlib
 import sys
 
+from check_uvx_repository import allowed_rules_for_path
+
 
 def main():
     tree = ast.parse(pathlib.Path("cli.py").read_text())
@@ -21,20 +23,23 @@ def main():
 
     script_to_cmd = {}
     for cmd_name, script_rel in commands.items():
+        if not isinstance(cmd_name, str) or not isinstance(script_rel, str):
+            continue
         script_name = script_rel.replace("\\", "/")
         script_to_cmd[script_name] = cmd_name
 
-    exclude = ["superpowers", "windows-installation", "code-style", "upstream-sync"]
     root = pathlib.Path(".")
     targets = list(root.glob("skills/ppt-master/**/*.md"))
     targets += [root / "AGENTS.md", root / "CLAUDE.md"]
-    targets += [f for f in root.glob("docs/**/*.md") if not any(k in str(f) for k in exclude)]
+    targets += list(root.glob("docs/**/*.md"))
     targets += list(root.glob("projects/**/*.md"))
 
     fixed = 0
     for fp in sorted(set(targets)):
         if not fp.exists():
             continue
+        relative = fp.relative_to(root).as_posix()
+        allowed_rules = allowed_rules_for_path(relative)
         try:
             content = fp.read_text()
         except Exception:
@@ -43,11 +48,14 @@ def main():
         original = content
         for script_name, cmd_name in sorted(script_to_cmd.items()):
             p = re.escape(script_name)
-            content = re.sub(rf"python3\s+skills/ppt-master/scripts/(\S*/)?{p}", f"uvx ppt-master {cmd_name}", content)
-            content = re.sub(rf"(?<!\w)python3\s+scripts/(\S*/)?{p}", f"uvx ppt-master {cmd_name}", content)
-            content = re.sub(rf"uv\s+run\s+skills/ppt-master/scripts/(\S*/)?{p}", f"uvx ppt-master {cmd_name}", content)
-            content = re.sub(rf"(?<!\w)uv\s+run\s+scripts/(\S*/)?{p}", f"uvx ppt-master {cmd_name}", content)
-            content = re.sub(rf"python3\s+\$\{{SKILL_DIR\}}/scripts/(\S*/)?{p}", f"uvx ppt-master {cmd_name}", content)
+            if "python-script" not in allowed_rules:
+                content = re.sub(rf"(?<![\w-])python3?\s+skills/ppt-master/scripts/(\S*/)?{p}", f"uvx ppt-master {cmd_name}", content)
+                content = re.sub(rf"(?<![\w-])python3?\s+scripts/(\S*/)?{p}", f"uvx ppt-master {cmd_name}", content)
+                content = re.sub(rf"(?<![\w-])python3?\s+\$\{{SKILL_DIR\}}/scripts/(\S*/)?{p}", f"uvx ppt-master {cmd_name}", content)
+            if "uv-run-script" not in allowed_rules:
+                content = re.sub(rf"(?<![\w-])uv\s+run\s+skills/ppt-master/scripts/(\S*/)?{p}", f"uvx ppt-master {cmd_name}", content)
+                content = re.sub(rf"(?<![\w-])uv\s+run\s+scripts/(\S*/)?{p}", f"uvx ppt-master {cmd_name}", content)
+                content = re.sub(rf"(?<![\w-])uv\s+run\s+\$\{{SKILL_DIR\}}/scripts/(\S*/)?{p}", f"uvx ppt-master {cmd_name}", content)
         if content != original:
             try:
                 fp.write_text(content)

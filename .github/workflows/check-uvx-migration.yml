@@ -4,23 +4,39 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/hugohe3/ppt-master.git
+          git fetch --no-tags upstream main
+
+      - name: Verify recorded upstream ancestry
+        run: |
+          HEAD_SHA=$(git rev-parse HEAD)
+          python -I .github/scripts/check_upstream_ancestry.py \
+            --head-sha "$HEAD_SHA" \
+            --upstream-ref upstream/main
 
       - name: Run uvx migration check
         id: check
         run: |
           EXIT=0
-          python3 skills/ppt-master/scripts/check_uvx_migration.py "${{ github.sha }}" || EXIT=$?
+          python -I skills/ppt-master/scripts/check_uvx_migration.py "${{ github.sha }}" || EXIT=$?
           echo "exit_code=$EXIT" >> $GITHUB_OUTPUT
           if [ "$EXIT" -eq 2 ]; then
             echo "::notice::Not a merge commit — skipped (no upstream code to check)"
           elif [ "$EXIT" -ne 0 ]; then
-            echo "::error::python3 remnants found in merge commit — uvx adaptation incomplete"
+            echo "::error::legacy interpreter remnants found in merge commit — uvx adaptation incomplete"
             exit 1
           fi

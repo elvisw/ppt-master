@@ -2,124 +2,614 @@ name: Sync Upstream
 
 on:
   schedule:
-    # 每天 UTC 18:00（北京时间次日凌晨 02:00，避开 DeepSeek 高峰时段）
     - cron: "0 18 * * *"
   workflow_dispatch:
 
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
 jobs:
-  sync-upstream:
+  prepare-candidate:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
-      contents: write
-      pull-requests: write
-      id-token: write
+      contents: read
+    outputs:
+      base_sha: ${{ steps.base.outputs.base_sha }}
+      target_sha: ${{ steps.upstream.outputs.upstream_sha }}
+      has_changes: ${{ steps.upstream.outputs.has_changes }}
+      verified_sha: ${{ steps.candidate-verify.outputs.verified_sha }}
+      artifact_name: ${{ steps.bundle.outputs.artifact_name }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          persist-credentials: false
+      - name: Guard manual sync ref
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          if [ "${GITHUB_REF:-}" != "refs/heads/main" ]; then
+            echo "::error::workflow_dispatch sync must run from refs/heads/main"
+            exit 1
+          fi
 
-      - name: Setup uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: false
+      - name: Checkout immutable base without credentials
+        env:
+          EXPECTED_BASE_SHA: ${{ github.sha }}
+        run: |
+          # Unauthenticated full-history fetch: no --depth is fetch-depth: 0,
+          # and no checkout action is allowed to inject a repository token.
+          # This is the fail-closed equivalent of persist-credentials: false.
+          if [ -e .git ] || [ -L .git ]; then
+            echo "::error::The fresh preparation workspace already contains a Git directory"
+            exit 1
+          fi
+          if ! git init --initial-branch=sync-base; then
+            echo "::error::Unable to initialize the uncredentialed preparation repository"
+            exit 1
+          fi
+          if ! git remote add origin https://github.com/elvisw/ppt-master.git; then
+            echo "::error::Unable to add the canonical fork remote"
+            exit 1
+          fi
+          if ! git -c core.hooksPath=/dev/null fetch --no-tags --prune origin \
+            refs/heads/main:refs/remotes/origin/main; then
+            echo "::error::Unable to fetch the full canonical fork history"
+            exit 1
+          fi
+          if ! git -c core.hooksPath=/dev/null checkout --detach "$EXPECTED_BASE_SHA"; then
+            echo "::error::The immutable event SHA is not available in canonical main history"
+            exit 1
+          fi
 
-      - name: Setup Python
-        run: uv python install 3.12 && uv python pin 3.12
-
-      - name: Install ripgrep
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep
+      - name: Verify immutable base checkout
+        id: base
+        env:
+          EXPECTED_BASE_SHA: ${{ github.sha }}
+        run: |
+          if ! CHECKED_OUT_SHA=$(git rev-parse --verify HEAD^{commit}); then
+            echo "::error::Unable to resolve the checked-out base commit"
+            exit 1
+          fi
+          if [ "$CHECKED_OUT_SHA" != "$EXPECTED_BASE_SHA" ]; then
+            echo "::error::Checkout is not the immutable event SHA"
+            exit 1
+          fi
+          printf 'base_sha=%s\n' "$CHECKED_OUT_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Check upstream changes
         id: upstream
+        env:
+          BASE_SHA: ${{ steps.base.outputs.base_sha }}
         run: |
-          git remote add upstream https://github.com/hugohe3/ppt-master.git 2>/dev/null || true
-          git fetch upstream main
-          CHANGES=$(git log main..upstream/main --oneline)
-          if [ -z "$CHANGES" ]; then
-            echo "has_changes=false" >> $GITHUB_OUTPUT
-            echo "No upstream changes — skipping sync."
-          else
-            echo "has_changes=true" >> $GITHUB_OUTPUT
-            echo "Upstream changes detected:"
-            echo "$CHANGES"
+          if ! git remote add upstream https://github.com/hugohe3/ppt-master.git; then
+            echo "::error::Unable to add the canonical upstream remote"
+            exit 1
+          fi
+          if ! git fetch --no-tags --prune upstream main; then
+            echo "::error::Unable to fetch canonical upstream/main"
+            exit 1
+          fi
+          if ! UPSTREAM_SHA=$(git rev-parse --verify refs/remotes/upstream/main^{commit}); then
+            echo "::error::Unable to resolve fetched upstream/main"
+            exit 1
+          fi
+          printf 'upstream_sha=%s\n' "$UPSTREAM_SHA" >> "$GITHUB_OUTPUT"
+          if ! CHANGE_COUNT=$(git rev-list --count "$BASE_SHA..$UPSTREAM_SHA"); then
+            echo "::error::Unable to determine whether upstream has changed"
+            exit 1
+          fi
+          if [ "$CHANGE_COUNT" -eq 0 ]; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            echo "No upstream changes; no model, artifact, branch, or PR will run."
+            exit 0
+          fi
+          echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          echo "Upstream target: $UPSTREAM_SHA"
+
+      - name: Configure git identity
+        if: steps.upstream.outputs.has_changes == 'true'
+        run: |
+          if ! git config user.name "github-actions[bot]"; then
+            echo "::error::Unable to configure Git author name"
+            exit 1
+          fi
+          if ! git config user.email "41898282+github-actions[bot]@users.noreply.github.com"; then
+            echo "::error::Unable to configure Git author email"
+            exit 1
           fi
 
-      # schedule 事件：OpenCode action 自动跳过权限，创建分支+PR
-      - name: Run OpenCode Sync (auto)
-        if: github.event_name == 'schedule' && steps.upstream.outputs.has_changes == 'true'
-        uses: anomalyco/opencode/github@latest
+      - name: Snapshot trusted preparation checker
+        if: steps.upstream.outputs.has_changes == 'true'
+        env:
+          BASE_SHA: ${{ steps.base.outputs.base_sha }}
+        run: |
+          if ! git show "$BASE_SHA:.github/scripts/check_upstream_ancestry.py" > "$RUNNER_TEMP/trusted-check_upstream_ancestry.py"; then
+            echo "::error::Unable to copy the base trusted checker"
+            exit 1
+          fi
+
+      - name: Install pinned OpenCode CLI
+        if: steps.upstream.outputs.has_changes == 'true'
+        run: |
+          if ! npm install -g opencode-ai@1.18.30; then
+            echo "::error::Unable to install the pinned OpenCode CLI"
+            exit 1
+          fi
+
+      - name: Run OpenCode candidate preparation
+        if: steps.upstream.outputs.has_changes == 'true'
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          GH_TOKEN: ${{ github.token }}
+          OPENCODE_MODEL: ${{ vars.OPENCODE_MODEL || 'deepseek/deepseek-v4-flash' }}
+          EXPECTED_UPSTREAM_SHA: ${{ steps.upstream.outputs.upstream_sha }}
+        run: |
+          if ! opencode run --dangerously-skip-permissions -m "$OPENCODE_MODEL" \
+            "Read .opencode/command/sync-upstream.md and follow its complete fail-closed procedure. The immutable upstream target is $EXPECTED_UPSTREAM_SHA and it must be the second parent of the real merge commit. Do not reset, rebase, squash, cherry-pick, switch branches, clear MERGE_HEAD, push, create a PR, or access repository credentials. Complete the required uvx adaptation, version bump, and trusted local gates. The workflow will verify and publish your committed candidate from a fresh runner."; then
+            echo "::error::OpenCode candidate preparation failed"
+            exit 1
+          fi
+
+      - name: Verify candidate on preparation runner
+        id: candidate-verify
+        if: steps.upstream.outputs.has_changes == 'true'
+        env:
+          BASE_SHA: ${{ steps.base.outputs.base_sha }}
+          TARGET_SHA: ${{ steps.upstream.outputs.upstream_sha }}
+        run: |
+          if ! (git diff --quiet && git diff --cached --quiet); then
+            echo "::error::OpenCode left the worktree or index dirty"
+            exit 1
+          fi
+          if ! WORKTREE_STATUS=$(git status --porcelain=v1 --untracked-files=all); then
+            echo "::error::Unable to inspect the complete candidate worktree"
+            exit 1
+          fi
+          if [ -n "$WORKTREE_STATUS" ]; then
+            echo "::error::OpenCode left tracked or untracked files"
+            printf '%s\n' "$WORKTREE_STATUS"
+            exit 1
+          fi
+          if ! VERIFIED_SHA=$(git rev-parse --verify HEAD^{commit}); then
+            echo "::error::Unable to resolve the candidate tip"
+            exit 1
+          fi
+          if ! python "$RUNNER_TEMP/trusted-check_upstream_ancestry.py" \
+            --repo . \
+            --base-sha "$BASE_SHA" \
+            --head-sha "$VERIFIED_SHA" \
+            --upstream-ref upstream/main \
+            --expected-target-sha "$TARGET_SHA" \
+            --require-version-bump; then
+            echo "::error::Preparation checker rejected the candidate"
+            exit 1
+          fi
+          printf 'verified_sha=%s\n' "$VERIFIED_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Create candidate bundle and manifest
+        id: bundle
+        if: steps.upstream.outputs.has_changes == 'true'
+        env:
+          BASE_SHA: ${{ steps.base.outputs.base_sha }}
+          TARGET_SHA: ${{ steps.upstream.outputs.upstream_sha }}
+          VERIFIED_SHA: ${{ steps.candidate-verify.outputs.verified_sha }}
+          ARTIFACT_NAME: upstream-sync-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          CANDIDATE_REF=refs/heads/opencode/sync-candidate
+          BUNDLE_PATH="$RUNNER_TEMP/candidate.bundle"
+          MANIFEST_PATH="$RUNNER_TEMP/manifest.json"
+          if ! git update-ref "$CANDIDATE_REF" "$VERIFIED_SHA"; then
+            echo "::error::Unable to create the fixed candidate ref"
+            exit 1
+          fi
+          if ! git bundle create "$BUNDLE_PATH" "$CANDIDATE_REF" "^$BASE_SHA"; then
+            echo "::error::Unable to create the candidate Git bundle"
+            exit 1
+          fi
+          if ! git bundle verify "$BUNDLE_PATH" > /dev/null; then
+            echo "::error::Candidate Git bundle failed verification"
+            exit 1
+          fi
+          if ! python - "$MANIFEST_PATH" <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          payload = {
+              "base_sha": os.environ["BASE_SHA"],
+              "target_sha": os.environ["TARGET_SHA"],
+              "verified_sha": os.environ["VERIFIED_SHA"],
+          }
+          Path(sys.argv[1]).write_text(
+              json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n",
+              encoding="utf-8",
+          )
+          PY
+          then
+            echo "::error::Unable to write the immutable candidate manifest"
+            exit 1
+          fi
+          printf 'artifact_name=%s\n' "$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Upload candidate artifact
+        if: steps.upstream.outputs.has_changes == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          model: ${{ vars.OPENCODE_MODEL || 'deepseek/deepseek-v4-flash' }}
-          prompt: |
-            Read `.opencode/command/sync-upstream.md` and follow ALL steps exactly as written.
-            Use `python3` not `python`. Do NOT manually create tags or push to main.
-            If no upstream changes, stop immediately.
+          name: ${{ steps.bundle.outputs.artifact_name }}
+          path: |
+            ${{ runner.temp }}/candidate.bundle
+            ${{ runner.temp }}/manifest.json
+          if-no-files-found: error
+          retention-days: 1
 
-            CRITICAL: In Step 4, you MUST scan ALL .md files in the entire repo (not just a few
-            directories). The scan scope must include: root .md files (AGENTS.md, CLAUDE.md,
-            CONTRIBUTING.md, README.md, etc.), skills/ppt-master/, docs/, examples/, projects/,
-            and any other directory that contains .md files. Only exclude .opencode/,
-            docs/superpowers/, and docs/zh/upstream-sync.md.
-
-            CRITICAL: Before committing, you MUST run the Step 4e gate: verify zero python3
-            remnants across the entire repo using rg. If ANY python3 remains, go back to Step 4c.
-            Do NOT commit until the gate is clean.
-
-            CRITICAL: After the python3 gate, you MUST also run the Skill integrity guard:
-            `python3 skills/ppt-master/scripts/attribution_guard.py` must exit 0 (no output).
-            If it exits non-zero (e.g. 78), fix the attribution/uvx conflict before committing:
-            keep `_SKILL_GATE_MARKER` as `uvx ppt-master attribution-guard` in
-            attribution_guard.py, ensure SKILL.md contains it exactly once, ensure
-            LICENSE/SPONSORS.md/SPONSORS_CN.md exist under skills/ppt-master/, and ensure
-            MANIFEST.in (root and skills/ppt-master/) still includes SKILL.md/LICENSE/
-            SPONSORS.md/SPONSORS_CN.md. Re-run the guard until it exits 0.
-            Do NOT commit or push until BOTH gates pass.
-
-            CRITICAL: After the python3 and skill guard gates, verify fork adaptation markers
-            still exist: grep for PPT_MASTER_LAUNCH_TOKEN in scripts/confirm_ui/server.py and
-            scripts/svg_editor/server.py, grep for normalized_project_key in server_common.py,
-            grep for projects_root in project_management/paths.py and config.py, and grep for
-            PPT_MASTER_TEMPLATES_DIR in scripts/register_template.py. Also verify the fork
-            notice blocks: README.md and README_CN.md must contain the fork notice block
-            (Fork notice / Fork 声明, including the uvx ppt-master install note) right after
-            the language-switch line, PYPI_README.md must keep the fork maintainer + sponsor
-            attribution note at the top, docs/faq.md + docs/zh/faq.md must keep the uvx (PyPI)
-            row in the update table, docs/windows-installation.md + docs/zh/windows-installation.md
-            must keep the fork uvx note under the title, docs/roadmap.md + docs/zh/roadmap.md
-            must keep the fork note after the uv paragraph, and CONTRIBUTING.md must keep the
-            fork note after Setup. If any marker is missing, restore the fork adaptation
-            before committing.
-
-            CRITICAL: After the marker checks, verify the 8 fork-modified Python files are runnable:
-            run `python3 -m py_compile` on confirm_ui/server.py, svg_editor/server.py, visual_review.py,
-            server_common.py, config.py, project_management/paths.py, project_manager.py, and
-            register_template.py (all under skills/ppt-master/scripts/), then run
-            `uvx ruff check --select F821` on the same 8 files. F821 catches undefined names such as
-            a missing `import uuid` next to a launch-token line — the marker grep alone cannot detect
-            "marker present but code broken". Both checks must pass with zero errors before committing;
-            fix any failure and re-run until clean.
-
-      # workflow_dispatch 事件：opencode CLI 非交互模式
-      - name: Configure git for push (manual)
-        if: github.event_name == 'workflow_dispatch' && steps.upstream.outputs.has_changes == 'true'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git remote set-url origin "https://x-access-token:${{ secrets.PUSH_PAT }}@github.com/elvisw/ppt-master.git"
-
-      - name: Run OpenCode Sync (manual)
-        if: github.event_name == 'workflow_dispatch' && steps.upstream.outputs.has_changes == 'true'
+  verify-and-open-pr:
+    if: needs.prepare-candidate.outputs.has_changes == 'true'
+    needs: prepare-candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout trusted base without credentials
         env:
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ needs.prepare-candidate.outputs.base_sha }}
         run: |
-          npm install -g opencode-ai@latest
-          opencode run --dangerously-skip-permissions -m ${{ vars.OPENCODE_MODEL || 'deepseek/deepseek-v4-flash' }} "Read .opencode/command/sync-upstream.md and follow ALL steps. Use python3. No tags. Push to main at Step 6. Stop if no upstream changes. CRITICAL: Step 4 must scan ALL .md files in the entire repo. Before committing, run Step 4e gate — rg 'python3' across all .md files (excluding .opencode/, docs/superpowers/). Do NOT commit until clean. CRITICAL: also run the skill integrity guard via python3 skills/ppt-master/scripts/attribution_guard.py and require exit 0; if it fails, fix the attribution/uvx conflict (keep _SKILL_GATE_MARKER as uvx ppt-master attribution-guard, keep SKILL.md/LICENSE/SPONSORS files and MANIFEST.in includes) and re-run until exit 0. Do NOT commit or push until both gates pass. Also verify fork adaptation markers (PPT_MASTER_LAUNCH_TOKEN in confirm_ui/server.py + svg_editor/server.py, normalized_project_key in server_common.py, projects_root in paths.py/config.py, PPT_MASTER_TEMPLATES_DIR in register_template.py) and the fork notice blocks (Fork notice / Fork 声明 with uvx install note in README.md + README_CN.md, fork maintainer + sponsor attribution note in PYPI_README.md, uvx (PyPI) row in docs/faq.md + docs/zh/faq.md update table, fork uvx note in docs/windows-installation.md + docs/zh/windows-installation.md, fork note after uv paragraph in docs/roadmap.md + docs/zh/roadmap.md, fork note after Setup in CONTRIBUTING.md) still exist; restore them if missing before committing. CRITICAL: also verify the 8 fork-modified Python files are runnable — run python3 -m py_compile on confirm_ui/server.py, svg_editor/server.py, visual_review.py, server_common.py, config.py, project_management/paths.py, project_manager.py, register_template.py (all under skills/ppt-master/scripts/), then run uvx ruff check --select F821 on the same 8 files; F821 catches undefined names like a missing import uuid next to a launch-token line, which the marker grep cannot detect. Both checks must pass with zero errors before committing; fix any failure and re-run until clean."
+          # Keep the trusted runner uncredentialed; fetch the complete main history.
+          if [ -e .git ] || [ -L .git ]; then
+            echo "::error::The fresh verification workspace already contains a Git directory"
+            exit 1
+          fi
+          if ! git init --initial-branch=trusted-base; then
+            echo "::error::Unable to initialize the trusted repository"
+            exit 1
+          fi
+          if ! git remote add origin https://github.com/elvisw/ppt-master.git; then
+            echo "::error::Unable to add the canonical fork remote"
+            exit 1
+          fi
+          if ! git -c core.hooksPath=/dev/null fetch --no-tags --prune origin \
+            refs/heads/main:refs/remotes/origin/main; then
+            echo "::error::Unable to fetch the full trusted fork history"
+            exit 1
+          fi
+          if ! git -c core.hooksPath=/dev/null checkout --detach "$BASE_SHA"; then
+            echo "::error::The trusted base SHA is not available in canonical main history"
+            exit 1
+          fi
 
+      - name: Verify trusted checkout identity
+        env:
+          BASE_SHA: ${{ needs.prepare-candidate.outputs.base_sha }}
+        run: |
+          if ! CHECKED_OUT_SHA=$(git rev-parse --verify HEAD^{commit}); then
+            echo "::error::Unable to resolve the trusted base checkout"
+            exit 1
+          fi
+          if [ "$CHECKED_OUT_SHA" != "$BASE_SHA" ]; then
+            echo "::error::Trusted runner is not on the requested base SHA"
+            exit 1
+          fi
 
+      - name: Download candidate artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.prepare-candidate.outputs.artifact_name }}
+          path: ${{ runner.temp }}/untrusted-sync
+
+      - name: Validate artifact shape
+        run: |
+          ARTIFACT_DIR="$RUNNER_TEMP/untrusted-sync"
+          if [ ! -d "$ARTIFACT_DIR" ]; then
+            echo "::error::Candidate artifact directory is missing"
+            exit 1
+          fi
+          if ! FILES=$(find "$ARTIFACT_DIR" -mindepth 1 -maxdepth 1 -printf '%y %f\n' | sort); then
+            echo "::error::Unable to enumerate candidate artifact files"
+            exit 1
+          fi
+          EXPECTED_FILES=$'f candidate.bundle\nf manifest.json'
+          if [ "$FILES" != "$EXPECTED_FILES" ]; then
+            echo "::error::Candidate artifact must contain only regular candidate.bundle and manifest.json files"
+            printf '%s\n' "$FILES"
+            exit 1
+          fi
+
+      - name: Validate bundle manifest
+        env:
+          BASE_SHA: ${{ needs.prepare-candidate.outputs.base_sha }}
+          TARGET_SHA: ${{ needs.prepare-candidate.outputs.target_sha }}
+          VERIFIED_SHA: ${{ needs.prepare-candidate.outputs.verified_sha }}
+        run: |
+          if ! python .github/scripts/check_upstream_ancestry.py \
+            --repo . \
+            --manifest "$RUNNER_TEMP/untrusted-sync/manifest.json" \
+            --expected-base-sha "$BASE_SHA" \
+            --expected-target-sha "$TARGET_SHA" \
+            --expected-verified-sha "$VERIFIED_SHA"; then
+            echo "::error::Candidate manifest failed strict validation"
+            exit 1
+          fi
+
+      - name: Import candidate bundle
+        run: |
+          BUNDLE_PATH="$RUNNER_TEMP/untrusted-sync/candidate.bundle"
+          CANDIDATE_REF=refs/ppt-master/untrusted-candidate
+          if ! git bundle verify "$BUNDLE_PATH" > /dev/null; then
+            echo "::error::Candidate bundle verification failed"
+            exit 1
+          fi
+          if ! git fetch "$BUNDLE_PATH" \
+            "refs/heads/opencode/sync-candidate:$CANDIDATE_REF"; then
+            echo "::error::Candidate bundle does not provide the fixed candidate ref"
+            exit 1
+          fi
+          if ! IMPORTED_SHA=$(git rev-parse --verify "$CANDIDATE_REF^{commit}"); then
+            echo "::error::Unable to resolve imported candidate ref"
+            exit 1
+          fi
+          if [ "$IMPORTED_SHA" != "${{ needs.prepare-candidate.outputs.verified_sha }}" ]; then
+            echo "::error::Imported candidate tip does not match the manifest"
+            exit 1
+          fi
+
+      - name: Materialize candidate as data
+        run: |
+          CANDIDATE_ROOT="$RUNNER_TEMP/trusted-candidate"
+          CANDIDATE_REF=refs/ppt-master/untrusted-candidate
+          if [ -e "$CANDIDATE_ROOT" ] || [ -L "$CANDIDATE_ROOT" ]; then
+            echo "::error::Candidate worktree path already exists"
+            exit 1
+          fi
+          if ! git -c core.hooksPath=/dev/null worktree add \
+            --detach --no-checkout "$CANDIDATE_ROOT" "$CANDIDATE_REF"; then
+            echo "::error::Unable to materialize the candidate worktree"
+            exit 1
+          fi
+          if ! git -c core.hooksPath=/dev/null -C "$CANDIDATE_ROOT" \
+            read-tree --reset -u "$CANDIDATE_REF"; then
+            echo "::error::Unable to populate the isolated candidate worktree"
+            exit 1
+          fi
+
+      - name: Install trusted candidate gate tools
+        env:
+          PIP_CONFIG_FILE: /dev/null
+          PIP_DISABLE_PIP_VERSION_CHECK: "1"
+          PIP_NO_INPUT: "1"
+          PYTHONPATH: ""
+        run: |
+          if ! python -m pip install --user --disable-pip-version-check --no-input \
+            "PyYAML==6.0.2" "ruff==0.11.13"; then
+            echo "::error::Unable to install the pinned trusted candidate gate tools"
+            exit 1
+          fi
+          printf '%s\n' "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Run trusted candidate structure gates
+        env:
+          PYTHONPATH: ""
+          VERIFIED_SHA: ${{ needs.prepare-candidate.outputs.verified_sha }}
+        run: |
+          CANDIDATE_REF=refs/ppt-master/untrusted-candidate
+          if ! python "$GITHUB_WORKSPACE/.github/scripts/check_sync_candidate.py" \
+            --repo "$GITHUB_WORKSPACE" \
+            --candidate-root "$RUNNER_TEMP/trusted-candidate" \
+            --base-sha "${{ needs.prepare-candidate.outputs.base_sha }}" \
+            --candidate-ref "$CANDIDATE_REF" \
+            --head-sha "$VERIFIED_SHA"; then
+            echo "::error::Trusted base candidate structure gates rejected the candidate"
+            exit 1
+          fi
+
+      - name: Run trusted syntax and F821 gates
+        env:
+          PYTHONPATH: ""
+        run: |
+          CANDIDATE_ROOT="$RUNNER_TEMP/trusted-candidate"
+          PY_FILES=(
+            "$CANDIDATE_ROOT/skills/ppt-master/scripts/confirm_ui/server.py"
+            "$CANDIDATE_ROOT/skills/ppt-master/scripts/svg_editor/server.py"
+            "$CANDIDATE_ROOT/skills/ppt-master/scripts/visual_review.py"
+            "$CANDIDATE_ROOT/skills/ppt-master/scripts/server_common.py"
+            "$CANDIDATE_ROOT/skills/ppt-master/scripts/config.py"
+            "$CANDIDATE_ROOT/skills/ppt-master/scripts/project_management/paths.py"
+            "$CANDIDATE_ROOT/skills/ppt-master/scripts/project_manager.py"
+            "$CANDIDATE_ROOT/skills/ppt-master/scripts/register_template.py"
+          )
+          for PY_FILE in "${PY_FILES[@]}"; do
+            if [ ! -f "$PY_FILE" ] || [ -L "$PY_FILE" ]; then
+              echo "::error::Fork gate Python file is missing or is not regular: $PY_FILE"
+              exit 1
+            fi
+          done
+          if ! PYTHONPATH= python -I -m py_compile "${PY_FILES[@]}"; then
+            echo "::error::Trusted Python syntax gate rejected the candidate"
+            exit 1
+          fi
+          if ! PYTHONPATH= ruff check --isolated --select F821 \
+            --output-format concise "${PY_FILES[@]}"; then
+            echo "::error::Trusted Ruff F821 gate rejected the candidate"
+            exit 1
+          fi
+
+      - name: Fetch canonical upstream
+        run: |
+          if ! git remote add upstream https://github.com/hugohe3/ppt-master.git; then
+            echo "::error::Unable to add the canonical upstream remote"
+            exit 1
+          fi
+          if ! git fetch --no-tags --prune upstream main; then
+            echo "::error::Unable to fetch canonical upstream/main"
+            exit 1
+          fi
+
+      - name: Verify untrusted candidate with trusted helper
+        id: trusted-verify
+        env:
+          BASE_SHA: ${{ needs.prepare-candidate.outputs.base_sha }}
+          TARGET_SHA: ${{ needs.prepare-candidate.outputs.target_sha }}
+          VERIFIED_SHA: ${{ needs.prepare-candidate.outputs.verified_sha }}
+        run: |
+          if ! (git diff --quiet && git diff --cached --quiet); then
+            echo "::error::Trusted checkout is dirty before candidate verification"
+            exit 1
+          fi
+          if ! WORKTREE_STATUS=$(git status --porcelain=v1 --untracked-files=all); then
+            echo "::error::Unable to inspect trusted worktree status"
+            exit 1
+          fi
+          if [ -n "$WORKTREE_STATUS" ]; then
+            echo "::error::Trusted worktree is not clean"
+            printf '%s\n' "$WORKTREE_STATUS"
+            exit 1
+          fi
+          if ! git cat-file -e "$BASE_SHA^{commit}" ||
+             ! git cat-file -e "$TARGET_SHA^{commit}" ||
+             ! git cat-file -e "$VERIFIED_SHA^{commit}"; then
+            echo "::error::Candidate bundle is missing a required commit object"
+            exit 1
+          fi
+          if ! python .github/scripts/check_upstream_ancestry.py \
+            --repo . \
+            --base-sha "$BASE_SHA" \
+            --head-sha "$VERIFIED_SHA" \
+            --upstream-ref upstream/main \
+            --expected-target-sha "$TARGET_SHA" \
+            --require-version-bump; then
+            echo "::error::Trusted base helper rejected the candidate"
+            exit 1
+          fi
+          printf 'verified_sha=%s\n' "$VERIFIED_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Confirm main has not advanced
+        env:
+          BASE_SHA: ${{ needs.prepare-candidate.outputs.base_sha }}
+        run: |
+          if ! git fetch --no-tags origin main; then
+            echo "::error::Unable to read current origin/main before publication"
+            exit 1
+          fi
+          if ! CURRENT_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main^{commit}); then
+            echo "::error::Unable to resolve current origin/main"
+            exit 1
+          fi
+          if [ "$CURRENT_MAIN_SHA" != "$BASE_SHA" ]; then
+            echo "::error::main advanced during sync preparation; rerun from fresh main"
+            exit 1
+          fi
+
+      - name: Publish verified candidate
+        env:
+          PUSH_PAT: ${{ secrets.PUSH_PAT }}
+        run: |
+          if [ -z "${PUSH_PAT:-}" ]; then
+            echo "::error::PUSH_PAT is required for trusted publication"
+            exit 1
+          fi
+          export GIT_CONFIG_GLOBAL=/dev/null
+          export GIT_CONFIG_SYSTEM=/dev/null
+          export GIT_TERMINAL_PROMPT=0
+          export GIT_ASKPASS=/bin/false
+          export SSH_ASKPASS=/bin/false
+          BASE_SHA="${{ needs.prepare-candidate.outputs.base_sha }}"
+          TARGET_SHA="${{ needs.prepare-candidate.outputs.target_sha }}"
+          VERIFIED_SHA="${{ steps.trusted-verify.outputs.verified_sha }}"
+          CANDIDATE_REF=refs/ppt-master/untrusted-candidate
+          SYNC_BRANCH="opencode/sync-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          PUSH_URL="https://x-access-token:${PUSH_PAT}@github.com/elvisw/ppt-master.git"
+          CLEANUP_REQUIRED=1
+          PUSH_ATTEMPTED=0
+          PR_NUMBER=""
+          cleanup() {
+            status=$?
+            if [ "$CLEANUP_REQUIRED" -eq 1 ]; then
+              if [ -n "$PR_NUMBER" ]; then
+                if ! GH_TOKEN="$PUSH_PAT" gh pr close "$PR_NUMBER" \
+                  --repo elvisw/ppt-master --comment "Closing invalid upstream sync PR after trusted base binding failed"; then
+                  echo "::error::Best-effort PR close failed for PR #$PR_NUMBER"
+                fi
+              fi
+              if [ "$PUSH_ATTEMPTED" -eq 1 ]; then
+                if ! git -c credential.helper= -c core.hooksPath=/dev/null push \
+                  "$PUSH_URL" --delete "refs/heads/$SYNC_BRANCH"; then
+                  echo "::error::Best-effort sync branch deletion failed for $SYNC_BRANCH"
+                fi
+              fi
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          if ! git -c credential.helper= -c core.hooksPath=/dev/null fetch --no-tags origin main; then
+            echo "::error::Unable to re-read origin/main immediately before publication"
+            exit 1
+          fi
+          if ! CURRENT_MAIN_SHA=$(git -c credential.helper= -c core.hooksPath=/dev/null rev-parse --verify refs/remotes/origin/main^{commit}); then
+            echo "::error::Unable to resolve origin/main immediately before publication"
+            exit 1
+          fi
+          if [ "$CURRENT_MAIN_SHA" != "$BASE_SHA" ]; then
+            echo "::error::main advanced before branch publication; refusing rewrite or force-push"
+            exit 1
+          fi
+          if ! CURRENT_CANDIDATE_SHA=$(git -c credential.helper= -c core.hooksPath=/dev/null rev-parse --verify "$CANDIDATE_REF^{commit}"); then
+            echo "::error::Unable to re-read the trusted candidate ref"
+            exit 1
+          fi
+          if [ "$CURRENT_CANDIDATE_SHA" != "$VERIFIED_SHA" ]; then
+            echo "::error::Candidate ref changed after verification"
+            exit 1
+          fi
+          PUSH_ATTEMPTED=1
+          if ! git -c credential.helper= -c core.hooksPath=/dev/null push "$PUSH_URL" \
+            "$VERIFIED_SHA:refs/heads/$SYNC_BRANCH"; then
+            echo "::error::Verified candidate push failed; no force-push or main push is allowed"
+            exit 1
+          fi
+          if ! git -c credential.helper= -c core.hooksPath=/dev/null fetch --no-tags origin main; then
+            echo "::error::Unable to re-check origin/main before PR creation"
+            exit 1
+          fi
+          if ! CURRENT_MAIN_SHA=$(git -c credential.helper= -c core.hooksPath=/dev/null rev-parse --verify refs/remotes/origin/main^{commit}); then
+            echo "::error::Unable to resolve origin/main before PR creation"
+            exit 1
+          fi
+          if [ "$CURRENT_MAIN_SHA" != "$BASE_SHA" ]; then
+            echo "::error::main advanced before PR creation; leaving the branch unpublished"
+            exit 1
+          fi
+          PR_BODY=$(cat <<EOF
+          Automated upstream sync candidate.
+
+          - Base SHA: $BASE_SHA
+          - Upstream target SHA: $TARGET_SHA
+          - Verified candidate SHA: $VERIFIED_SHA
+          - Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          EOF
+          )
+          if ! PR_URL=$(GH_TOKEN="$PUSH_PAT" gh pr create \
+            --repo elvisw/ppt-master \
+            --base main \
+            --head "$SYNC_BRANCH" \
+            --title "chore: sync upstream $TARGET_SHA" \
+            --body "$PR_BODY"); then
+            echo "::error::Unable to create the trusted upstream sync PR"
+            exit 1
+          fi
+          PR_NUMBER="${PR_URL##*/}"
+          case "$PR_NUMBER" in
+            ''|*[!0-9]*)
+              echo "::error::gh pr create did not return a numeric PR number"
+              exit 1
+              ;;
+          esac
+          if ! PR_BASE_SHA=$(GH_TOKEN="$PUSH_PAT" gh api \
+            "repos/elvisw/ppt-master/pulls/$PR_NUMBER" --jq '.base.sha'); then
+            echo "::error::Unable to read the created PR base SHA"
+            exit 1
+          fi
+          if [ "$PR_BASE_SHA" != "$BASE_SHA" ]; then
+            echo "::error::Created PR base SHA does not match the immutable base; closing and deleting"
+            exit 1
+          fi
+          CLEANUP_REQUIRED=0
+          trap - EXIT
+          echo "Created trusted upstream sync PR #$PR_NUMBER for $SYNC_BRANCH"
