@@ -172,8 +172,8 @@ def _check_overlay_policy_contract(repo: Path, candidate: Path) -> None:
         "trusted_upstream_overlay_policy",
     )
     try:
-        trusted_bytes = _regular(repo, relative).read_bytes()
-        candidate_bytes = _regular(candidate, relative).read_bytes()
+        trusted_bytes = _regular(repo, relative).read_bytes().replace(b"\r\n", b"\n")
+        candidate_bytes = _regular(candidate, relative).read_bytes().replace(b"\r\n", b"\n")
     except OSError as exc:
         raise CandidateGateError("unable to read the protected upstream overlay policy") from exc
     if candidate_bytes != trusted_bytes:
