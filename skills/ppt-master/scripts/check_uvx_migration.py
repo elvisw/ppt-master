@@ -50,7 +50,7 @@ CHECK_EXTENSIONS = {".md", ".py", ".yml", ".yaml", ".toml", ".txt", ".rst", ".sh
 def is_merge_commit(sha: str) -> bool:
     result = subprocess.run(
         ["git", "cat-file", "-p", sha],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     parents = [line for line in result.stdout.splitlines() if line.startswith("parent ")]
     return len(parents) >= 2
@@ -60,7 +60,7 @@ def get_changed_files(sha: str) -> list[str]:
     """Return list of files changed by merge commit *sha* (diff against first parent)."""
     result = subprocess.run(
         ["git", "diff", "--name-only", f"{sha}^1..{sha}"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     return [f.strip() for f in result.stdout.splitlines() if f.strip()]
 

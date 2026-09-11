@@ -12,10 +12,12 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[4]
 SCRIPT = ROOT / ".github" / "scripts" / "check_release_gates.py"
+MIGRATION_SCRIPT = ROOT / "skills" / "ppt-master" / "scripts" / "check_uvx_migration.py"
 
 
 def load_module():
@@ -123,6 +125,11 @@ class ReleaseGateHelperTests(unittest.TestCase):
             b"Version: 0.1.2\n\nName: ppt-master\n",
             b"Name: ppt-master\nName: ppt-master\nVersion: 0.1.2\n",
             b"Name: ppt-master\n\nVersion: 0.1.2\n",
+            b"NAME: ppt-master\nVersion: 0.1.2\n",
+            b"name: ppt-master\nVersion: 0.1.2\n",
+            b"Name: ppt-master\nname: ppt-master\nVersion: 0.1.2\n",
+            b"Name: ppt-master\nVersion: 0.1.2\nVERSION: 0.1.2\n",
+            b"N\xe4me: ppt-master\nVersion: 0.1.2\n",
         ):
             with self.subTest(metadata=metadata):
                 with self.assertRaises(self.module.ReleaseGateError):
@@ -135,6 +142,7 @@ class ReleaseGateHelperTests(unittest.TestCase):
                 (
                     "Version: 0.1.2\n\nName: ppt-master\n",
                     "Name: ppt-master\nName: ppt-master\nVersion: 0.1.2\n",
+                    "NAME: ppt-master\nVersion: 0.1.2\n",
                 )
             ):
                 wheel = root / f"ppt_master-0.1.2-py3-none-any-{index}.whl"
@@ -323,6 +331,14 @@ class ReleaseGateHelperTests(unittest.TestCase):
                     "Name: ppt-master\nVersion: 0.1.2\n",
                 )
                 archive.writestr(
+                    "ppt_master-0.1.2.dist-info/WHEEL",
+                    "Wheel-Version: 1.0\nGenerator: setuptools\nRoot-Is-Purelib: true\n",
+                )
+                archive.writestr(
+                    "ppt_master-0.1.2.dist-info/RECORD",
+                    "ppt_master-0.1.2.dist-info/METADATA,,\n",
+                )
+                archive.writestr(
                     "skills/ppt_master/SKILL.md",
                     "uvx ppt-master attribution-guard\n",
                 )
@@ -466,6 +482,262 @@ class ReleaseGateHelperTests(unittest.TestCase):
                 archive.writestr(r"C:\escape.txt", "unsafe\n")
             with self.assertRaises(self.module.ReleaseGateError):
                 self.module._validate_wheel_static(unsafe_wheel, "0.1.2")
+
+
+    def _mutated_workflow_policy(self, relative: str, transform) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary) / "repo"
+            (repo / ".github" / "workflows").mkdir(parents=True)
+            for workflow in self.module.PRIVILEGED_WORKFLOWS:
+                destination = repo / workflow
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(ROOT / workflow, destination)
+            path = repo / relative
+            path.write_text(transform(path.read_text(encoding="utf-8")), encoding="utf-8")
+            with self.assertRaises(self.module.ReleaseGateError):
+                self.module._check_workflow_policy(repo)
+
+    def test_git_write_surface_rejects_reviewer_probe_commands(self) -> None:
+        module = self.module
+        probes = (
+            "git add -A",
+            "git -c user.name=x commit -m pwn",
+            "git am patch.txt",
+            "git apply patch.txt",
+            "git merge upstream/main",
+            "git rebase main",
+            "git reset --hard",
+            "git update-ref refs/heads/main HEAD",
+            "git cherry-pick HEAD",
+            "git push origin HEAD:refs/heads/main",
+            "git push --force origin main",
+            "git --git-dir=.git commit -m pwn",
+        )
+        for probe in probes:
+            with self.subTest(probe=probe):
+                with self.assertRaises(module.ReleaseGateError):
+                    module._check_git_write_surface(probe, "probe", allowed_pushes=0)
+        module._check_git_write_surface("git fetch origin main", "clean", allowed_pushes=0)
+        module._check_git_write_surface(
+            'git -c credential.helper= push "https://example.invalid/repo.git" "refs/tags/$RELEASE_TAG"',
+            "tag push",
+            allowed_pushes=1,
+        )
+
+    def test_auto_tag_policy_rejects_extra_steps_and_main_write_probes(self) -> None:
+        def _append_step(run: str):
+            def transform(text: str) -> str:
+                return text + f"\n      - name: Sneaky write\n        run: {run}\n"
+            return transform
+
+        probes = (
+            _append_step("git -c x=y commit -m pwn"),
+            _append_step("git add -A"),
+            _append_step("git update-ref refs/heads/main HEAD"),
+        )
+        for transform in probes:
+            with self.subTest(run=transform("").strip()):
+                self._mutated_workflow_policy(".github/workflows/auto-tag.yml", transform)
+
+    def test_auto_tag_policy_rejects_unapproved_push_targets_and_force(self) -> None:
+        def _push_to_main(text: str) -> str:
+            prefix, separator, suffix = text.rpartition('"refs/tags/$RELEASE_TAG"')
+            self.assertTrue(separator)
+            return prefix + '"$RELEASE_SHA:refs/heads/main"' + suffix
+
+        def _forced_push(text: str) -> str:
+            prefix, separator, suffix = text.rpartition('push "https://x-access-token:')
+            self.assertTrue(separator)
+            return prefix + 'push --force "https://x-access-token:' + suffix
+
+        def _run_body_commit(text: str) -> str:
+            return text.replace(
+                '            --workflow-runs-json "$RUNS_FILE"',
+                '            --workflow-runs-json "$RUNS_FILE"\n            git commit -am pwn',
+                1,
+            )
+
+        for transform in (_push_to_main, _forced_push, _run_body_commit):
+            with self.subTest(transform=transform.__name__):
+                self._mutated_workflow_policy(".github/workflows/auto-tag.yml", transform)
+
+    def test_migration_run_templates_reject_early_success_and_exit_zero_bypass(self) -> None:
+        def _early_exit(text: str) -> str:
+            return text.replace("          EXIT=0\n", "          exit 0\n", 1)
+
+        def _true_prefix(text: str) -> str:
+            return text.replace("          EXIT=0\n", "          true\n          EXIT=0\n", 1)
+
+        def _set_plus_e(text: str) -> str:
+            return text.replace("          EXIT=0\n", "          set +e\n          EXIT=0\n", 1)
+
+        def _swallow_failure(text: str) -> str:
+            return text.replace("|| EXIT=$?", "|| EXIT=0", 1)
+
+        def _always_branch(text: str) -> str:
+            return text.replace('if [ "$EXIT" -eq 2 ]; then', "if true; then", 1)
+
+        for transform in (_early_exit, _true_prefix, _set_plus_e, _swallow_failure, _always_branch):
+            with self.subTest(transform=transform.__name__):
+                self._mutated_workflow_policy(
+                    ".github/workflows/check-uvx-migration.yml", transform
+                )
+
+    def test_migration_policy_rejects_deleted_reordered_and_extra_steps(self) -> None:
+        def _delete_ancestry(text: str) -> str:
+            start = text.index("      - name: Verify recorded upstream ancestry")
+            end = text.index("      - name: Run uvx migration check")
+            return text[:start] + text[end:]
+
+        def _reorder(text: str) -> str:
+            fetch_start = text.index("      - name: Fetch upstream")
+            ancestry_start = text.index("      - name: Verify recorded upstream ancestry")
+            migration_start = text.index("      - name: Run uvx migration check")
+            fetch_block = text[fetch_start:ancestry_start]
+            ancestry_block = text[ancestry_start:migration_start]
+            return text[:fetch_start] + ancestry_block + fetch_block + text[migration_start:]
+
+        def _extra_step(text: str) -> str:
+            marker = "      - name: Run uvx migration check"
+            return text.replace(marker, "      - name: Extra step\n        run: true\n" + marker, 1)
+
+        for transform in (_delete_ancestry, _reorder, _extra_step):
+            with self.subTest(transform=transform.__name__):
+                self._mutated_workflow_policy(
+                    ".github/workflows/check-uvx-migration.yml", transform
+                )
+
+    def test_publish_oidc_policy_rejects_extra_steps_and_execution_probes(self) -> None:
+        def _append_step(run: str):
+            def transform(text: str) -> str:
+                return text + f"\n      - name: Sneaky OIDC step\n        run: {run}\n"
+            return transform
+
+        def _replace_publish(text: str) -> str:
+            return text.replace(
+                'uv publish --trusted-publishing always "$WHEEL_PATH" "$SDIST_PATH"',
+                'uv run python -c "import ppt_master"',
+                1,
+            )
+
+        def _install_inside_bind(text: str) -> str:
+            return text.replace(
+                "          mapfile -t FILES",
+                "          pip install requests\n          mapfile -t FILES",
+                1,
+            )
+
+        probes = (
+            _append_step("pip install requests"),
+            _append_step("python -c 'import os'"),
+            _append_step("cat $WHEEL_PATH"),
+            _replace_publish,
+            _install_inside_bind,
+        )
+        for transform in probes:
+            with self.subTest(transform=getattr(transform, "__name__", "probe")):
+                self._mutated_workflow_policy(".github/workflows/publish-pypi.yml", transform)
+
+    def test_oidc_run_safety_rejects_pip_and_wheel_path_misuse(self) -> None:
+        for steps in (
+            ({"name": "Install deps", "run": "pip install requests"},),
+            ({"name": "Import package", "run": 'python -c "import ppt_master"'},),
+            ({"name": "Peek wheel", "run": 'cat "$WHEEL_PATH"'},),
+            ({"name": "Execute wheel", "run": "uvx --from dist/ppt_master.whl ppt-master"},),
+        ):
+            with self.subTest(steps=steps):
+                with self.assertRaises(self.module.ReleaseGateError):
+                    self.module._check_oidc_run_safety(list(steps), "probe")
+
+    def test_wheel_metadata_path_and_companions_are_exact(self) -> None:
+        version = "0.1.2"
+        attribution = {
+            "skills/ppt_master/SKILL.md": "uvx ppt-master attribution-guard\n",
+            "skills/ppt_master/LICENSE": "MIT\n",
+            "skills/ppt_master/SPONSORS.md": "Sponsors\n",
+            "skills/ppt_master/SPONSORS_CN.md": "Sponsors\n",
+        }
+
+        def _write_wheel(path: Path, metadata_path: str, include: set[str]) -> None:
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr(metadata_path, f"Name: ppt-master\nVersion: {version}\n")
+                for companion in include:
+                    archive.writestr(companion, "companion\n")
+                for relative, content in attribution.items():
+                    archive.writestr(relative, content)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            valid = root / "valid.whl"
+            _write_wheel(
+                valid,
+                f"ppt_master-{version}.dist-info/METADATA",
+                {
+                    f"ppt_master-{version}.dist-info/WHEEL",
+                    f"ppt_master-{version}.dist-info/RECORD",
+                },
+            )
+            self.module._validate_wheel_static(valid, version)
+
+            for name, metadata_path, companions in (
+                (
+                    "wrong-path.whl",
+                    f"other-{version}.dist-info/METADATA",
+                    {
+                        f"other-{version}.dist-info/WHEEL",
+                        f"other-{version}.dist-info/RECORD",
+                    },
+                ),
+                (
+                    "missing-wheel.whl",
+                    f"ppt_master-{version}.dist-info/METADATA",
+                    {f"ppt_master-{version}.dist-info/RECORD"},
+                ),
+                (
+                    "missing-record.whl",
+                    f"ppt_master-{version}.dist-info/METADATA",
+                    {f"ppt_master-{version}.dist-info/WHEEL"},
+                ),
+                (
+                    "extra-metadata.whl",
+                    f"ppt_master-{version}.dist-info/METADATA",
+                    {
+                        f"ppt_master-{version}.dist-info/WHEEL",
+                        f"ppt_master-{version}.dist-info/RECORD",
+                        f"second-{version}.dist-info/METADATA",
+                    },
+                ),
+            ):
+                with self.subTest(name=name):
+                    wheel = root / name
+                    _write_wheel(wheel, metadata_path, companions)
+                    with self.assertRaises(self.module.ReleaseGateError):
+                        self.module._validate_wheel_static(wheel, version)
+
+    def test_release_gate_text_subprocess_paths_pin_utf8_replacement(self) -> None:
+        completed = subprocess.CompletedProcess(args=["git"], returncode=0, stdout="", stderr="")
+        for target, args in (
+            ("_run_git", (Path("."), "status")),
+            ("_run_migration_gate", (Path("."), "a" * 40)),
+        ):
+            with self.subTest(target=target), mock.patch.object(
+                self.module.subprocess, "run", return_value=completed
+            ) as mocked:
+                getattr(self.module, target)(*args)
+                self.assertEqual(mocked.call_args.kwargs.get("encoding"), "utf-8")
+                self.assertEqual(mocked.call_args.kwargs.get("errors"), "replace")
+
+    def test_migration_checker_text_subprocess_paths_pin_utf8_replacement(self) -> None:
+        spec = importlib.util.spec_from_file_location("migration_under_test", MIGRATION_SCRIPT)
+        if spec is None or spec.loader is None:
+            raise AssertionError("unable to load check_uvx_migration.py")
+        migration = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(migration)
+        completed = subprocess.CompletedProcess(args=["git"], returncode=0, stdout="", stderr="")
+        with mock.patch.object(migration.subprocess, "run", return_value=completed) as mocked:
+            migration.is_merge_commit("a" * 40)
+        self.assertEqual(mocked.call_args.kwargs.get("encoding"), "utf-8")
+        self.assertEqual(mocked.call_args.kwargs.get("errors"), "replace")
 
 
 if __name__ == "__main__":

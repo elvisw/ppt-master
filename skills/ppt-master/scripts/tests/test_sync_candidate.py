@@ -1,13 +1,24 @@
 from __future__ import annotations
 
+import importlib.util
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[4]
 CHECKER = ROOT / ".github" / "scripts" / "check_sync_candidate.py"
+
+
+def load_checker():
+    spec = importlib.util.spec_from_file_location("check_sync_candidate_under_test", CHECKER)
+    if spec is None or spec.loader is None:
+        raise AssertionError("unable to load check_sync_candidate.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def run_git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -85,6 +96,15 @@ class TrustedCandidateCheckerTests(unittest.TestCase):
                 self.assertFalse((candidate_root / "candidate-checker-executed").exists())
             finally:
                 run_git(ROOT, "worktree", "remove", "--force", str(candidate_root), check=False)
+
+
+    def test_candidate_git_text_paths_pin_utf8_replacement(self) -> None:
+        module = load_checker()
+        completed = subprocess.CompletedProcess(args=["git"], returncode=0, stdout="", stderr="")
+        with mock.patch.object(module.subprocess, "run", return_value=completed) as mocked:
+            module._run_git_text(ROOT, "status")
+        self.assertEqual(mocked.call_args.kwargs.get("encoding"), "utf-8")
+        self.assertEqual(mocked.call_args.kwargs.get("errors"), "replace")
 
 
 if __name__ == "__main__":

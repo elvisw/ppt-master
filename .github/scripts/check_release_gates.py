@@ -52,6 +52,7 @@ import stat  # noqa: E402
 import subprocess  # noqa: E402
 import tarfile  # noqa: E402
 import tempfile  # noqa: E402
+import textwrap  # noqa: E402
 import tomllib  # noqa: E402
 import zipfile  # noqa: E402
 from pathlib import Path  # noqa: E402
@@ -131,10 +132,390 @@ TRUSTED_SCRIPT_MODULES = (
     "check_sync_candidate.py",
     "check_upstream_ancestry.py",
 )
-MIGRATION_WORKFLOW_STEP_NAMES = (
-    "Fetch upstream",
-    "Verify recorded upstream ancestry",
-    "Run uvx migration check",
+
+
+def _template(text: str) -> str:
+    """Return one approved run block as canonical normalized template text."""
+    return textwrap.dedent(text).strip("\n")
+
+
+USES_CHECKOUT = "actions/checkout@" + EXPECTED_ACTION_PINS["actions/checkout"][0]
+USES_SETUP_UV = "astral-sh/setup-uv@" + EXPECTED_ACTION_PINS["astral-sh/setup-uv"][0]
+USES_UPLOAD_ARTIFACT = "actions/upload-artifact@" + EXPECTED_ACTION_PINS["actions/upload-artifact"][0]
+USES_DOWNLOAD_ARTIFACT = (
+    "actions/download-artifact@" + EXPECTED_ACTION_PINS["actions/download-artifact"][0]
+)
+
+AUTO_TAG_FETCH_RUN = _template(
+    r"""
+    set -euo pipefail
+    git -c credential.helper= -c core.hooksPath=/dev/null fetch --no-tags --prune origin main
+    git remote add upstream https://github.com/hugohe3/ppt-master.git
+    git fetch --no-tags upstream main
+    if [ "$(git rev-parse HEAD)" != "$RELEASE_SHA" ]; then
+      echo "::error::workflow_run checkout is not the immutable head SHA"
+      exit 1
+    fi
+    if ! git merge-base --is-ancestor "$RELEASE_SHA" refs/remotes/origin/main; then
+      echo "::error::release SHA is not in current origin/main history"
+      exit 1
+    fi
+    """
+)
+AUTO_TAG_PARSE_RUN = _template(
+    r"""
+    set -euo pipefail
+    python -I .github/scripts/check_release_gates.py \
+      --repo "$GITHUB_WORKSPACE" \
+      --release-sha "$RELEASE_SHA" \
+      --emit-release-env \
+      --env-file "$GITHUB_ENV"
+    """
+)
+AUTO_TAG_QUERY_RUN = _template(
+    r"""
+    set -euo pipefail
+    RUNS_FILE="$RUNNER_TEMP/check-uvx-migration-runs.json"
+    gh api --paginate --slurp \
+      "repos/elvisw/ppt-master/actions/workflows/check-uvx-migration.yml/runs?event=push&head_sha=$RELEASE_SHA&status=completed&per_page=100" \
+      > "$RUNS_FILE"
+    printf 'RUNS_FILE=%s\n' "$RUNS_FILE" >> "$GITHUB_ENV"
+    """
+)
+AUTO_TAG_TOOLING_RUN = _template(
+    r"""
+    set -euo pipefail
+    GATE_PYTHON="$(python -c 'import sys; print(sys.executable)')"
+    uv pip install --system --break-system-packages --python "$GATE_PYTHON" --no-progress "PyYAML==6.0.2" "ruff==0.12.10"
+    """
+)
+AUTO_TAG_GATE_RUN = _template(
+    r"""
+    set -euo pipefail
+    python -I .github/scripts/check_release_gates.py \
+      --repo "$GITHUB_WORKSPACE" \
+      --release-sha "$RELEASE_SHA" \
+      --release-tag "$RELEASE_TAG" \
+      --upstream-ref upstream/main \
+      --workflow-runs-json "$RUNS_FILE"
+    """
+)
+AUTO_TAG_PUSH_RUN = _template(
+    r"""
+    set -euo pipefail
+    if [ -z "${PUSH_PAT:-}" ]; then
+      echo "::error::PUSH_PAT is required for the final tag push"
+      exit 1
+    fi
+    git -c credential.helper= -c core.hooksPath=/dev/null fetch --no-tags --prune origin main
+    if [ "$(git rev-parse HEAD)" != "$RELEASE_SHA" ]; then
+      echo "::error::workflow_run checkout is not the immutable release SHA"
+      exit 1
+    fi
+    if ! git merge-base --is-ancestor "$RELEASE_SHA" refs/remotes/origin/main; then
+      echo "::error::release SHA is not in current origin/main history"
+      exit 1
+    fi
+    if ! REMOTE_MAIN_SHA=$(git -c credential.helper= -c core.hooksPath=/dev/null ls-remote --exit-code --heads origin refs/heads/main | awk 'NF == 2 { print $1 }'); then
+      echo "::error::Unable to read the current origin/main tip"
+      exit 1
+    fi
+    echo "Recorded origin/main at tag time: $REMOTE_MAIN_SHA"
+    if [ -z "$REMOTE_MAIN_SHA" ]; then
+      echo "::error::origin/main tip is empty at tag time"
+      exit 1
+    fi
+    if git -c credential.helper= -c core.hooksPath=/dev/null ls-remote --exit-code --refs origin "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+      echo "::error::Exact release tag already exists on origin"
+      exit 1
+    fi
+    git -c user.name="github-actions[bot]" \
+      -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+      -c core.hooksPath=/dev/null \
+      tag -a "$RELEASE_TAG" "$RELEASE_SHA" -m "Release $RELEASE_TAG"
+    if [ "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" != "$RELEASE_SHA" ]; then
+      echo "::error::Local exact tag does not point to release_sha"
+      exit 1
+    fi
+    GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_CONFIG_SYSTEM=/dev/null \
+    GIT_TERMINAL_PROMPT=0 \
+    GIT_ASKPASS=/bin/false \
+    SSH_ASKPASS=/bin/false \
+    git -c credential.helper= -c core.hooksPath=/dev/null \
+      push "https://x-access-token:${PUSH_PAT}@github.com/elvisw/ppt-master.git" \
+      "refs/tags/$RELEASE_TAG"
+    """
+)
+
+MIGRATION_FETCH_RUN = _template(
+    r"""
+    git remote add upstream https://github.com/hugohe3/ppt-master.git
+    git fetch --no-tags upstream main
+    """
+)
+MIGRATION_ANCESTRY_RUN = _template(
+    r"""
+    HEAD_SHA=$(git rev-parse HEAD)
+    python -I .github/scripts/check_upstream_ancestry.py \
+      --head-sha "$HEAD_SHA" \
+      --upstream-ref upstream/main
+    """
+)
+MIGRATION_CHECK_RUN = _template(
+    r"""
+    EXIT=0
+    python -I skills/ppt-master/scripts/check_uvx_migration.py "${{ github.sha }}" || EXIT=$?
+    echo "exit_code=$EXIT" >> $GITHUB_OUTPUT
+    if [ "$EXIT" -eq 2 ]; then
+      echo "::notice::Not a merge commit — skipped (no upstream code to check)"
+    elif [ "$EXIT" -ne 0 ]; then
+      echo "::error::legacy interpreter remnants found in merge commit — uvx adaptation incomplete"
+      exit 1
+    fi
+    """
+)
+
+PUBLISH_BIND_RUN = _template(
+    r"""
+    set -euo pipefail
+    for name in "$VERIFIED_WHEEL_NAME" "$VERIFIED_SDIST_NAME"; do
+      case "$name" in
+        ""|*[!A-Za-z0-9_.-]*)
+          echo "::error::Verifier returned an unsafe distribution filename"
+          exit 1
+          ;;
+      esac
+    done
+    for digest in "$VERIFIED_WHEEL_SHA256" "$VERIFIED_SDIST_SHA256" "$VERIFIED_MANIFEST_SHA256"; do
+      if [ "${#digest}" -ne 64 ]; then
+        echo "::error::Verifier returned an invalid SHA-256 digest"
+        exit 1
+      fi
+      case "$digest" in
+        ""|*[!0-9a-f]*)
+          echo "::error::Verifier returned an invalid SHA-256 digest"
+          exit 1
+          ;;
+      esac
+    done
+    if [ "$VERIFIED_WHEEL_NAME" = "$VERIFIED_SDIST_NAME" ]; then
+      echo "::error::Verifier returned duplicate distribution filenames"
+      exit 1
+    fi
+    WHEEL_PATH="$ARTIFACT_DIR/$VERIFIED_WHEEL_NAME"
+    SDIST_PATH="$ARTIFACT_DIR/$VERIFIED_SDIST_NAME"
+    MANIFEST_PATH="$ARTIFACT_DIR/manifest.json"
+    for path in "$WHEEL_PATH" "$SDIST_PATH" "$MANIFEST_PATH"; do
+      if [ ! -f "$path" ] || [ -L "$path" ]; then
+        echo "::error::Verified artifact path is missing or not regular"
+        exit 1
+      fi
+    done
+    mapfile -t FILES < <(find "$ARTIFACT_DIR" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)
+    EXPECTED_FILES=("$VERIFIED_WHEEL_NAME" "$VERIFIED_SDIST_NAME" "manifest.json")
+    mapfile -t EXPECTED_SORTED < <(printf '%s\n' "${EXPECTED_FILES[@]}" | sort)
+    if [ "${#FILES[@]}" -ne 3 ] || [ "${FILES[*]}" != "${EXPECTED_SORTED[*]}" ]; then
+      echo "::error::The downloaded artifact contains missing or unexpected files"
+      exit 1
+    fi
+    if [ "$(sha256sum -- "$WHEEL_PATH" | cut -d ' ' -f1)" != "$VERIFIED_WHEEL_SHA256" ] ||
+       [ "$(sha256sum -- "$SDIST_PATH" | cut -d ' ' -f1)" != "$VERIFIED_SDIST_SHA256" ] ||
+       [ "$(sha256sum -- "$MANIFEST_PATH" | cut -d ' ' -f1)" != "$VERIFIED_MANIFEST_SHA256" ]; then
+      echo "::error::Downloaded artifact bytes do not match the static verifier outputs"
+      exit 1
+    fi
+    printf 'WHEEL_PATH=%s\nSDIST_PATH=%s\n' "$WHEEL_PATH" "$SDIST_PATH" >> "$GITHUB_ENV"
+    """
+)
+
+PUBLISH_OIDC_BIND_ENV = {
+    "ARTIFACT_DIR": "${{ runner.temp }}/release-artifact",
+    "VERIFIED_WHEEL_NAME": "${{ needs.verify-artifact.outputs.wheel_name }}",
+    "VERIFIED_SDIST_NAME": "${{ needs.verify-artifact.outputs.sdist_name }}",
+    "VERIFIED_WHEEL_SHA256": "${{ needs.verify-artifact.outputs.wheel_sha256 }}",
+    "VERIFIED_SDIST_SHA256": "${{ needs.verify-artifact.outputs.sdist_sha256 }}",
+    "VERIFIED_MANIFEST_SHA256": "${{ needs.verify-artifact.outputs.manifest_sha256 }}",
+}
+
+GIT_SUBCOMMAND_RE = re.compile(
+    r"(?<![\w.-])git\s+"
+    r"(?P<options>(?:(?:-c|-C|--exec-path|--git-dir|--work-tree|--namespace)\s+\S+\s+"
+    r"|--[A-Za-z][A-Za-z-]*(?:=\S+)?\s+)*)"
+    r"(?P<subcommand>[A-Za-z][\w-]*)"
+)
+FORBIDDEN_GIT_SUBCOMMANDS = frozenset(
+    {
+        "add",
+        "am",
+        "apply",
+        "cherry-pick",
+        "commit",
+        "merge",
+        "rebase",
+        "reset",
+        "update-ref",
+    }
+)
+OIDC_FORBIDDEN_RUN_PATTERNS = (
+    r"(?<![\w-])pip\b",
+    r"(?<![\w-])python3?\b",
+    r"(?<![\w-])import\b",
+    r"(?<![\w-])exec\s*\(",
+    r"(?<![\w-])eval\s*\(",
+    r"(?<![\w-])uvx\b",
+    r"\.whl\b",
+)
+
+
+class WorkflowStepContract:
+    """Describe one approved privileged-workflow step."""
+
+    __slots__ = ("name", "keys", "uses", "with_values", "env", "run_template", "step_id")
+
+    def __init__(
+        self,
+        name: str | None,
+        keys: frozenset[str],
+        uses: str | None = None,
+        with_values: dict[str, Any] | None = None,
+        env: dict[str, Any] | None = None,
+        run_template: str | None = None,
+        step_id: str | None = None,
+    ) -> None:
+        self.name = name
+        self.keys = keys
+        self.uses = uses
+        self.with_values = with_values
+        self.env = env
+        self.run_template = run_template
+        self.step_id = step_id
+
+
+AUTO_TAG_STEP_CONTRACTS = (
+    WorkflowStepContract(
+        name="Checkout immutable workflow-run commit",
+        keys=frozenset({"name", "uses", "with"}),
+        uses=USES_CHECKOUT,
+        with_values={
+            "ref": "${{ github.event.workflow_run.head_sha }}",
+            "fetch-depth": 0,
+            "persist-credentials": False,
+        },
+    ),
+    WorkflowStepContract(
+        name="Fetch immutable release refs",
+        keys=frozenset({"name", "env", "run"}),
+        env={"RELEASE_SHA": "${{ github.event.workflow_run.head_sha }}"},
+        run_template=AUTO_TAG_FETCH_RUN,
+    ),
+    WorkflowStepContract(
+        name="Parse and bind package version through environment",
+        keys=frozenset({"name", "env", "run"}),
+        env={"RELEASE_SHA": "${{ github.event.workflow_run.head_sha }}"},
+        run_template=AUTO_TAG_PARSE_RUN,
+    ),
+    WorkflowStepContract(
+        name="Query immutable Check UVX Migration run evidence",
+        keys=frozenset({"name", "env", "run"}),
+        env={
+            "GH_TOKEN": "${{ github.token }}",
+            "RELEASE_SHA": "${{ github.event.workflow_run.head_sha }}",
+        },
+        run_template=AUTO_TAG_QUERY_RUN,
+    ),
+    WorkflowStepContract(
+        name="Setup uv for trusted gate tooling",
+        keys=frozenset({"name", "uses", "with"}),
+        uses=USES_SETUP_UV,
+        with_values={
+            "version": EXPECTED_UV_VERSION,
+            "checksum": EXPECTED_UV_CHECKSUM,
+            "enable-cache": False,
+        },
+    ),
+    WorkflowStepContract(
+        name="Install pinned trusted gate tooling",
+        keys=frozenset({"name", "run"}),
+        run_template=AUTO_TAG_TOOLING_RUN,
+    ),
+    WorkflowStepContract(
+        name="Run complete release gates for exact SHA",
+        keys=frozenset({"name", "env", "run"}),
+        env={"RELEASE_SHA": "${{ github.event.workflow_run.head_sha }}"},
+        run_template=AUTO_TAG_GATE_RUN,
+    ),
+    WorkflowStepContract(
+        name="Push exact release tag",
+        keys=frozenset({"name", "env", "run"}),
+        env={
+            "PUSH_PAT": "${{ secrets.PUSH_PAT }}",
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+            "GIT_CONFIG_SYSTEM": "/dev/null",
+            "GIT_TERMINAL_PROMPT": "0",
+            "GIT_ASKPASS": "/bin/false",
+            "SSH_ASKPASS": "/bin/false",
+        },
+        run_template=AUTO_TAG_PUSH_RUN,
+    ),
+)
+
+MIGRATION_STEP_CONTRACTS = (
+    WorkflowStepContract(
+        name=None,
+        keys=frozenset({"uses", "with"}),
+        uses=USES_CHECKOUT,
+        with_values={"fetch-depth": 0, "persist-credentials": False},
+    ),
+    WorkflowStepContract(
+        name="Fetch upstream",
+        keys=frozenset({"name", "run"}),
+        run_template=MIGRATION_FETCH_RUN,
+    ),
+    WorkflowStepContract(
+        name="Verify recorded upstream ancestry",
+        keys=frozenset({"name", "run"}),
+        run_template=MIGRATION_ANCESTRY_RUN,
+    ),
+    WorkflowStepContract(
+        name="Run uvx migration check",
+        keys=frozenset({"name", "id", "run"}),
+        run_template=MIGRATION_CHECK_RUN,
+        step_id="check",
+    ),
+)
+
+PUBLISH_OIDC_STEP_CONTRACTS = (
+    WorkflowStepContract(
+        name="Download verified artifact to fresh runner temp",
+        keys=frozenset({"name", "uses", "with"}),
+        uses=USES_DOWNLOAD_ARTIFACT,
+        with_values={
+            "name": "${{ needs.verify-artifact.outputs.artifact_name }}",
+            "path": "${{ runner.temp }}/release-artifact",
+        },
+    ),
+    WorkflowStepContract(
+        name="Bind verified artifact hashes before OIDC",
+        keys=frozenset({"name", "env", "run"}),
+        env=PUBLISH_OIDC_BIND_ENV,
+        run_template=PUBLISH_BIND_RUN,
+    ),
+    WorkflowStepContract(
+        name="Setup uv for OIDC publication",
+        keys=frozenset({"name", "uses", "with"}),
+        uses=USES_SETUP_UV,
+        with_values={
+            "version": EXPECTED_UV_VERSION,
+            "checksum": EXPECTED_UV_CHECKSUM,
+            "enable-cache": False,
+        },
+    ),
+    WorkflowStepContract(
+        name="Publish only statically verified paths through PyPI trusted publishing",
+        keys=frozenset({"name", "run"}),
+        run_template='uv publish --trusted-publishing always "$WHEEL_PATH" "$SDIST_PATH"',
+    ),
 )
 
 
@@ -150,6 +531,7 @@ def _run_git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
             capture_output=True,
             text=True,
             encoding="utf-8",
+            errors="replace",
             check=False,
         )
     except (OSError, UnicodeError) as exc:
@@ -419,6 +801,8 @@ def _run_fork_python_gates(repo: Path) -> None:
             cwd=repo,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
             env=env,
         )
@@ -429,6 +813,8 @@ def _run_fork_python_gates(repo: Path) -> None:
         cwd=repo,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
         env=env,
     )
@@ -555,6 +941,125 @@ def _check_isolated_python_invocations(text: str, label: str) -> None:
             raise ReleaseGateError(f"{label} must invoke the release gate with python -I")
 
 
+def _normalize_run(value: object, label: str) -> str:
+    """Normalize one run block for exact template comparison."""
+    if not isinstance(value, str):
+        raise ReleaseGateError(f"{label} must provide an approved run block")
+    normalized = value.replace("\r\n", "\n").replace("\r", "\n")
+    lines = [line.rstrip() for line in normalized.strip("\n").split("\n")]
+    return "\n".join(lines).strip("\n")
+
+
+def _require_run(value: object, expected: str, label: str) -> None:
+    if _normalize_run(value, label) != expected:
+        raise ReleaseGateError(f"{label} run block does not match the approved exact template")
+
+
+def _require_keys(step: dict[str, Any], allowed: frozenset[str], label: str) -> None:
+    unexpected = set(step) - allowed
+    if unexpected:
+        raise ReleaseGateError(f"{label} contains unapproved step keys: {sorted(unexpected)}")
+
+
+def _require_env(step: dict[str, Any], expected: dict[str, Any] | None, label: str) -> None:
+    actual = step.get("env")
+    if expected is None:
+        if actual is not None:
+            raise ReleaseGateError(f"{label} must not declare env")
+    elif actual != expected:
+        raise ReleaseGateError(f"{label} env does not match the approved mapping")
+
+
+def _require_with(step: dict[str, Any], expected: dict[str, Any], label: str) -> None:
+    if step.get("with") != expected:
+        raise ReleaseGateError(f"{label} with mapping does not match the approved mapping")
+
+
+def _require_step_contracts(
+    steps: list[dict[str, Any]],
+    contracts: tuple[WorkflowStepContract, ...],
+    label: str,
+) -> None:
+    """Require the complete approved step inventory, key set, and exact content."""
+    if len(steps) != len(contracts):
+        raise ReleaseGateError(f"{label} must contain exactly {len(contracts)} approved steps")
+    if [step.get("name") for step in steps] != [contract.name for contract in contracts]:
+        raise ReleaseGateError(f"{label} step inventory or order is not approved")
+    for step, contract in zip(steps, contracts):
+        step_label = f"{label} step {contract.name!r}"
+        _require_keys(step, contract.keys, step_label)
+        if contract.uses is None:
+            if "uses" in step:
+                raise ReleaseGateError(f"{step_label} must not use an action")
+        else:
+            if step.get("uses") != contract.uses:
+                raise ReleaseGateError(f"{step_label} must use the approved pinned action")
+            _require_with(step, contract.with_values or {}, step_label)
+        _require_env(step, contract.env, step_label)
+        if contract.run_template is not None:
+            _require_run(step.get("run"), contract.run_template, step_label)
+        elif "run" in step:
+            raise ReleaseGateError(f"{step_label} must not provide a run block")
+        if contract.step_id is not None and step.get("id") != contract.step_id:
+            raise ReleaseGateError(f"{step_label} must keep its approved step id")
+
+
+def _workflow_run_blocks(workflow: dict[str, Any]) -> list[str]:
+    blocks: list[str] = []
+    jobs = workflow.get("jobs")
+    if not isinstance(jobs, dict):
+        return blocks
+    for job in jobs.values():
+        if not isinstance(job, dict) or not isinstance(job.get("steps"), list):
+            continue
+        for step in job["steps"]:
+            if isinstance(step, dict) and isinstance(step.get("run"), str):
+                blocks.append(step["run"])
+    return blocks
+
+
+def _git_subcommands(text: str) -> list[str]:
+    normalized = text.replace("\\\r\n", " ").replace("\\\n", " ")
+    return [match.group("subcommand") for match in GIT_SUBCOMMAND_RE.finditer(normalized)]
+
+
+def _check_git_write_surface(text: str, label: str, *, allowed_pushes: int) -> None:
+    """Reject every forbidden git subcommand and any unapproved push command."""
+    subcommands = _git_subcommands(text)
+    forbidden = sorted(set(subcommands) & FORBIDDEN_GIT_SUBCOMMANDS)
+    if forbidden:
+        raise ReleaseGateError(f"{label} contains forbidden git subcommands: {forbidden}")
+    pushes = [subcommand for subcommand in subcommands if subcommand == "push"]
+    if len(pushes) != allowed_pushes:
+        raise ReleaseGateError(
+            f"{label} must contain exactly {allowed_pushes} approved git push command(s)"
+        )
+
+
+def _check_oidc_run_safety(steps: list[dict[str, Any]], label: str) -> None:
+    """Reject any OIDC-job run that could install, import, or execute package code."""
+    for step in steps:
+        run = step.get("run")
+        if not isinstance(run, str):
+            continue
+        for pattern in OIDC_FORBIDDEN_RUN_PATTERNS:
+            if re.search(pattern, run):
+                raise ReleaseGateError(
+                    f"{label} run block contains a forbidden OIDC publication command"
+                )
+    for step in steps:
+        serialized = json.dumps(step)
+        if (
+            "WHEEL_PATH" in serialized or "SDIST_PATH" in serialized
+        ) and step.get("name") not in {
+            "Bind verified artifact hashes before OIDC",
+            "Publish only statically verified paths through PyPI trusted publishing",
+        }:
+            raise ReleaseGateError(
+                f"{label} must not handle WHEEL_PATH/SDIST_PATH outside the approved steps"
+            )
+
+
 def _check_migration_workflow(workflow: dict[str, Any], path: Path) -> None:
     """Require the exact fail-closed Check UVX Migration step contract."""
     text = path.read_text(encoding="utf-8")
@@ -565,30 +1070,7 @@ def _check_migration_workflow(workflow: dict[str, Any], path: Path) -> None:
         raise ReleaseGateError("Check UVX Migration must contain only the check job")
     job = jobs["check"]
     steps = _workflow_steps(job, "Check UVX Migration check job")
-    if [step.get("name") for step in steps] != [None, *MIGRATION_WORKFLOW_STEP_NAMES]:
-        raise ReleaseGateError("Check UVX Migration must contain exactly the four approved steps")
-    for step in steps:
-        if "if" in step or "continue-on-error" in step:
-            raise ReleaseGateError("Check UVX Migration steps must run unconditionally")
-    ancestry_run = steps[2].get("run")
-    if (
-        not isinstance(ancestry_run, str)
-        or "python -I .github/scripts/check_upstream_ancestry.py" not in ancestry_run
-        or "--head-sha" not in ancestry_run
-        or "--upstream-ref upstream/main" not in ancestry_run
-    ):
-        raise ReleaseGateError("Check UVX Migration must run the exact trusted ancestry command")
-    migration_run = steps[3].get("run")
-    if (
-        not isinstance(migration_run, str)
-        or "python -I skills/ppt-master/scripts/check_uvx_migration.py" not in migration_run
-        or "${{ github.sha }}" not in migration_run
-        or "EXIT=0" not in migration_run
-        or '"$EXIT" -eq 2' not in migration_run
-        or '"$EXIT" -ne 0' not in migration_run
-        or "exit 1" not in migration_run
-    ):
-        raise ReleaseGateError("Check UVX Migration must run the exact fail-closed migration command")
+    _require_step_contracts(steps, MIGRATION_STEP_CONTRACTS, "Check UVX Migration check job")
 
 
 def _check_tooling_install(run: object, label: str, *, require_build_backend: bool) -> None:
@@ -617,6 +1099,17 @@ def _check_workflow_policy(repo: Path) -> None:
             raise ReleaseGateError(f"Privileged workflow is unavailable: {relative}")
         _check_action_pins(path)
         data[relative] = _load_workflow(path)
+    approved_push_counts = {
+        ".github/workflows/auto-tag.yml": 1,
+        ".github/workflows/check-uvx-migration.yml": 0,
+        ".github/workflows/publish-pypi.yml": 0,
+    }
+    for relative, workflow in data.items():
+        _check_git_write_surface(
+            "\n".join(_workflow_run_blocks(workflow)),
+            relative,
+            allowed_pushes=approved_push_counts[relative],
+        )
 
     auto_path = repo / ".github/workflows/auto-tag.yml"
     auto_text = auto_path.read_text(encoding="utf-8")
@@ -664,6 +1157,7 @@ def _check_workflow_policy(repo: Path) -> None:
     ):
         raise ReleaseGateError("auto-tag contains forbidden auto-fix or main-push behavior")
     auto_steps = _workflow_steps(auto_job, "auto-tag verify-and-tag job")
+    _require_step_contracts(auto_steps, AUTO_TAG_STEP_CONTRACTS, "auto-tag verify-and-tag job")
     if not auto_steps or auto_steps[-1].get("name") != "Push exact release tag":
         raise ReleaseGateError("auto-tag's final step must be the exact tag push")
     _, checkout_step = _step_named(
@@ -954,6 +1448,8 @@ def _check_workflow_policy(repo: Path) -> None:
     if publish_job.get("needs") != "verify-artifact":
         raise ReleaseGateError("publish must depend on the fresh static artifact verifier")
     publish_steps = _workflow_steps(publish_job, "publish OIDC job")
+    _require_step_contracts(publish_steps, PUBLISH_OIDC_STEP_CONTRACTS, "publish OIDC job")
+    _check_oidc_run_safety(publish_steps, "publish OIDC job")
     download_index, download_step = _step_named(
         publish_steps,
         "Download verified artifact to fresh runner temp",
@@ -1024,6 +1520,8 @@ def _run_migration_gate(repo: Path, release_sha: str) -> None:
         cwd=repo,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
         env=env,
     )
@@ -1149,12 +1647,12 @@ def _source_attribution_bytes(source_root: Path, relative: str, source_sha: str 
 
 
 def _validate_core_metadata(data: bytes, version: str, label: str) -> None:
-    """Parse Core Metadata headers and require one exact Name and Version each."""
+    """Parse Core Metadata headers with ASCII case-insensitive field merging."""
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ReleaseGateError(f"{label} metadata is not valid UTF-8") from exc
-    headers: dict[str, list[str]] = {}
+    folded: dict[str, list[tuple[str, str]]] = {}
     for line in text.splitlines():
         if not line.strip():
             break
@@ -1163,13 +1661,25 @@ def _validate_core_metadata(data: bytes, version: str, label: str) -> None:
         field, separator, value = line.partition(":")
         if not separator:
             continue
-        headers.setdefault(field, []).append(value.strip())
-    if headers.get("Name") != ["ppt-master"]:
-        raise ReleaseGateError(f"{label} metadata must contain exactly one Name: ppt-master header")
-    if headers.get("Version") != [version]:
-        raise ReleaseGateError(
-            f"{label} metadata must contain exactly one Version: {version} header"
-        )
+        name = field.strip()
+        if not name.isascii():
+            raise ReleaseGateError(f"{label} metadata field name is not ASCII")
+        folded.setdefault(name.lower(), []).append((name, value.strip()))
+
+    def _require(field: str, expected: str) -> None:
+        entries = folded.get(field.lower(), [])
+        if len(entries) != 1:
+            raise ReleaseGateError(f"{label} metadata must contain exactly one {field} header")
+        original, value = entries[0]
+        if original != field:
+            raise ReleaseGateError(
+                f"{label} metadata field {original!r} is not canonical {field!r}"
+            )
+        if value != expected:
+            raise ReleaseGateError(f"{label} metadata must bind {field}: {expected}")
+
+    _require("Name", "ppt-master")
+    _require("Version", version)
 
 
 def _validate_wheel_static(
@@ -1189,10 +1699,21 @@ def _validate_wheel_static(
                 mode = (info.external_attr >> 16) & 0o170000
                 if mode not in (0, stat.S_IFREG, stat.S_IFDIR):
                     raise ReleaseGateError("Wheel contains a non-regular archive member")
-            metadata_names = [name for name in names if name.endswith(".dist-info/METADATA")]
-            if len(metadata_names) != 1:
-                raise ReleaseGateError("Wheel must contain exactly one dist-info METADATA file")
-            metadata = archive.read(metadata_names[0])
+            metadata_name = f"ppt_master-{version}.dist-info/METADATA"
+            if names.count(metadata_name) != 1:
+                raise ReleaseGateError(
+                    f"Wheel must contain exactly one {metadata_name} file"
+                )
+            other_metadata = [
+                name for name in names if name.endswith("/METADATA") and name != metadata_name
+            ]
+            if other_metadata:
+                raise ReleaseGateError("Wheel contains an unexpected dist-info METADATA file")
+            metadata_dir = f"ppt_master-{version}.dist-info"
+            for companion in ("WHEEL", "RECORD"):
+                if f"{metadata_dir}/{companion}" not in names:
+                    raise ReleaseGateError(f"Wheel metadata directory is missing {companion}")
+            metadata = archive.read(metadata_name)
             _validate_core_metadata(metadata, version, "Wheel")
             wheel_attribution: dict[str, str] = {}
             for basename, candidates in WHEEL_ATTRIBUTION_LOCATIONS.items():

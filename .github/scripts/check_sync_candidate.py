@@ -197,19 +197,26 @@ def _check_cli_contract(repo: Path, candidate: Path) -> None:
         raise CandidateGateError(f"CLI COMMANDS is missing script mappings: {sorted(missing)}")
 
 
+def _run_git_text(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    """Run Git for trusted textual inspection with an explicit lossy UTF-8 decode."""
+    return subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+
+
 def _check_uvx_contract(repo: Path, candidate: Path, base_sha: str, head_sha: str) -> None:
     trusted_uvx = _load_trusted_module(
         repo,
         "skills/ppt-master/scripts/check_uvx_migration.py",
         "trusted_check_uvx_migration",
     )
-    result = subprocess.run(
-        ["git", "diff", "--name-only", f"{base_sha}..{head_sha}"],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = _run_git_text(repo, "diff", "--name-only", f"{base_sha}..{head_sha}")
     if result.returncode != 0:
         raise CandidateGateError("unable to enumerate candidate files for the uvx gate")
     changed = [line for line in result.stdout.splitlines() if line]
@@ -329,13 +336,7 @@ def check_candidate(
     for relative in sorted(REQUIRED_REGULAR_FILES):
         _regular(candidate, relative)
     if candidate_ref is not None and head_sha is not None:
-        result = subprocess.run(
-            ["git", "rev-parse", "--verify", f"{candidate_ref}^{{commit}}"],
-            cwd=repo,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        result = _run_git_text(repo, "rev-parse", "--verify", f"{candidate_ref}^{{commit}}")
         if result.returncode != 0 or result.stdout.strip() != head_sha:
             raise CandidateGateError("candidate ref tip does not match the trusted verified SHA")
     _check_cli_contract(repo, candidate)
