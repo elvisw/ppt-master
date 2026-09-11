@@ -164,6 +164,19 @@ wheel/sdist 的 Core Metadata 使用 header parser：`Name`/`Version` 按 ASCII 
 `.claude-plugin/` 与 `projects/`。release gate、candidate 与 migration checker 的全部
 `text=True` 子进程调用显式使用 `encoding="utf-8", errors="replace"`。
 
+同步 PR 的内容边界由 `check_upstream_ancestry.py` 单一 owner 验证：它定位严格双父 merge
+commit `M`（不把 version-bump HEAD 当身份），计算 `upstream_base = merge-base(M^1, target)`，
+枚举 `upstream_base..target` 的全部 changed path（add/delete/mode/symlink 均展开）；非 overlay
+路径的 `M` tree entry 必须与 target 完全一致，overlay 路径默认必须与 first parent 不同
+（拒绝 `-s ours` 或事后整文件回滚），只有 `.github/upstream-overlay-paths.txt` 中以
+`retain-base` 逐路径标注并给出理由时才能保留 fork 内容。该清单是受保护文件，只允许精确路径，
+禁止目录/glob/重复；当前清单为 24 个路径（21 个 `merge`、3 个 `retain-base`）。trusted PR
+helper、两个 sync job、main gate 与 release chain 共用该 owner。
+
+`sync-upstream.yml` 的 upload/download artifact、`check-upstream-ancestry.yml` 与
+`opencode.yml` 的 checkout、`opencode.yml` 的 `anomalyco/opencode/github` 也已固定到
+immutable SHA 并由 release policy 校验；GitHub Pages 部署仍为 out-of-scope residual。
+
 ---
 
 ## 冲突处理

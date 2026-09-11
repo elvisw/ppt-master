@@ -181,7 +181,7 @@ PR 已被新 workflow 自身保护。Task 5A 的安全性由人工 diff 审查�
 attribution 检查和真实临时 Git/artifact 沙盘证明。部署到 main 后，protected gate 文件只能通过
 trusted maintenance/bootstrap 流程修改。
 
-### 4.7 发布边界
+### 4.6.1 Task 5A 发布边界（历史，由 Task 5B 取代）
 
 Task 5A 不修改 release workflows；现有 `check-uvx-migration`、`auto-tag` 和 `publish-pypi` 的
 ancestry/release owner 继续由 Task 2/5B 管理。同步 PR 进入 `main` 后才由既有发布链处理。
@@ -254,6 +254,29 @@ always`。
 所有 privileged workflow action 都以 GitHub API 解析到的 40 位 commit SHA 固定，并在 YAML
 旁标注 upstream release；workflow-run API 返回值也作为 report 证据保留。上游 SSRF redirect/
 DNS-rebinding 与 SVG SMIL sanitizer 风险仍是显式 out-of-scope residual，本次不宣称修复。
+
+### 4.7.1 内容边界 owner 与 overlay policy
+
+`check_upstream_ancestry.py` 同时是内容边界验证的唯一 owner：先定位严格 merge commit `M`
+（PR 模式由 `--base-sha..--head-sha` 唯一双父 merge；main/release 模式按 second parent 等于
+记录的 upstream target 在 HEAD 历史中唯一查找，不把 version-bump HEAD 当身份）。随后计算
+`upstream_base = merge-base(M^1, target)`，用 `git diff --name-only -z --no-renames` 枚举
+`upstream_base..target` 的全部 changed path（add/delete/mode/symlink 都展开，rename 展开为
+delete+add）。非 overlay path 的 `M` tree entry（mode/type/object 或 absent）必须与 target
+严格相等；overlay path 若 `M^1` entry 与 target 不同，则默认要求 `M` entry 不等于 `M^1`
+entry（拒绝 `-s ours` 或事后整文件回滚），只有 policy 中以 `retain-base` 逐路径标注并给出
+理由时才允许保留 first-parent 内容。overlay 清单是精确文件路径，禁止目录、glob 与重复项；
+`M^1` 已等于 target 时 overlay 也必须等于 target。
+
+清单文件 `.github/upstream-overlay-paths.txt` 受 protected set、candidate trusted closure 与
+release chain 保护；trusted PR helper、两个 sync job、main gate 与 release chain 全部调用
+同一 helper。当前 repair merge `1fcf7154` 的清单为 24 个精确路径（21 个 `merge`、3 个
+`retain-base`），随本次提交审阅落地。
+
+additional trusted workflows（`sync-upstream.yml` 的 upload/download artifact、
+`check-upstream-ancestry.yml` 与 `opencode.yml` 的 checkout、`opencode.yml` 的
+`anomalyco/opencode/github`）也纳入 action pin 校验；部署 GitHub Pages 不在本仓库范围内，
+仍列为 out-of-scope residual。
 
 ### 4.8 仓库合并设置与落盘方式
 

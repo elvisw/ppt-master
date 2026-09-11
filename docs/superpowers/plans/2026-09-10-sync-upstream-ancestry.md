@@ -830,6 +830,10 @@ git commit -m "ci: gate upstream ancestry before publish"
 
 ### Task 3: Fork 合并方式设置
 
+> **状态修正（2026-09-11）**：未在本仓库提交范围内执行。远端 fork 的 merge/squash/rebase
+> 设置与 ruleset/分支保护一样属于维护者 bootstrap；Task 5B 及其复审轮明确不通过 API 激活
+> 远端设置，因此本节的三个 checkbox 保持未勾选，且不得据此声称远端已配置。
+
 **Files:**
 - Modify external repository settings only: `elvisw/ppt-master`
 
@@ -865,6 +869,12 @@ Expected: `true/false/false`。
 
 ### Task 4: 当前 ancestry repair merge 与完整验证
 
+> **状态修正（2026-09-11）**：已完成。repair merge 为 `1fcf7154221d1162867248458048f88d863cd80d`
+> （parents `[4f765796b06761af9b3ccfb36546ceae41c19ac4, 09ad58f0d58decc9d30799ca83374ff2604ef16b]`），
+> 紧随其后是独立版本 bump 提交。最终复审轮为它增加受保护的
+> `.github/upstream-overlay-paths.txt` 内容边界证明（24 个 reviewed overlay 路径，其中 3 个
+> `retain-base`），并由 trusted helper、两个 sync job、main gate 与 release chain 共用。
+
 **Files:**
 - Git history only: local branch `fix/sync-upstream-ancestry`
 - Verify: all files from Tasks 1-2 and existing fork gates
@@ -873,7 +883,7 @@ Expected: `true/false/false`。
 - Consumes: implementation branch HEAD、upstream target `09ad58f0d58decc9d30799ca83374ff2604ef16b`。
 - Produces: a real merge commit with parents `[pre-merge implementation HEAD, 09ad58f0d58decc9d30799ca83374ff2604ef16b]`，以及其后的独立动态版本 bump commit。
 
-- [ ] **Step 1: 提交前仓库和远端确认**
+- [x] **Step 1: 提交前仓库和远端确认**
 
 Run separately and inspect full output:
 
@@ -886,7 +896,7 @@ git rev-parse upstream/main
 
 Expected: worktree clean；upstream/main 为目标 SHA；无未知改动。
 
-- [ ] **Step 2: 开始真实 repair merge**
+- [x] **Step 2: 开始真实 repair merge**
 
 在 `git rev-parse --git-path ppt-master-sync/original-head` 返回的 Git 内部临时路径记录
 merge 前 HEAD；然后执行：
@@ -898,7 +908,7 @@ git merge --no-ff --no-commit 09ad58f0d58decc9d30799ca83374ff2604ef16b
 Expected: merge 成功并保留 `MERGE_HEAD=09ad58f0...`。若冲突，逐文件保留 fork uvx
 适配并合入上游功能；无法证明正确则 `git merge --abort` 并停止。
 
-- [ ] **Step 3: merge-state 与树审查**
+- [x] **Step 3: merge-state 与树审查**
 
 ```powershell
 git rev-parse MERGE_HEAD
@@ -910,7 +920,7 @@ git diff --cached --stat
 Expected: `MERGE_HEAD` 等于目标；无无关文件和 whitespace 错误。即使文件树无变化，
 仍保留 merge state 并继续创建 ancestry commit。
 
-- [ ] **Step 4: 创建 repair merge commit**
+- [x] **Step 4: 创建 repair merge commit**
 
 ```powershell
 git commit -m "merge upstream/main: resolve conflicts, adapt to uvx, sync cli.py mappings"
@@ -918,7 +928,7 @@ git commit -m "merge upstream/main: resolve conflicts, adapt to uvx, sync cli.py
 
 禁止 reset/rebase/squash/cherry-pick。记录新 commit SHA。
 
-- [ ] **Step 5: 正反 ancestry 和父节点验证**
+- [x] **Step 5: 正反 ancestry 和父节点验证**
 
 ```powershell
 git merge-base --is-ancestor 09ad58f0d58decc9d30799ca83374ff2604ef16b HEAD
@@ -932,7 +942,7 @@ merge 前 HEAD、第二项为 `09ad58f0...`；提交图显示真实双父 merge�
 `pyproject.toml` 版本和必要的 `uv.lock` 变更单独提交，提交消息为
 `chore: bump version to <computed-version>`。
 
-- [ ] **Step 6: 运行 workflow 与 fork 门禁**
+- [x] **Step 6: 运行 workflow 与 fork 门禁**
 
 Run from repository root:
 
@@ -948,7 +958,7 @@ uvx ruff check --select F821 skills/ppt-master/scripts/confirm_ui/server.py skil
 Expected: YAML OK；所有脚本 exit 0；attribution guard 无输出；Ruff 输出
 `All checks passed!`。
 
-- [ ] **Step 7: 最终边界审查**
+- [x] **Step 7: 最终边界审查**
 
 ```powershell
 git status --short
