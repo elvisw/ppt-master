@@ -1187,7 +1187,11 @@ class SVGQualityChecker:
         self._communication_traced_projects: set[Path] = set()
         self._pptx_structure_issues: List[Tuple[str, str]] = []
         self._has_incomplete_page_roster = False
+        self._structured_native_slots: list[str] = []
         self._active_slide_count: int | None = None
+        # Early/page stages see part of the roster, so a slide jump's upper
+        # bound waits for the final gate.
+        self.partial_roster = False
         self._prototype_by_output: Dict[Path, Path] = {}
         self._active_prototype_path: Path | None = None
         self._active_template_reuse_scope: str | None = None
@@ -1456,6 +1460,7 @@ class SVGQualityChecker:
         project_path = Path(workspace).resolve()
         authoring_dir = project_path / 'authoring-svg-flat'
         self._has_incomplete_page_roster = False
+        self._structured_native_slots: list[str] = []
         if not project_path.is_dir():
             print(f"[ERROR] Round-trip workspace does not exist: {project_path}")
             self.summary['errors'] += 1
@@ -2206,10 +2211,17 @@ class SVGQualityChecker:
                 for error in errors
             )
             return
+        def normalizer(error: str) -> str:
+            if "page-space metadata" in error:
+                return (
+                    "`python3 scripts/compact_svg_coordinates.py <svg_output> "
+                    "--inplace --keep-native-frames`"
+                )
+            return "`python3 scripts/compact_svg_styles.py <svg_output> --inplace`"
+
         result['warnings'].extend(
             f"Noncanonical compact authoring: {error} "
-            "(advisory; normalize with "
-            "`python3 scripts/compact_svg_styles.py <svg_output> --inplace`, "
+            f"(advisory; normalize with {normalizer(error)}, "
             "re-stamp pages that carry Chart/Table fallbacks, and rerun the "
             "final gate, or leave the explicit form)"
             for error in errors
@@ -2779,7 +2791,7 @@ class SVGQualityChecker:
             f'Invalid SVG hyperlink: {error}'
             for error in _project_hyperlink_errors(
                 root,
-                slide_count=self._active_slide_count,
+                slide_count=None if self.partial_roster else self._active_slide_count,
             )
         )
 
@@ -3260,7 +3272,10 @@ class SVGQualityChecker:
             return None
         line_groups = None
         synthetic_first = None
-        if (text_el.text or '').strip():
+        leads_with_inline_run = (
+            cls._is_tspan(children[0]) and not cls._is_line_tspan(children[0])
+        )
+        if (text_el.text or '').strip() or leads_with_inline_run:
             if _classify_paragraph_block is None:
                 return None
             paragraph = _classify_paragraph_block(
@@ -4905,7 +4920,9 @@ class SVGQualityChecker:
                         f"{int(display_w)}x{int(display_h)} {fit_label} frame; "
                         f"the source is {source_mib:.1f} MiB — file-size "
                         "advisory only, not an aspect-ratio warning; consider "
-                        "a smaller source asset"
+                        "a smaller source asset, or export with "
+                        "svg_to_pptx.py --image-sizing display to downsize "
+                        "at export time"
                     )
             except ImportError:
                 pass  # PIL not available, skip resolution check
@@ -6775,6 +6792,7 @@ class SVGQualityChecker:
         """
         dir_path = Path(directory)
         self._has_incomplete_page_roster = False
+        self._structured_native_slots: list[str] = []
         self._undeclared_size_occurrences = Counter()
         self._undeclared_size_counts_ready = False
 
@@ -7218,6 +7236,12 @@ class SVGQualityChecker:
             self._pptx_structure_issues.append(('error', str(exc)))
             return
 
+        self._structured_native_slots = sorted({
+            str(item.placeholder)
+            for spec in specs
+            for item in spec.placeholders
+            if item.placeholder in {'chart', 'table'}
+        })
         if complete_roster:
             actual_slides = {spec.slide_num for spec in specs}
             expected_slides = {
@@ -7857,10 +7881,68 @@ class SVGQualityChecker:
                     )
                     if resolved is not None:
                         references[filename].add(resolved.resolve())
+            # A text picture fill keeps its <image> inside <defs><pattern
+            # data-pptx-text-image-fill>; the glyphs that reference the
+            # pattern render that file, so it counts as a placement.
+            for element in cls._text_image_fill_images(working_root):
+                href = (
+                    element.get('href')
+                    or element.get(f'{{{XLINK_NS}}}href')
+                    or ''
+                )
+                if href.lstrip().lower().startswith('data:'):
+                    inline_count += 1
+                    continue
+                filename = cls._external_image_reference_basename(href)
+                if not filename:
+                    continue
+                references.setdefault(filename, set())
+                placements[filename].append((
+                    svg_path,
+                    element.get('preserveAspectRatio') or '',
+                    ('text picture fill',),
+                    None,
+                ))
+                if _resolve_external_image_reference is not None:
+                    resolved = _resolve_external_image_reference(
+                        svg_path.parent,
+                        href,
+                    )
+                    if resolved is not None:
+                        references[filename].add(resolved.resolve())
             out[svg_path] = dict(references)
             if inline_count:
                 inline_counts[svg_path] = inline_count
         return out, inline_counts, dict(placements)
+
+    @classmethod
+    def _text_image_fill_images(cls, root: ET.Element) -> List[ET.Element]:
+        """Return <image> children of text picture-fill patterns in use."""
+        patterns = {
+            pattern.get('id'): pattern
+            for pattern in root.iter(f'{{{SVG_NS}}}pattern')
+            if pattern.get('data-pptx-text-image-fill') and pattern.get('id')
+        }
+        if not patterns:
+            return []
+        used: set[str] = set()
+        for element in root.iter():
+            if _local_name(element) not in {'text', 'tspan'}:
+                continue
+            style_values = (
+                _parse_inline_style(element.get('style'))
+                if _parse_inline_style is not None
+                else {}
+            )
+            fill = style_values.get('fill') or element.get('fill') or ''
+            match = re.match(r'\s*url\(\s*[\'"]?#([^)\'"\s]+)', fill)
+            if match and match.group(1) in patterns:
+                used.add(match.group(1))
+        return [
+            image
+            for pattern_id in used
+            for image in patterns[pattern_id].iter(f'{{{SVG_NS}}}image')
+        ]
 
     @staticmethod
     def _image_frame_geometry(
@@ -9064,7 +9146,7 @@ class SVGQualityChecker:
                 "remain non-blocking"
             )
             print(f"  4. foreignObject: Use <text> + <tspan> for manual line breaks")
-            print(f"  5. Font issues: use PPT-safe exported typefaces (e.g. Microsoft YaHei / Arial / Consolas)")
+            print(f"  5. Font issues: use PPT-safe exported typefaces (e.g. Arial / Consolas, with the CJK face of the deck language)")
 
     def _carrier_receipt_summary(self) -> Dict:
         """Aggregate factual per-page carrier receipts for compact review."""

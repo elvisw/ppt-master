@@ -36,19 +36,29 @@ from svg_to_pptx.drawingml.elements import estimate_single_line_text_frame_width
 from svg_to_pptx.drawingml.utils import split_project_text_clusters  # noqa: E402
 
 
-_CLOSING_PUNCTUATION = frozenset(',.;:!?)]}、，。；：！？）》」』】”’')
+_CLOSING_PUNCTUATION = frozenset(',.;:!?)]}、，。；：！？）》」』】”’،؛؟')
 _OPENING_PUNCTUATION = frozenset('([{（《「『【“‘')
+# Japanese line-start prohibitions beyond punctuation: small kana, the long
+# vowel mark, iteration marks, and the middle dot never open a line.
+_NO_LINE_START = _CLOSING_PUNCTUATION | frozenset(
+    'ぁぃぅぇぉっゃゅょゎゕゖァィゥェォッャュョヮヵヶㇰㇱㇲㇳㇴㇵㇶㇷㇸㇹㇺㇻㇼㇽㇾㇿ'
+    'ー々ゝゞヽヾ・'
+)
 _PREFERRED_BREAK_PUNCTUATION = frozenset('，。；：')
 # A CJK clause break is preferred over the greedy break only while it keeps
 # this share of the greedy line; below it the punctuation break would leave a
 # visibly short line, so the greedy fill wins.
 _PREFERRED_BREAK_MIN_FILL = 0.75
 _LATIN_TOKEN_CONNECTORS = frozenset("'’._:/+%@#-")
+# A unit-like sign glued to a number stays with it: never break "71" | "%".
+_NUMBER_SUFFIXES = frozenset("%‰°")
 _WEIGHTS = ('normal', 'bold', '100', '200', '300', '400', '500', '600', '700', '800', '900')
 _CALIBRATION_CJK_SAMPLE = '天地玄黄宇宙洪荒日月盈昃辰宿列张寒来暑往'
 _CALIBRATION_LATIN_SAMPLE = 'Clear Slides Make Big Ideas Easy to See.'
 _CALIBRATION_CAPS_SAMPLE = 'CLEAR SLIDES MAKE BIG IDEAS EASY TO SEE.'
 _CALIBRATION_DIGITS_SAMPLE = '0123456789'
+# A source line: dataset ids, years, brackets and caps mixed into prose.
+_CALIBRATION_CITATION_SAMPLE = 'NYC DOE, dataset sgsi-66kk (2018-19 to 2022-23), v2.1'
 _CORE_CALIBRATION_ROLES = ('body', 'title', 'subtitle', 'annotation')
 _SLIDE_HEADING_RE = re.compile(
     r'^#{3,6}[ \t]+Slide[ \t]+([0-9]+|NN)\b.*$',
@@ -106,21 +116,40 @@ def measure_text(
     )
 
 
-def _is_latin_or_number_cluster(cluster: str) -> bool:
-    """Return whether a rendered cluster belongs to a Latin/number token."""
+# Scripts written without spaces between words; everything else that is a
+# letter or digit (Latin, Cyrillic, Greek, Arabic, Hebrew, Devanagari, ...)
+# forms words that only break at spaces.
+_UNSPACED_SCRIPT_PREFIXES = ('THAI ', 'LAO ', 'KHMER ', 'MYANMAR ', 'TIBETAN ')
+
+
+def _is_word_cluster(cluster: str) -> bool:
+    """Return whether a rendered cluster belongs to a space-delimited word."""
     bases = [
         ch
         for ch in cluster
         if unicodedata.category(ch) not in {'Mn', 'Mc', 'Me'}
     ]
     return bool(bases) and all(
-        ch.isdigit() or 'LATIN' in unicodedata.name(ch, '')
+        ch.isdigit()
+        or (
+            ch.isalpha()
+            and unicodedata.east_asian_width(ch) not in {'W', 'F'}
+            and not unicodedata.name(ch, '').startswith(_UNSPACED_SCRIPT_PREFIXES)
+        )
         for ch in bases
     )
 
 
+def _is_hangul_cluster(cluster: str) -> bool:
+    """Return whether a rendered cluster is a Hangul syllable or jamo."""
+    return any(
+        '\uac00' <= ch <= '\ud7a3' or '\u1100' <= ch <= '\u11ff' or '\u3130' <= ch <= '\u318f'
+        for ch in cluster
+    )
+
+
 def _lexical_units(text: str) -> list[str]:
-    """Split a paragraph while keeping Latin words and numbers atomic."""
+    """Split a paragraph while keeping space-delimited words, numbers, and Korean words atomic."""
     clusters = split_project_text_clusters(' '.join(text.split()))
     units: list[str] = []
     pending_space = False
@@ -133,10 +162,17 @@ def _lexical_units(text: str) -> list[str]:
             continue
 
         end = index + 1
-        if _is_latin_or_number_cluster(cluster):
+        word_end = index
+        while word_end < len(clusters) and not clusters[word_end].isspace():
+            word_end += 1
+        if any(_is_hangul_cluster(item) for item in clusters[index:word_end]):
+            # Korean breaks between space-separated words (eojeol), never
+            # inside one; an eojeol wider than the line is reported oversized.
+            end = word_end
+        elif _is_word_cluster(cluster):
             while end < len(clusters):
                 next_cluster = clusters[end]
-                if _is_latin_or_number_cluster(next_cluster):
+                if _is_word_cluster(next_cluster):
                     end += 1
                     continue
                 connector = (
@@ -149,9 +185,12 @@ def _lexical_units(text: str) -> list[str]:
                 if (
                     connector
                     and end + 1 < len(clusters)
-                    and _is_latin_or_number_cluster(clusters[end + 1])
+                    and _is_word_cluster(clusters[end + 1])
                 ):
                     end += 2
+                    continue
+                if next_cluster in _NUMBER_SUFFIXES and clusters[end - 1].isdigit():
+                    end += 1
                     continue
                 break
 
@@ -168,7 +207,7 @@ def _protected_units(text: str) -> list[str]:
     for unit in units:
         content = unit.lstrip()
         if protected and (
-            content[0] in _CLOSING_PUNCTUATION
+            content[0] in _NO_LINE_START
             or protected[-1].rstrip()[-1] in _OPENING_PUNCTUATION
         ):
             protected[-1] += unit
@@ -276,12 +315,16 @@ def text_box(
     return dict(x=left, y=top, width=width, height=bottom - top, top=top, bottom=bottom)
 
 
-def _role_argument(value: str) -> tuple[str, str, float]:
+def _role_argument(value: str) -> tuple[str, str, float, str]:
+    weight = 'normal'
+    parts = value.rsplit(':', 1)
+    if len(parts) == 2 and parts[1].strip().casefold() in _ROLE_WEIGHTS:
+        value, weight = parts[0], parts[1].strip().casefold()
     try:
         name_and_family, raw_size = value.rsplit(':', 1)
         name, family = name_and_family.split(':', 1)
     except ValueError as exc:
-        raise argparse.ArgumentTypeError('expected NAME:FAMILY:SIZE') from exc
+        raise argparse.ArgumentTypeError('expected NAME:FAMILY:SIZE[:bold]') from exc
     name, family = name.strip().casefold(), family.strip()
     if not name or not family:
         raise argparse.ArgumentTypeError('expected non-empty NAME and FAMILY')
@@ -289,7 +332,10 @@ def _role_argument(value: str) -> tuple[str, str, float]:
         size = _positive_float(raw_size)
     except (argparse.ArgumentTypeError, ValueError) as exc:
         raise argparse.ArgumentTypeError('SIZE must be a positive finite number') from exc
-    return name, family, size
+    return name, family, size, weight
+
+
+_ROLE_WEIGHTS = frozenset({'normal', 'bold'})
 
 
 def _ordered_roles(roles: dict[str, tuple[str, float]]) -> list[tuple[str, str, float]]:
@@ -301,6 +347,7 @@ def _ordered_roles(roles: dict[str, tuple[str, float]]) -> list[tuple[str, str, 
 def _roles_from_spec_lock(
     lock_path: Path,
     fallbacks: dict[str, str] | None = None,
+    weights: dict[str, str] | None = None,
 ) -> dict[str, tuple[str, float]]:
     lock = parse_spec_lock(lock_path, report_duplicate_fields=True)
     typography = next(
@@ -451,7 +498,9 @@ def _truncate_planned_line(text: str, limit: int = 40) -> str:
 def _longest_planned_lines(
     project_path: Path,
     roles: list[tuple[str, str, float]],
+    weights: dict[str, str] | None = None,
 ) -> dict[str, dict[str, object] | None]:
+    weights = weights or {}
     candidates = _outline_candidates(
         project_path / 'design_spec.md',
         {name for name, _family, _size in roles},
@@ -460,7 +509,10 @@ def _longest_planned_lines(
     for name, family, size in roles:
         best: tuple[float, str, str] | None = None
         for slide, planned_line in candidates[name]:
-            width = measure_text(planned_line, size=size, family=family)
+            width = measure_text(
+                planned_line, size=size, family=family,
+                weight=weights.get(name, 'normal'),
+            )
             if best is None or width > best[0]:
                 best = (width, slide, planned_line)
         longest[name] = None if best is None else {
@@ -477,28 +529,36 @@ def _calibration_payload(
     project_path: Path,
     source: str,
     include_outline: bool,
+    weights: dict[str, str] | None = None,
 ) -> dict[str, object]:
+    weights = weights or {}
     longest = (
-        _longest_planned_lines(project_path, roles)
+        _longest_planned_lines(project_path, roles, weights)
         if include_outline
         else {name: None for name, _family, _size in roles}
     )
     cjk_length = len(split_project_text_clusters(_CALIBRATION_CJK_SAMPLE))
     latin_length = len(split_project_text_clusters(_CALIBRATION_LATIN_SAMPLE))
     digits_length = len(split_project_text_clusters(_CALIBRATION_DIGITS_SAMPLE))
+    citation_length = len(split_project_text_clusters(_CALIBRATION_CITATION_SAMPLE))
     role_rows = {}
     for name, family, size in roles:
-        cjk_width = measure_text(_CALIBRATION_CJK_SAMPLE, size=size, family=family)
-        latin_width = measure_text(_CALIBRATION_LATIN_SAMPLE, size=size, family=family)
-        caps_width = measure_text(_CALIBRATION_CAPS_SAMPLE, size=size, family=family)
-        digits_width = measure_text(_CALIBRATION_DIGITS_SAMPLE, size=size, family=family)
+        weight = weights.get(name, 'normal')
+        style = dict(size=size, family=family, weight=weight)
+        cjk_width = measure_text(_CALIBRATION_CJK_SAMPLE, **style)
+        latin_width = measure_text(_CALIBRATION_LATIN_SAMPLE, **style)
+        caps_width = measure_text(_CALIBRATION_CAPS_SAMPLE, **style)
+        digits_width = measure_text(_CALIBRATION_DIGITS_SAMPLE, **style)
+        citation_width = measure_text(_CALIBRATION_CITATION_SAMPLE, **style)
         role_rows[name] = {
             'family': family,
             'size': size,
+            'weight': weight,
             'cjk_chars_per_100px': round(100.0 * cjk_length / cjk_width, 1),
             'latin_chars_per_100px': round(100.0 * latin_length / latin_width, 1),
             'caps_chars_per_100px': round(100.0 * latin_length / caps_width, 1),
             'digits_chars_per_100px': round(100.0 * digits_length / digits_width, 1),
+            'citation_chars_per_100px': round(100.0 * citation_length / citation_width, 1),
             'longest_planned_line': longest[name],
         }
     return {
@@ -533,7 +593,7 @@ def _fallback_notes(
 def _render_calibration_table(payload: dict[str, object], *, include_outline: bool) -> str:
     role_rows = payload['roles']
     assert isinstance(role_rows, dict)
-    headers = ['role', 'family', 'size', 'CJK ≈chars/100px', 'Latin ≈chars/100px', 'CAPS ≈chars/100px', 'DIGITS ≈chars/100px']
+    headers = ['role', 'family', 'size', 'CJK ≈chars/100px', 'Latin ≈chars/100px', 'CAPS ≈chars/100px', 'DIGITS ≈chars/100px', 'CITE ≈chars/100px']
     if include_outline:
         headers.append('longest planned line (px, slide, text)')
     lines = [
@@ -551,6 +611,7 @@ def _render_calibration_table(payload: dict[str, object], *, include_outline: bo
             f'{raw_row["latin_chars_per_100px"]:.1f}',
             f'{raw_row["caps_chars_per_100px"]:.1f}',
             f'{raw_row["digits_chars_per_100px"]:.1f}',
+            f'{raw_row.get("citation_chars_per_100px", 0.0):.1f}',
         ]
         if include_outline:
             planned = raw_row['longest_planned_line']
@@ -574,11 +635,23 @@ def _render_calibration_table(payload: dict[str, object], *, include_outline: bo
             'with the rates — the outline column does not cover it.'
         )
     lines.append(
+        '[NOTE] rates ignore letter-spacing and average a mixed-case sample: '
+        'a tracked role (a kicker with letter-spacing) or a display-size line '
+        '(a cover title) is sized per string with measure --letter-spacing, '
+        'not from the table.'
+    )
+    lines.append(
+        '[NOTE] measure and wrap take one --weight for the whole string: a line '
+        'with a bold run (an inline emphasis lead) is measured piecewise per '
+        'weight and summed, or the bold clause takes its own line.'
+    )
+    lines.append(
         '[NOTE] rates are sample averages measured with the checker\'s '
         'estimator (headroom included); the checker measures each real line '
         'glyph by glyph, so capital-heavy words (WebGPU, GDP), digits (1935, '
         '83.2%) and wide letters run wider than the Latin rate — use the CAPS '
-        'rate for acronyms and uppercase, the DIGITS rate for numbers, and keep '
+        'rate for acronyms and uppercase, the DIGITS rate for numbers, the CITE '
+        'rate for source lines (dataset ids, years, brackets), and keep '
         'about 5% below any bounds width.'
     )
     return '\n'.join(lines) + '\n'
@@ -595,19 +668,21 @@ def _run_calibrate(args: argparse.Namespace) -> int:
     lock_path = project_path / 'spec_lock.md'
     if not lock_path.is_file() and not args.role:
         print(
-            'Calibration requires spec_lock.md or at least one --role NAME:FAMILY:SIZE entry.',
+            'Calibration requires spec_lock.md or at least one --role NAME:FAMILY:SIZE[:bold] entry.',
             file=sys.stderr,
         )
         return 2
     try:
         fallbacks: dict[str, str] = {}
+        weights: dict[str, str] = {}
         roles = (
-            _roles_from_spec_lock(lock_path, fallbacks)
+            _roles_from_spec_lock(lock_path, fallbacks, weights)
             if lock_path.is_file()
             else {}
         )
-        for name, family, size in args.role:
+        for name, family, size, weight in args.role:
             roles[name] = (family, size)
+            weights[name] = weight
             fallbacks.pop(name, None)
         ordered_roles = _ordered_roles(roles)
         if not ordered_roles:
@@ -618,8 +693,23 @@ def _run_calibrate(args: argparse.Namespace) -> int:
             project_path=project_path,
             source=source,
             include_outline=args.outline,
+            weights=weights,
         )
         payload['notes'] = _fallback_notes(roles, fallbacks)
+        if args.outline and not (project_path / 'design_spec.md').is_file():
+            payload['notes'].append(
+                'no design_spec.md in this project (Quick writes none), so the '
+                '--outline column has no §IX source and stays empty'
+            )
+        bold_roles = sorted(name for name, weight in weights.items() if weight == 'bold')
+        payload['notes'].append(
+            'rates for ' + ', '.join(bold_roles) + ' are measured at bold weight'
+            if bold_roles else
+            'every role is measured at normal weight; recalibrate a role '
+            'realized as bold deck-wide with --role NAME:FAMILY:SIZE:bold: '
+            'bold widens Latin and digits about 7%, while the bundled advance '
+            'table gives CJK one width for both weights'
+        )
         output_path = project_path / 'validation' / 'text_calibration.json'
         output_path.parent.mkdir(parents=True, exist_ok=True)
         if args.role and output_path.is_file():
@@ -695,9 +785,10 @@ def build_parser() -> argparse.ArgumentParser:
         action='append',
         type=_role_argument,
         default=[],
-        metavar='NAME:FAMILY:SIZE',
-        help='Typography role to calibrate when spec_lock.md is absent, e.g. '
-             'body:"Microsoft YaHei":20; repeatable.',
+        metavar='NAME:FAMILY:SIZE[:bold]',
+        help='Typography role to calibrate, e.g. body:"Microsoft YaHei":20; '
+             'repeatable. Adds or overrides that role whether or not '
+             'spec_lock.md exists (FAMILY replaces the role\'s font stack).',
     )
     calibrate.add_argument('--json', action='store_true')
     for command in (measure, wrap, box):
