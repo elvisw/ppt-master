@@ -74,7 +74,7 @@ Task 5A 的最终架构覆盖下方早期 Task 1–2 记录中的旧单 job 发�
   detached checkout，并验证 `HEAD == github.sha`；workflow_dispatch 不是 `refs/heads/main` 时立即失败。
 - 明确 fetch canonical `upstream/main`；fetch 失败立即停止，不使用 stale remote ref。
 - 无变化只写 `has_changes=false`，不运行模型、不上传 artifact、不启动 trusted job。
-- 只执行一次 `opencode-ai@1.18.30`。模型环境只有 API key、模型名、immutable target 和普通 Actions 元数据；不得注入 `github.token`、`GITHUB_TOKEN`、`GH_TOKEN` 或 `PUSH_PAT`。
+- 独立无 secret step 安装一次 `opencode-ai@1.18.30`；后续唯一 `opencode run` step 的环境只有 API key、模型名、immutable target 和普通 Actions 元数据；不得注入 `github.token`、`GITHUB_TOKEN`、`GH_TOKEN` 或 `PUSH_PAT`。
 - 模型退出后由 base checkout 快照的 checker 做防御性验证，验证 clean worktree、marker blob、唯一严格双父 merge、版本 bump 和 protected gate policy。
 - 只生成 `candidate.bundle` 与严格三字段 `manifest.json`；bundle 使用 `git bundle create <candidate-ref> <candidate-ref> ^<base-sha>`，不归档 worktree 或 `.git/config`。
 
@@ -92,7 +92,8 @@ Task 5A 的最终架构覆盖下方早期 Task 1–2 记录中的旧单 job 发�
   全部 gate 在 PAT step 前完成。
 - 由 base helper 严格拒绝额外/缺失 manifest key、非法或不匹配 SHA、缺失 base/target/candidate object、candidate tip mismatch、protected gate diff、非严格 parent order、marker symlink 和版本形状错误。
 - 复核 canonical upstream 和 `origin/main == base_sha`；发布前立即重新读取 candidate ref，要求等于 authoritative `verified_sha`。
-- 只有最后的 publication step 获得 `PUSH_PAT`。该 step 使用 `GIT_CONFIG_GLOBAL=/dev/null`、`GIT_CONFIG_SYSTEM=/dev/null`、`core.hooksPath=/dev/null`，推明确 verified SHA 到唯一 sync branch，再用相同 PAT 创建 `elvisw/ppt-master` → `main` PR。
+- 只有最后的 publication step 获得 `PUSH_PAT`。该 step 使用 `GIT_CONFIG_GLOBAL=/dev/null`、`GIT_CONFIG_SYSTEM=/dev/null`、`GIT_TERMINAL_PROMPT=0`、安全 askpass、每条 Git 命令的空 `credential.helper` 和 `core.hooksPath=/dev/null`，推明确 verified SHA 到唯一 sync branch，再用相同 PAT 创建 `elvisw/ppt-master` → `main` PR。
+- `gh pr create` 后立即通过 fork API 读取 `baseRefOid` 并要求等于 base；创建失败、push/create 间 main 前进或 OID mismatch 由 EXIT trap best-effort 关闭 PR并删除刚推分支后失败。API 检查不原子，最终由 trusted `pull_request_target` strict first-parent/required checks 阻断错误 PR。
 
 ### Artifact/output semantics decision
 

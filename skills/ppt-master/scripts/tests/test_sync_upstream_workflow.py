@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shlex
+import shutil
 import subprocess
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -55,6 +59,13 @@ class SyncUpstreamWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("GITHUB_TOKEN", model.get("run", "") + str(model.get("env", {})))
         self.assertNotIn("GH_TOKEN", model.get("run", "") + str(model.get("env", {})))
         self.assertNotIn("PUSH_PAT", model.get("run", "") + str(model.get("env", {})))
+
+        install = self._step(prepare, "Install pinned OpenCode CLI")
+        self.assertNotIn("DEEPSEEK_API_KEY", install.get("env", {}))
+        self.assertNotIn("PUSH_PAT", install.get("env", {}))
+        self.assertIn("npm install -g opencode-ai@1.18.30", install["run"])
+        self.assertNotIn("opencode run", install["run"])
+        self.assertNotIn("npm install", model["run"])
 
     def test_schedule_and_manual_use_the_same_candidate_and_publish_jobs(self) -> None:
         self.assertEqual(set(self.workflow_data["jobs"]), {"prepare-candidate", "verify-and-open-pr"})
@@ -120,6 +131,7 @@ class SyncUpstreamWorkflowContractTests(unittest.TestCase):
         self.assertIn(".github/workflows/", helper)
         self.assertIn(".github/pull.yml", helper)
         self.assertIn("check_sync_candidate.py", helper)
+        self.assertIn("test_sync_candidate.py", helper)
 
     def test_opencode_workflow_is_pinned_without_business_trigger_changes(self) -> None:
         text = OPENCODE_WORKFLOW.read_text(encoding="utf-8")
@@ -153,6 +165,16 @@ class SyncUpstreamWorkflowContractTests(unittest.TestCase):
         self.assertIn("verified_sha", publish["run"])
         self.assertIn("GITHUB_SERVER_URL", publish["run"])
         self.assertIn("main advanced before PR creation", publish["run"])
+        self.assertIn("baseRefOid", publish["run"])
+        self.assertIn("gh api", publish["run"])
+        self.assertIn("gh pr close", publish["run"])
+        self.assertIn('"$PUSH_URL" --delete "refs/heads/$SYNC_BRANCH"', publish["run"])
+        self.assertIn("trap cleanup EXIT", publish["run"])
+        self.assertIn("CLEANUP_REQUIRED", publish["run"])
+        self.assertIn("GIT_TERMINAL_PROMPT=0", publish["run"])
+        self.assertIn("GIT_ASKPASS=/bin/false", publish["run"])
+        self.assertIn("SSH_ASKPASS=/bin/false", publish["run"])
+        self.assertIn("-c credential.helper=", publish["run"])
 
         pat_steps = [
             step
@@ -171,6 +193,11 @@ class SyncUpstreamWorkflowContractTests(unittest.TestCase):
         self.assertIn("main advanced before PR creation", publish["run"])
         self.assertNotIn("--force", publish["run"])
         self.assertNotIn("git push --force", publish["run"])
+
+    def test_publish_step_handles_create_and_base_oid_races_with_cleanup(self) -> None:
+        publish = self._step(self._job("verify-and-open-pr"), "Publish verified candidate")
+        self.assertIn("PR_NUMBER=", publish["run"])
+        self.assertIn("baseRefOid", publish["run"])
 
     def test_artifact_contract_is_strict_and_bundle_is_not_a_worktree_archive(self) -> None:
         prepare = self._job("prepare-candidate")
@@ -191,6 +218,213 @@ class SyncUpstreamWorkflowContractTests(unittest.TestCase):
         self.assertIn("--expected-verified-sha", manifest["run"])
         self.assertIn("refs/heads/opencode/sync-candidate", self._step(trusted, "Import candidate bundle")["run"])
 
+
+def _discover_bash() -> str | None:
+    configured = os.environ.get("BASH")
+    if configured:
+        return configured if Path(configured).is_file() else shutil.which(configured)
+    discovered = shutil.which("bash")
+    if discovered:
+        return discovered
+    for candidate in (
+        Path(os.environ.get("ProgramFiles", "")) / "Git" / "bin" / "bash.exe",
+        Path(os.environ.get("ProgramW6432", "")) / "Git" / "bin" / "bash.exe",
+    ):
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+class PublicationRaceSandboxTests(unittest.TestCase):
+    BASE_SHA = "a" * 40
+    VERIFIED_SHA = "c" * 40
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        workflow_data = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+        cls.publish_script = next(
+            step["run"]
+            for step in workflow_data["jobs"]["verify-and-open-pr"]["steps"]
+            if step.get("name") == "Publish verified candidate"
+        )
+        cls.publish_script = cls.publish_script.replace(
+            "${{ needs.prepare-candidate.outputs.base_sha }}", cls.BASE_SHA
+        ).replace(
+            "${{ needs.prepare-candidate.outputs.target_sha }}", "b" * 40
+        ).replace(
+            "${{ steps.trusted-verify.outputs.verified_sha }}", cls.VERIFIED_SHA
+        )
+        cls.bash = _discover_bash()
+
+    def _write_fake_tools(self, root: Path, scenario: str) -> tuple[Path, Path]:
+        fake_bin = root / "bin"
+        fake_bin.mkdir()
+        log = root / "events.log"
+        main_calls = root / "main-calls"
+        git_script = textwrap.dedent(
+            """
+            #!/usr/bin/env bash
+            set -u
+            printf 'git:%s\\n' "$*" >> "$FAKE_LOG"
+            if [[ "$*" == *" rev-parse --verify refs/remotes/origin/main"* ]]; then
+              count=0
+              if [ -f "$FAKE_MAIN_CALLS" ]; then count=$(cat "$FAKE_MAIN_CALLS"); fi
+              count=$((count + 1))
+              printf '%s' "$count" > "$FAKE_MAIN_CALLS"
+              if [ "$count" -eq 1 ]; then printf '%s\\n' "$FAKE_MAIN_FIRST"; else printf '%s\\n' "$FAKE_MAIN_SECOND"; fi
+              exit 0
+            fi
+            if [[ "$*" == *" rev-parse --verify refs/ppt-master/untrusted-candidate"* ]]; then
+              printf '%s\\n' "$FAKE_VERIFIED_SHA"
+              exit 0
+            fi
+            if [[ "$*" == *" push "*"--delete"* ]]; then
+              printf 'branch-deleted\\n' >> "$FAKE_LOG"
+              exit 0
+            fi
+            if [[ "$*" == *" push "*"refs/heads/opencode/sync-"* ]]; then
+              printf 'branch-pushed\\n' >> "$FAKE_LOG"
+              exit 0
+            fi
+            if [[ "$*" == *" fetch "* ]]; then exit 0; fi
+            exit 0
+            """
+        ).strip() + "\n"
+        gh_script = textwrap.dedent(
+            """
+            #!/usr/bin/env bash
+            set -u
+            printf 'gh:%s\\n' "$*" >> "$FAKE_LOG"
+            if [[ "$*" == *"pr create"* ]]; then
+              if [ "$FAKE_CREATE" = "fail" ]; then exit 1; fi
+              printf 'https://github.com/elvisw/ppt-master/pull/42\\n'
+              exit 0
+            fi
+            if [[ "$*" == *"api"* ]]; then
+              printf '%s\\n' "$FAKE_PR_BASE"
+              exit 0
+            fi
+            if [[ "$*" == *"pr close"* ]]; then
+              printf 'pr-closed\\n' >> "$FAKE_LOG"
+              exit 0
+            fi
+            exit 0
+            """
+        ).strip() + "\n"
+        (fake_bin / "git").write_text(git_script, encoding="utf-8")
+        (fake_bin / "gh").write_text(gh_script, encoding="utf-8")
+        os.chmod(fake_bin / "git", 0o755)
+        os.chmod(fake_bin / "gh", 0o755)
+        return log, main_calls
+
+    def _run_scenario(self, scenario: str) -> tuple[subprocess.CompletedProcess[str], str]:
+        if self.bash is None:
+            self.skipTest("Bash is unavailable")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            log, main_calls = self._write_fake_tools(root, scenario)
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{root / 'bin'}{os.pathsep}{env.get('PATH', '')}",
+                    "FAKE_LOG": str(log),
+                    "FAKE_MAIN_CALLS": str(main_calls),
+                    "FAKE_MAIN_FIRST": self.BASE_SHA if scenario != "base-before-push" else "d" * 40,
+                    "FAKE_MAIN_SECOND": "e" * 40 if scenario == "between-push-create" else self.BASE_SHA,
+                    "FAKE_VERIFIED_SHA": self.VERIFIED_SHA,
+                    "FAKE_CREATE": "fail" if scenario == "create-failure" else "ok",
+                    "FAKE_PR_BASE": "b" * 40 if scenario == "base-oid-mismatch" else self.BASE_SHA,
+                    "PUSH_PAT": "test-pat",
+                    "GITHUB_RUN_ID": "123",
+                    "GITHUB_RUN_ATTEMPT": "1",
+                    "GITHUB_SERVER_URL": "https://github.com",
+                    "GITHUB_REPOSITORY": "elvisw/ppt-master",
+                }
+            )
+            fake_prefix = textwrap.dedent(
+                f"""
+                FAKE_LOG={shlex.quote(str(log))}
+                FAKE_MAIN_CALLS={shlex.quote(str(main_calls))}
+                FAKE_MAIN_FIRST={shlex.quote(env["FAKE_MAIN_FIRST"])}
+                FAKE_MAIN_SECOND={shlex.quote(env["FAKE_MAIN_SECOND"])}
+                FAKE_VERIFIED_SHA={shlex.quote(self.VERIFIED_SHA)}
+                FAKE_CREATE={shlex.quote(env["FAKE_CREATE"])}
+                FAKE_PR_BASE={shlex.quote(env["FAKE_PR_BASE"])}
+                git() {{
+                  printf 'git:%s\\n' "$*" >> "$FAKE_LOG"
+                  if [[ "$*" == *" rev-parse --verify refs/remotes/origin/main"* ]]; then
+                    count=0
+                    if [ -f "$FAKE_MAIN_CALLS" ]; then count=$(cat "$FAKE_MAIN_CALLS"); fi
+                    count=$((count + 1))
+                    printf '%s' "$count" > "$FAKE_MAIN_CALLS"
+                    if [ "$count" -eq 1 ]; then printf '%s\\n' "$FAKE_MAIN_FIRST"; else printf '%s\\n' "$FAKE_MAIN_SECOND"; fi
+                    return 0
+                  fi
+                  if [[ "$*" == *" rev-parse --verify refs/ppt-master/untrusted-candidate"* ]]; then
+                    printf '%s\\n' "$FAKE_VERIFIED_SHA"
+                    return 0
+                  fi
+                  if [[ "$*" == *" push "*"--delete"* ]]; then
+                    printf 'branch-deleted\\n' >> "$FAKE_LOG"
+                    return 0
+                  fi
+                  if [[ "$*" == *" push "*"refs/heads/opencode/sync-"* ]]; then
+                    printf 'branch-pushed\\n' >> "$FAKE_LOG"
+                    return 0
+                  fi
+                  return 0
+                }}
+                gh() {{
+                  printf 'gh:%s\\n' "$*" >> "$FAKE_LOG"
+                  if [[ "$*" == *"pr create"* ]]; then
+                    if [ "$FAKE_CREATE" = "fail" ]; then return 1; fi
+                    printf 'https://github.com/elvisw/ppt-master/pull/42\\n'
+                    return 0
+                  fi
+                  if [[ "$*" == *"api"* ]]; then
+                    printf '%s\\n' "$FAKE_PR_BASE"
+                    return 0
+                  fi
+                  if [[ "$*" == *"pr close"* ]]; then
+                    printf 'pr-closed\\n' >> "$FAKE_LOG"
+                    return 0
+                  fi
+                  return 0
+                }}
+                """
+            )
+            result = subprocess.run(
+                [self.bash, "-euo", "pipefail", "-c", fake_prefix + self.publish_script],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            return result, log.read_text(encoding="utf-8") if log.exists() else ""
+
+    def test_base_advance_before_push_fails_without_branch_push(self) -> None:
+        result, events = self._run_scenario("base-before-push")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("branch-pushed", events)
+
+    def test_base_advance_between_push_and_create_deletes_branch(self) -> None:
+        result, events = self._run_scenario("between-push-create")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("branch-pushed", events)
+        self.assertIn("branch-deleted", events)
+        self.assertNotIn("pr create", events)
+
+    def test_pr_base_oid_mismatch_closes_pr_and_deletes_branch(self) -> None:
+        result, events = self._run_scenario("base-oid-mismatch")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("pr-closed", events)
+        self.assertIn("branch-deleted", events)
+
+    def test_pr_create_failure_deletes_branch(self) -> None:
+        result, events = self._run_scenario("create-failure")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("branch-deleted", events)
 
 class BundleManifestSandboxTests(unittest.TestCase):
     @staticmethod

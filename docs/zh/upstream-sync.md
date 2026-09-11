@@ -30,9 +30,9 @@ schedule 和 workflow_dispatch 共用相同的两 job 路径：
    的 `actions/checkout` 重新引入 authenticated checkout。
 2. 该 job 明确 fetch canonical `upstream/main`；fetch 失败不使用 stale ref。无变化时模型、artifact、
    trusted job、分支和 PR 全部跳过。
-3. 有变化时只执行一次固定 `opencode-ai@1.18.30`。模型只获得 API key、模型名、immutable target
-   和普通 Actions 元数据；不获得 `github.token`、`GITHUB_TOKEN`、`GH_TOKEN`、`PUSH_PAT` 或
-   `id-token: write`，也不能 push 或创建 PR。
+3. 有变化时先在无 secret step 固定安装一次 `opencode-ai@1.18.30`，再执行唯一的 `opencode run`。
+   只有后者获得 API key、模型名、immutable target 和普通 Actions 元数据；不获得 `github.token`、
+   `GITHUB_TOKEN`、`GH_TOKEN`、`PUSH_PAT` 或 `id-token: write`，也不能 push 或创建 PR。
 4. 模型提交后只上传 `candidate.bundle` 与严格三字段 `manifest.json`；不上传 worktree 或 `.git/config`。
 5. `verify-and-open-pr` 在 fresh runner 上从 base SHA 检出 trusted helper，只将 bundle/manifest 当作
    不可信 Git object data；candidate 只被 materialize 到隔离 worktree 作为数据，不执行 candidate
@@ -42,9 +42,12 @@ schedule 和 workflow_dispatch 共用相同的两 job 路径：
    trusted `python -I -m py_compile` 与 `ruff --isolated --select F821` 只检查明确 regular 文件。
    ancestry helper 另外验证 manifest key/SHA、bundle ref tip、base/target/candidate object、marker、
    upstream ancestry、唯一严格双父 merge、版本 bump 和 protected gate policy。
-7. 最终 publication step 才注入 `PUSH_PAT`，使用 null global/system Git config 和 disabled hooks，
-   将明确 verified SHA 推到 `opencode/sync-<run-id>-<attempt>`，再创建 `elvisw/ppt-master` → `main` PR。
-   绝不推送 `main`；main 前进、non-fast-forward 或任意 artifact mismatch 都 fail-closed。
+7. 最终 publication step 才注入 `PUSH_PAT`，使用 null global/system Git config、禁用终端/askpass、
+   空 credential helper 和 disabled hooks，将明确 verified SHA 推到 `opencode/sync-<run-id>-<attempt>`。
+   `gh pr create` 后立即读取 fork API 的 `baseRefOid` 并要求等于 base；创建失败、push/create 间
+   main 前进或 OID mismatch 时，EXIT trap best-effort 关闭 PR并删除刚推分支后失败。API 检查不原子，
+   最终由 trusted `pull_request_target` strict first-parent/required checks 阻断错误 PR；绝不推送
+   `main`，non-fast-forward 或任意 artifact mismatch 都 fail-closed。
 
 普通 PR 不得修改整个 `.github/workflows/**`、`.github/pull.yml`、protected helper/command/gate/test 文件；这些文件必须通过显式 trusted
 maintenance/bootstrap 流程维护。首次部署该 gate 的 PR 可能没有被 base 自身保护，必须依靠人工审查、

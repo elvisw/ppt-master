@@ -126,6 +126,14 @@ jobs:
             exit 1
           fi
 
+      - name: Install pinned OpenCode CLI
+        if: steps.upstream.outputs.has_changes == 'true'
+        run: |
+          if ! npm install -g opencode-ai@1.18.30; then
+            echo "::error::Unable to install the pinned OpenCode CLI"
+            exit 1
+          fi
+
       - name: Run OpenCode candidate preparation
         if: steps.upstream.outputs.has_changes == 'true'
         env:
@@ -133,10 +141,6 @@ jobs:
           OPENCODE_MODEL: ${{ vars.OPENCODE_MODEL || 'deepseek/deepseek-v4-flash' }}
           EXPECTED_UPSTREAM_SHA: ${{ steps.upstream.outputs.upstream_sha }}
         run: |
-          if ! npm install -g opencode-ai@1.18.30; then
-            echo "::error::Unable to install the pinned OpenCode CLI"
-            exit 1
-          fi
           if ! opencode run --dangerously-skip-permissions -m "$OPENCODE_MODEL" \
             "Read .opencode/command/sync-upstream.md and follow its complete fail-closed procedure. The immutable upstream target is $EXPECTED_UPSTREAM_SHA and it must be the second parent of the real merge commit. Do not reset, rebase, squash, cherry-pick, switch branches, clear MERGE_HEAD, push, create a PR, or access repository credentials. Complete the required uvx adaptation, version bump, and trusted local gates. The workflow will verify and publish your committed candidate from a fresh runner."; then
             echo "::error::OpenCode candidate preparation failed"
@@ -503,16 +507,42 @@ jobs:
           fi
           export GIT_CONFIG_GLOBAL=/dev/null
           export GIT_CONFIG_SYSTEM=/dev/null
+          export GIT_TERMINAL_PROMPT=0
+          export GIT_ASKPASS=/bin/false
+          export SSH_ASKPASS=/bin/false
           BASE_SHA="${{ needs.prepare-candidate.outputs.base_sha }}"
           TARGET_SHA="${{ needs.prepare-candidate.outputs.target_sha }}"
           VERIFIED_SHA="${{ steps.trusted-verify.outputs.verified_sha }}"
           CANDIDATE_REF=refs/ppt-master/untrusted-candidate
           SYNC_BRANCH="opencode/sync-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          if ! git -c core.hooksPath=/dev/null fetch --no-tags origin main; then
+          PUSH_URL="https://x-access-token:${PUSH_PAT}@github.com/elvisw/ppt-master.git"
+          CLEANUP_REQUIRED=1
+          PUSH_ATTEMPTED=0
+          PR_NUMBER=""
+          cleanup() {
+            status=$?
+            if [ "$CLEANUP_REQUIRED" -eq 1 ]; then
+              if [ -n "$PR_NUMBER" ]; then
+                if ! GH_TOKEN="$PUSH_PAT" gh pr close "$PR_NUMBER" \
+                  --repo elvisw/ppt-master --comment "Closing invalid upstream sync PR after trusted base binding failed"; then
+                  echo "::error::Best-effort PR close failed for PR #$PR_NUMBER"
+                fi
+              fi
+              if [ "$PUSH_ATTEMPTED" -eq 1 ]; then
+                if ! git -c credential.helper= -c core.hooksPath=/dev/null push \
+                  "$PUSH_URL" --delete "refs/heads/$SYNC_BRANCH"; then
+                  echo "::error::Best-effort sync branch deletion failed for $SYNC_BRANCH"
+                fi
+              fi
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          if ! git -c credential.helper= -c core.hooksPath=/dev/null fetch --no-tags origin main; then
             echo "::error::Unable to re-read origin/main immediately before publication"
             exit 1
           fi
-          if ! CURRENT_MAIN_SHA=$(git -c core.hooksPath=/dev/null rev-parse --verify refs/remotes/origin/main^{commit}); then
+          if ! CURRENT_MAIN_SHA=$(git -c credential.helper= -c core.hooksPath=/dev/null rev-parse --verify refs/remotes/origin/main^{commit}); then
             echo "::error::Unable to resolve origin/main immediately before publication"
             exit 1
           fi
@@ -520,7 +550,7 @@ jobs:
             echo "::error::main advanced before branch publication; refusing rewrite or force-push"
             exit 1
           fi
-          if ! CURRENT_CANDIDATE_SHA=$(git -c core.hooksPath=/dev/null rev-parse --verify "$CANDIDATE_REF^{commit}"); then
+          if ! CURRENT_CANDIDATE_SHA=$(git -c credential.helper= -c core.hooksPath=/dev/null rev-parse --verify "$CANDIDATE_REF^{commit}"); then
             echo "::error::Unable to re-read the trusted candidate ref"
             exit 1
           fi
@@ -528,17 +558,17 @@ jobs:
             echo "::error::Candidate ref changed after verification"
             exit 1
           fi
-          PUSH_URL="https://x-access-token:${PUSH_PAT}@github.com/elvisw/ppt-master.git"
-          if ! git -c core.hooksPath=/dev/null push "$PUSH_URL" \
+          PUSH_ATTEMPTED=1
+          if ! git -c credential.helper= -c core.hooksPath=/dev/null push "$PUSH_URL" \
             "$VERIFIED_SHA:refs/heads/$SYNC_BRANCH"; then
             echo "::error::Verified candidate push failed; no force-push or main push is allowed"
             exit 1
           fi
-          if ! git -c core.hooksPath=/dev/null fetch --no-tags origin main; then
+          if ! git -c credential.helper= -c core.hooksPath=/dev/null fetch --no-tags origin main; then
             echo "::error::Unable to re-check origin/main before PR creation"
             exit 1
           fi
-          if ! CURRENT_MAIN_SHA=$(git -c core.hooksPath=/dev/null rev-parse --verify refs/remotes/origin/main^{commit}); then
+          if ! CURRENT_MAIN_SHA=$(git -c credential.helper= -c core.hooksPath=/dev/null rev-parse --verify refs/remotes/origin/main^{commit}); then
             echo "::error::Unable to resolve origin/main before PR creation"
             exit 1
           fi
@@ -555,12 +585,31 @@ jobs:
           - Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
           EOF
           )
-          if ! GH_TOKEN="$PUSH_PAT" gh pr create \
+          if ! PR_URL=$(GH_TOKEN="$PUSH_PAT" gh pr create \
             --repo elvisw/ppt-master \
             --base main \
             --head "$SYNC_BRANCH" \
             --title "chore: sync upstream $TARGET_SHA" \
-            --body "$PR_BODY"; then
+            --body "$PR_BODY"); then
             echo "::error::Unable to create the trusted upstream sync PR"
             exit 1
           fi
+          PR_NUMBER="${PR_URL##*/}"
+          case "$PR_NUMBER" in
+            ''|*[!0-9]*)
+              echo "::error::gh pr create did not return a numeric PR number"
+              exit 1
+              ;;
+          esac
+          if ! PR_BASE_OID=$(GH_TOKEN="$PUSH_PAT" gh api \
+            "repos/elvisw/ppt-master/pulls/$PR_NUMBER" --jq '.baseRefOid'); then
+            echo "::error::Unable to read the created PR baseRefOid"
+            exit 1
+          fi
+          if [ "$PR_BASE_OID" != "$BASE_SHA" ]; then
+            echo "::error::Created PR baseRefOid does not match the immutable base; closing and deleting"
+            exit 1
+          fi
+          CLEANUP_REQUIRED=0
+          trap - EXIT
+          echo "Created trusted upstream sync PR #$PR_NUMBER for $SYNC_BRANCH"

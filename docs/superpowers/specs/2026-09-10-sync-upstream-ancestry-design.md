@@ -132,12 +132,18 @@ candidate ref 后 ref tip 必须等于 `verified_sha`，且 base、target、cand
 存在。随后 trusted base helper 再次 fetch canonical upstream，并以 base copies 验证 marker、
 上游历史、candidate ancestry、严格 parent order、唯一 merge、版本形状和完整 protected set。
 
-发布前 trusted job 重新读取 `origin/main`，要求仍等于 base；立即重新读取 candidate ref，要求仍等于
-authoritative `verified_sha`。只有最后的 publication step 才注入 `PUSH_PAT`，并使用
-`GIT_CONFIG_GLOBAL=/dev/null`、`GIT_CONFIG_SYSTEM=/dev/null` 与 `core.hooksPath=/dev/null`。
+固定 CLI 的安装是独立且无 secret 的 step，只有后续 `opencode run` step 获得
+`DEEPSEEK_API_KEY`。发布前 trusted job 重新读取 `origin/main`，要求仍等于 base；立即重新读取
+candidate ref，要求仍等于 authoritative `verified_sha`。只有最后的 publication step 才注入
+`PUSH_PAT`，并显式设置 null global/system Git config、`GIT_TERMINAL_PROMPT=0`、安全的
+`GIT_ASKPASS/SSH_ASKPASS` 和每条 Git 命令的空 `credential.helper` 与 `/dev/null` hooks。
+
 它将明确 SHA 推送到 `opencode/sync-<run-id>-<attempt>`，绝不推送 `main`，再用同一 PAT 创建
-`elvisw/ppt-master` 指向 `main` 的 PR。main 前进、non-fast-forward、manifest/object/ref mismatch
-任一情况都 fail-closed，不 rebase、不 rewrite、不 force-push。
+`elvisw/ppt-master` 指向 `main` 的 PR。创建后立即用 `gh api` 读取该 PR 的 `baseRefOid`，要求
+严格等于 base；若创建失败、main 在 push/create 间前进或 `baseRefOid` 不匹配，EXIT trap 会尽力
+关闭 PR（若已有编号）并删除刚推分支，然后返回失败。GitHub API 检查不是原子操作；最终仍由
+trusted `pull_request_target` 的 strict first-parent/required checks 阻断错误 PR。任何
+non-fast-forward、manifest/object/ref mismatch 都 fail-closed，不 rebase、不 rewrite、不 force-push。
 
 ### 4.4 Trusted candidate gates
 

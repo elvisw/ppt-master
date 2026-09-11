@@ -238,6 +238,7 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
             "skills/ppt-master/scripts/auto_fix_uvx.py",
             "skills/ppt-master/scripts/tests/test_check_upstream_ancestry.py",
             "skills/ppt-master/scripts/tests/test_sync_upstream_ownership.py",
+            "skills/ppt-master/scripts/tests/test_sync_candidate.py",
             "skills/ppt-master/scripts/tests/test_sync_upstream_workflow.py",
             ".github/pull.yml",
         )
