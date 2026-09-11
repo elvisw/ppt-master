@@ -88,6 +88,22 @@ class CliMappingTests(unittest.TestCase):
             errors = self.module.compare_cli_mappings(root, skill)
             self.assertTrue(any("alias" in error.lower() for error in errors))
 
+    def test_command_and_alias_mappings_are_single_top_level_literal_assignments(self) -> None:
+        snippets = (
+            "COMMANDS = {'render': 'render.py'}\nCOMMANDS = {'other': 'other.py'}\n",
+            "COMMANDS = {'render': 'render.py'}\nCOMMANDS.update({'other': 'other.py'})\n",
+            "COMMANDS = {'render': 'render.py'}\nCOMMANDS['other'] = 'other.py'\n",
+            "COMMANDS = {'render': 'render.py'}\nCOMMANDS |= {'other': 'other.py'}\n",
+            "ALIASES = {'r': 'render'}\nALIASES.update({'x': 'render'})\n",
+        )
+        for snippet in snippets:
+            with self.subTest(snippet=snippet), tempfile.TemporaryDirectory() as temporary:
+                path = Path(temporary) / "cli.py"
+                path.write_text(snippet, encoding="utf-8")
+                mapping_name = "ALIASES" if snippet.startswith("ALIASES") else "COMMANDS"
+                with self.assertRaises(self.module.CliMappingError):
+                    self.module.parse_literal_mapping(path, mapping_name)
+
 
 if __name__ == "__main__":
     unittest.main()

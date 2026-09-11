@@ -9,7 +9,6 @@ candidate-controlled Python module, configuration file, hook, or action.
 from __future__ import annotations
 
 import argparse
-import ast
 import importlib.util
 import os
 import stat
@@ -148,35 +147,18 @@ def _load_trusted_module(repo: Path, relative: str, name: str) -> ModuleType:
     return module
 
 
-def _literal_mapping(root: Path, relative: str, name: str) -> dict[str, str]:
-    path = _regular(root, relative)
+def _candidate_mapping(
+    trusted_cli: ModuleType,
+    candidate: Path,
+    relative: str,
+    name: str,
+) -> dict[str, str]:
+    """Load one candidate mapping through the trusted single-assignment parser."""
+    _regular(candidate, relative)
     try:
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    except (OSError, SyntaxError, UnicodeError) as exc:
-        raise CandidateGateError(f"unable to parse candidate mapping: {relative}:{name}") from exc
-    for node in ast.walk(tree):
-        targets: list[ast.expr] = []
-        value: ast.expr | None = None
-        if isinstance(node, ast.Assign):
-            targets = list(node.targets)
-            value = node.value
-        elif isinstance(node, ast.AnnAssign):
-            targets = [node.target]
-            value = node.value
-        if not any(isinstance(target, ast.Name) and target.id == name for target in targets):
-            continue
-        if value is None:
-            break
-        try:
-            parsed = ast.literal_eval(value)
-        except (ValueError, TypeError, SyntaxError) as exc:
-            raise CandidateGateError(f"candidate mapping is not a literal dict: {relative}:{name}") from exc
-        if not isinstance(parsed, dict) or not all(
-            isinstance(key, str) and isinstance(item, str) for key, item in parsed.items()
-        ):
-            raise CandidateGateError(f"candidate mapping must be string-to-string: {relative}:{name}")
-        return parsed
-    raise CandidateGateError(f"candidate mapping is missing: {relative}:{name}")
+        return trusted_cli.parse_literal_mapping(str(candidate / relative), name)
+    except ValueError as exc:
+        raise CandidateGateError(f"candidate mapping is invalid: {relative}:{name}: {exc}") from exc
 
 
 def _check_cli_contract(repo: Path, candidate: Path) -> None:
@@ -189,10 +171,10 @@ def _check_cli_contract(repo: Path, candidate: Path) -> None:
     skill_cli = candidate / "skills/ppt-master/cli.py"
     root_names, root_scripts = trusted_cli.parse_commands_from_cli(str(root_cli))
     skill_names, skill_scripts = trusted_cli.parse_commands_from_cli(str(skill_cli))
-    root_commands = _literal_mapping(candidate, "cli.py", "COMMANDS")
-    skill_commands = _literal_mapping(candidate, "skills/ppt-master/cli.py", "COMMANDS")
-    root_aliases = _literal_mapping(candidate, "cli.py", "ALIASES")
-    skill_aliases = _literal_mapping(candidate, "skills/ppt-master/cli.py", "ALIASES")
+    root_commands = _candidate_mapping(trusted_cli, candidate, "cli.py", "COMMANDS")
+    skill_commands = _candidate_mapping(trusted_cli, candidate, "skills/ppt-master/cli.py", "COMMANDS")
+    root_aliases = _candidate_mapping(trusted_cli, candidate, "cli.py", "ALIASES")
+    skill_aliases = _candidate_mapping(trusted_cli, candidate, "skills/ppt-master/cli.py", "ALIASES")
     if root_commands != skill_commands or root_aliases != skill_aliases:
         raise CandidateGateError("CLI COMMANDS and ALIASES mappings differ between root and Skill")
     if root_names != skill_names or root_scripts != skill_scripts:

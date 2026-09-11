@@ -56,34 +56,130 @@ def _normalize_script_mapping(mapping: dict[str, str]) -> dict[str, str]:
     }
 
 
-def _parse_literal_mapping(cli_path: str, name: str) -> dict[str, str]:
-    with open(cli_path, encoding="utf-8") as f:
-        tree = ast.parse(f.read(), filename=cli_path)
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
-            continue
+class CliMappingError(ValueError):
+    """Represent a CLI mapping that is not one literal top-level assignment."""
+
+
+_MUTATING_METHODS = frozenset({"clear", "pop", "popitem", "setdefault", "update"})
+
+
+def _assigned_names(target: ast.expr) -> set[str]:
+    """Collect the plain-name targets bound by one assignment target."""
+    names: set[str] = set()
+    if isinstance(target, ast.Name):
+        names.add(target.id)
+    elif isinstance(target, (ast.Tuple, ast.List)):
+        for element in target.elts:
+            names.update(_assigned_names(element))
+    return names
+
+
+def _mutates_mapping(node: ast.AST, name: str, assignment: ast.AST | None) -> bool:
+    """Detect rebinding, subscripting, or dynamic mutation of one mapping name."""
+    if node is assignment:
+        return False
+    if isinstance(node, (ast.Assign, ast.AnnAssign)):
         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-        if not any(isinstance(target, ast.Name) and target.id == name for target in targets):
-            continue
-        if node.value is None:
-            raise ValueError(f"{name} in {cli_path} has no value")
-        try:
-            value = ast.literal_eval(node.value)
-        except (SyntaxError, TypeError, ValueError) as exc:
-            raise ValueError(f"{name} in {cli_path} is not a literal mapping") from exc
-        if not isinstance(value, dict) or not all(
-            isinstance(key, str) and isinstance(item, str) for key, item in value.items()
-        ):
-            raise ValueError(f"{name} in {cli_path} must map strings to strings")
-        return value
-    raise ValueError(f"{name} mapping missing from {cli_path}")
+        for target in targets:
+            if name in _assigned_names(target):
+                return True
+            if (
+                isinstance(target, ast.Subscript)
+                and isinstance(target.value, ast.Name)
+                and target.value.id == name
+            ):
+                return True
+        return False
+    if isinstance(node, ast.AugAssign):
+        target = node.target
+        if isinstance(target, ast.Name) and target.id == name:
+            return True
+        return (
+            isinstance(target, ast.Subscript)
+            and isinstance(target.value, ast.Name)
+            and target.value.id == name
+        )
+    if isinstance(node, ast.Delete):
+        for target in node.targets:
+            if isinstance(target, ast.Name) and target.id == name:
+                return True
+            if (
+                isinstance(target, ast.Subscript)
+                and isinstance(target.value, ast.Name)
+                and target.value.id == name
+            ):
+                return True
+        return False
+    if isinstance(node, ast.Call):
+        func = node.func
+        return (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and func.value.id == name
+            and func.attr in _MUTATING_METHODS
+        )
+    return False
+
+
+def parse_literal_mapping(cli_path: str, name: str) -> dict[str, str]:
+    """Parse exactly one top-level literal mapping without dynamic mutation."""
+    try:
+        with open(cli_path, encoding="utf-8") as f:
+            tree = ast.parse(f.read(), filename=cli_path)
+    except (OSError, SyntaxError, UnicodeError) as exc:
+        raise CliMappingError(f"Unable to parse {cli_path}: {exc}") from exc
+    assignments = [
+        statement
+        for statement in tree.body
+        if isinstance(statement, (ast.Assign, ast.AnnAssign))
+        and (
+            any(name in _assigned_names(target) for target in (
+                statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+            ))
+            or any(
+                isinstance(target, ast.Subscript)
+                and isinstance(target.value, ast.Name)
+                and target.value.id == name
+                for target in (
+                    statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+                )
+            )
+        )
+    ]
+    if not assignments:
+        raise CliMappingError(f"{name} mapping missing from {cli_path}")
+    if len(assignments) != 1:
+        raise CliMappingError(f"{name} in {cli_path} must be assigned exactly once at module level")
+    assignment = assignments[0]
+    targets = assignment.targets if isinstance(assignment, ast.Assign) else [assignment.target]
+    if any(
+        isinstance(target, ast.Subscript)
+        and isinstance(target.value, ast.Name)
+        and target.value.id == name
+        for target in targets
+    ):
+        raise CliMappingError(f"{name} in {cli_path} must not be created through subscript assignment")
+    if assignment.value is None:
+        raise CliMappingError(f"{name} in {cli_path} has no value")
+    try:
+        value = ast.literal_eval(assignment.value)
+    except (SyntaxError, TypeError, ValueError) as exc:
+        raise CliMappingError(f"{name} in {cli_path} is not a literal mapping") from exc
+    if not isinstance(value, dict) or not all(
+        isinstance(key, str) and isinstance(item, str) for key, item in value.items()
+    ):
+        raise CliMappingError(f"{name} in {cli_path} must map strings to strings")
+    for node in ast.walk(tree):
+        if _mutates_mapping(node, name, assignment):
+            raise CliMappingError(f"{name} in {cli_path} is dynamically mutated")
+    return value
 
 
 def parse_cli_mappings(cli_path: str) -> tuple[dict[str, str], dict[str, str]]:
     """Parse complete COMMANDS and ALIASES mappings from one CLI file."""
     return (
-        _parse_literal_mapping(cli_path, "COMMANDS"),
-        _parse_literal_mapping(cli_path, "ALIASES"),
+        parse_literal_mapping(cli_path, "COMMANDS"),
+        parse_literal_mapping(cli_path, "ALIASES"),
     )
 
 
