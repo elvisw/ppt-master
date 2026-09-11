@@ -995,3 +995,48 @@ Task 4 ancestry/history、版本或 `progress.md`，也不执行远端 tag/push/
 运行清单、命令和结果写入 `.superpowers/sdd/sync-upstream-task-5b-report.md`。上游 SSRF
 redirect/DNS-rebinding 与 SVG SMIL sanitizer 仍明确列为 upstream residual，Task 5B 不修复、
 不改写、不宣称已解决。
+
+---
+
+## Task 5B 复审修复：闭合残余旁路（实现记录）
+
+复审 findings 已在 `fix/sync-upstream-ancestry` 之上的 TDD 变更中逐条闭合；本节记录最终实现，
+不改变 Task 4 ancestry/history、包版本和 Task 5A 的发布链架构。
+
+### Import 闭包与 trusted 目录
+
+- `.github/scripts/check_release_gates.py` 在 import 任何第三方/标准库模块前把自身
+  `.github/scripts` 目录从 `sys.path` 移除，并新增 `_validate_trusted_script_directory`：该目录
+  只允许 `check_release_gates.py`、`check_sync_candidate.py`、`check_upstream_ancestry.py` 和
+  `__pycache__`；`yaml.py` 等 shadow 即使以 `SystemExit(0)` 退出也会被拒绝。
+- 三个 privileged workflow 全部改为 `python -I <script>`；release policy 拒绝裸 `python3`、
+  非隔离调用和只在行内出现 `check_release_gates.py` 的命令。
+- `check_uvx_repository.py` 把 `console_encoding` import 延迟到 `main()`。
+- ancestry `PROTECTED_PATHSPECS` 覆盖 `.github/scripts/**` 与 `.github/workflows/**`；
+  `PROTECTED_PATHS` 增加 `.github/scripts/yaml.py`、`console_encoding.py`、
+  `workflow_transcript.py`、根与 Skill 的 `cli.py`。
+
+### Release policy 与 scanner
+
+- `_check_workflow_policy` 验证 check-uvx-migration.yml 的精确 job/step 集合、无 step-level
+  `if`/`continue-on-error`、逐字 `python -I` 的 ancestry/migration 命令；no-op 替换、`exit 2`、
+  重命名和额外步骤都 fail-closed。
+- auto-tag 不再要求 `origin/main` tip 等于 release SHA：gate step 移除 `--require-origin-main-tip`，
+  final push step 重新 fetch main、要求 release SHA 仍是 main 祖先并记录远端 tip，再 tag exact SHA。
+- scanner 新增 `scan_text`：合并 shell 反斜杠续行并保留原始首行行号；删除
+  `.github/workflows/check-uvx-migration.yml` 的旧 allowlist 旁路。
+- wheel/sdist metadata 改用 `_validate_core_metadata` header parser，`Name`/`Version` 各恰好一个。
+
+### 依赖与构建固定
+
+- auto-tag/publish 的每个 `setup-uv` step 固定 uv `0.12.13` 和 GitHub release asset
+  `uv-x86_64-unknown-linux-gnu.tar.gz` 的 SHA-256；policy 与测试同时强制。
+- publish build job 以 exact pin 安装 PyYAML/Ruff/`setuptools`，并执行
+  `uv build --no-build-isolation`，不解析 latest/range。
+- publish concurrency group 只含 canonical tag/release SHA，不含 event name。
+
+### 测试
+
+- TDD 变更 + 实现后：focused 49 tests OK（1 expected Windows symlink skip）；Task 5A
+  ownership/workflow/candidate 39 tests OK（1 skip）；完整记录见
+  `.superpowers/sdd/sync-upstream-task-5b-report.md`。

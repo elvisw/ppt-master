@@ -198,18 +198,34 @@ YAML/action pin/protected policy，以及严格版本/tag 语法。`check_uvx_mi
 
 `auto-tag` 只接受同一仓库 `Check UVX Migration` 的 completed/successful `push` run，且
 `head_sha`、`head_branch=main`、workflow path 与 repository 全部精确匹配；它 checkout 该
-`head_sha`，在最后一个 tag step 重新确认 `origin/main` 未前进，且只用 PAT 推送
-`refs/tags/<tag>`，绝不修复文件或推送 `main`。版本由 trusted TOML 解析写入环境并以安全的
-canonical grammar 绑定为 `v<version>`。
+`head_sha`，tag 前重新 fetch `origin/main` 并要求 release SHA 仍是当前 main 历史的一部分，
+记录当时的远端 tip，但不再要求 main tip 等于 release SHA（main 后续前进不会改变已发布的
+immutable SHA）。它只用 PAT 推送 `refs/tags/<tag>`，绝不修复文件或推送 `main`。版本由 trusted
+TOML 解析写入环境并以安全的 canonical grammar 绑定为 `v<version>`。
+
+三个 privileged workflow 都用 `python -I` 调用 release gate，release gate 在 import 前把自身
+`.github/scripts` 目录移出 `sys.path`，并验证该目录只含三个 approved trusted module，因此
+同目录的 `yaml.py`/`console_encoding.py` 等 shadow 无法以 `SystemExit(0)` 冒充通过。scanner 将
+`console_encoding` import 延迟到 `main()`，`PROTECTED_PATHSPECS` 覆盖整个 `.github/scripts/**`，
+`PROTECTED_PATHS` 还覆盖 `console_encoding.py`、`workflow_transcript.py` 和两份 `cli.py`。
+
+`check-uvx-migration.yml` 的 job/step 集合被 release policy 精确验证：只有 check job、四个固定
+step、无 step-level `if`/`continue-on-error`，ancestry/migration 命令必须逐字为
+`python -I ...` 的 fail-closed 形式；替换为 no-op、`exit 2`、重命名或额外步骤都会失败。
 
 `publish-pypi` 的 tag push 与 manual recovery 都必须提供/推导相同的 release SHA/tag，精确
 fetch tag ref，确认 tag 指向 SHA 且 SHA 在 `origin/main` 历史中，再查询同一成功 migration run
-并重新运行完整 gate。build/gate job 没有 OIDC；它只把一个 wheel、一个 sdist 和严格的
-SHA-256/release identity manifest 交给后续 jobs。无 OIDC 的 fresh verifier 先静态检查文件名、
-hash、metadata、归因文件和归档路径，并输出已验证的文件名与 SHA-256 摘要；只有其成功依赖之后
-才启动 `environment: pypi` 的 OIDC publish job。该 job 不 checkout 或执行包代码，只在另一个
-fresh runner 下载同一 immutable artifact，重新核对完整文件集合和 verifier outputs 的摘要，再
-对确切路径调用 `uv publish --trusted-publishing always`。
+并重新运行完整 gate。workflow concurrency group 只由 canonical tag 和 release SHA 组成，不含
+event name。build/gate job 没有 OIDC；它用固定 version + Ubuntu x86_64 可执行文件 checksum 的
+`setup-uv`，以 exact pin 安装 PyYAML/Ruff 和 build backend（`setuptools`），并执行
+`uv build --no-build-isolation`，不解析任何 latest/range。静态检查用 Core Metadata header parser
+要求 `Name`/`Version` 各恰好一个（拒绝 body spoof 与 duplicate）；它只把一个 wheel、一个 sdist
+和严格的 SHA-256/release identity manifest 交给后续 jobs。无 OIDC 的 fresh verifier 先静态检查
+文件名、hash、metadata、归因文件和归档路径，并输出已验证的文件名与 SHA-256 摘要；只有其成功
+依赖之后才启动 `environment: pypi` 的 OIDC publish job。该 job 的 `setup-uv` 同样固定 version +
+checksum，不 checkout 或执行包代码，只在另一个 fresh runner 下载同一 immutable artifact，重新
+核对完整文件集合和 verifier outputs 的摘要，再对确切路径调用 `uv publish --trusted-publishing
+always`。
 
 所有 privileged workflow action 都以 GitHub API 解析到的 40 位 commit SHA 固定，并在 YAML
 旁标注 upstream release；workflow-run API 返回值也作为 report 证据保留。上游 SSRF redirect/

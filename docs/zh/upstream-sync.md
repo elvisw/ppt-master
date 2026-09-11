@@ -114,7 +114,7 @@ foreign HEAD 或 ignored/untracked marker 会保留现场并停止。
 | 工作流文件 | 触发 | 功能 |
 |-----------|------|------|
 | `sync-upstream.yml` | schedule / workflow_dispatch（仅 main） | 两 job 隔离模型与凭据；trusted job 推唯一分支并创建 PR |
-| `auto-tag.yml` | 成功的 `Check UVX Migration` `workflow_run` | 精确 SHA 全门禁 + 自动推送 exact tag |
+| `auto-tag.yml` | 成功的 `Check UVX Migration` `workflow_run` | 精确 SHA 全门禁 + 自动推送 exact tag（release SHA 只需仍在 main 历史中） |
 | `publish-pypi.yml` | tag push `v*` / manual recovery | 精确 SHA 全门禁 + 无 OIDC 构建 + 静态 artifact 验证 + PyPI 发布 |
 | `opencode.yml` | issue_comment `/oc` | 通用 OpenCode Agent 入口 |
 | `check-uvx-migration.yml` | push to main (merge commit) | 检测合并提交中 `python3` 命令残留 |
@@ -133,9 +133,19 @@ Gate 7: YAML/action pin/protected policy 与 canonical version/tag
 → 全部通过 → 只推送 refs/tags/vX.Y.Z → publish-pypi.yml 重新执行全套门禁
 ```
 
-scanner 是只读的，使用 `git ls-files -z`，不使用内容关键词豁免，也不改写文件。历史证据和
-仓库自有 Linux CI 只能通过 scanner 所有者维护的精确路径/规则 allowlist 豁免；`auto_fix_uvx.py`
-仍是离线手工工具，复用该 allowlist，不拥有第二套排除语法。
+scanner 是只读的，使用 `git ls-files -z`，不使用内容关键词豁免，也不改写文件；它会把 shell
+反斜杠续行合并为同一逻辑命令，并保留原始首行行号。历史证据和仓库自有 Linux CI 只能通过
+scanner 所有者维护的精确路径/规则 allowlist 豁免；`auto_fix_uvx.py` 仍是离线手工工具，复用该
+allowlist，不拥有第二套排除语法。
+
+release gate、scanner 和 migration checker 均由 `python -I` 调用；gate 自身还会拒绝
+`.github/scripts` 中出现的额外模块（例如 `yaml.py` shadow），并把
+`console_encoding.py`、`workflow_transcript.py`、两份 `cli.py` 纳入 protected set。
+
+privileged workflow 的 `setup-uv` 固定精确 uv version 与 Ubuntu x86_64 可执行文件 SHA-256
+checksum；build job 以 exact pin 安装 gate/Ruff/build backend，并用
+`uv build --no-build-isolation` 构建，不解析 latest/range。wheel/sdist 的 Core Metadata 由
+header parser 校验，`Name`/`Version` 各恰好一个，body 中出现同名字段或重复 header 都会被拒绝。
 
 ---
 
@@ -228,8 +238,11 @@ workflow 会精确 fetch tag，确认 tag 指向 `release_sha` 且该 SHA 属于
 ### 自动发布
 
 `auto-tag.yml` 只接受成功的 `Check UVX Migration` `workflow_run`，checkout 其 immutable
-`head_sha`，在最后一步重新确认 `origin/main` 未前进，然后只推送 `refs/tags/vX.Y.Z`。
-它不包含 manual trigger、auto-fix、main push 或 OIDC。tag 推送再触发 `publish-pypi.yml`。
+`head_sha`；tag 前重新 fetch `origin/main`，要求 release SHA 仍属于当前 main 历史并记录当时的
+远端 tip，然后只推送指向该 exact SHA 的 `refs/tags/vX.Y.Z`。main 之后继续前进不会改变这个
+immutable release SHA，也不会让已完成的发布失效。它不包含 manual trigger、auto-fix、main push
+或 OIDC。tag 推送再触发 `publish-pypi.yml`；publish concurrency group 只绑定 canonical tag 与
+release SHA，不含 event name。
 
 publish workflow 的 build/gate job 没有 `id-token: write` 或 PyPI credential；只上传 wheel、
 sdist 和严格 manifest。无 OIDC verifier 在 fresh runner 的 `runner.temp` 静态检查 hash、文件名、
