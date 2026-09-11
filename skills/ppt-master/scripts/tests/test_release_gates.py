@@ -6,6 +6,7 @@ import importlib.util
 import json
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -73,6 +74,93 @@ class ReleaseGateHelperTests(unittest.TestCase):
             with self.assertRaises(self.module.ReleaseGateError):
                 self.module.validate_release_identity(repo, release_sha, "v0.1.3")
 
+    def test_gate_rejects_a_local_yaml_shadow_that_exits_successfully(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary) / "repo"
+            (repo / ".github" / "scripts").mkdir(parents=True)
+            (repo / "skills" / "ppt-master").mkdir(parents=True)
+            shutil.copyfile(SCRIPT, repo / ".github" / "scripts" / "check_release_gates.py")
+            (repo / ".github" / "scripts" / "yaml.py").write_text(
+                "raise SystemExit(0)\n", encoding="utf-8"
+            )
+            for relative in ("pyproject.toml", "skills/ppt-master/pyproject.toml"):
+                path = repo / relative
+                path.write_text(
+                    "[project]\nname = 'ppt-master'\nversion = '0.1.2'\n", encoding="utf-8"
+                )
+            run_git(repo, "init", "-b", "main")
+            run_git(repo, "config", "user.name", "Release Test")
+            run_git(repo, "config", "user.email", "release@example.invalid")
+            run_git(repo, "add", ".")
+            run_git(repo, "commit", "-m", "shadow")
+            release_sha = run_git(repo, "rev-parse", "HEAD").stdout.strip()
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(repo / ".github" / "scripts" / "check_release_gates.py"),
+                    "--repo",
+                    str(repo),
+                    "--release-sha",
+                    release_sha,
+                    "--release-tag",
+                    "v0.1.2",
+                    "--validate-only",
+                ],
+                cwd=repo,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_core_metadata_parser_uses_only_unique_exact_headers(self) -> None:
+        self.module._validate_core_metadata(
+            b"Name: ppt-master\nVersion: 0.1.2\n\nName: body-spoof\n",
+            "0.1.2",
+            "valid",
+        )
+        for metadata in (
+            b"Version: 0.1.2\n\nName: ppt-master\n",
+            b"Name: ppt-master\nName: ppt-master\nVersion: 0.1.2\n",
+            b"Name: ppt-master\n\nVersion: 0.1.2\n",
+        ):
+            with self.subTest(metadata=metadata):
+                with self.assertRaises(self.module.ReleaseGateError):
+                    self.module._validate_core_metadata(metadata, "0.1.2", "invalid")
+
+    def test_wheel_and_sdist_core_metadata_reject_body_and_duplicate_spoofing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for index, metadata in enumerate(
+                (
+                    "Version: 0.1.2\n\nName: ppt-master\n",
+                    "Name: ppt-master\nName: ppt-master\nVersion: 0.1.2\n",
+                )
+            ):
+                wheel = root / f"ppt_master-0.1.2-py3-none-any-{index}.whl"
+                with zipfile.ZipFile(wheel, "w") as archive:
+                    archive.writestr("ppt_master-0.1.2.dist-info/METADATA", metadata)
+                    for relative in (
+                        "SKILL.md",
+                        "LICENSE",
+                        "SPONSORS.md",
+                        "SPONSORS_CN.md",
+                    ):
+                        archive.writestr(
+                            f"skills/ppt_master/{relative}", "attribution\n"
+                        )
+                with self.assertRaises(self.module.ReleaseGateError):
+                    self.module._validate_wheel_static(wheel, "0.1.2")
+
+                sdist = root / f"ppt_master-0.1.2-{index}.tar.gz"
+                with tarfile.open(sdist, "w:gz") as archive:
+                    payload = metadata.encode("utf-8")
+                    info = tarfile.TarInfo("ppt_master-0.1.2/PKG-INFO")
+                    info.size = len(payload)
+                    archive.addfile(info, fileobj=io.BytesIO(payload))
+                with self.assertRaises(self.module.ReleaseGateError):
+                    self.module._validate_sdist_static(sdist, "0.1.2")
+
     def test_workflow_policy_rejects_extra_auto_tag_permissions(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repo = Path(temporary) / "repo"
@@ -96,6 +184,35 @@ class ReleaseGateHelperTests(unittest.TestCase):
 
     def test_current_privileged_workflow_policy_passes(self) -> None:
         self.module._check_workflow_policy(ROOT)
+
+    def test_migration_workflow_policy_rejects_noop_and_bypass_shapes(self) -> None:
+        mutations = (
+            (
+                "python -I .github/scripts/check_upstream_ancestry.py",
+                "true # no-op",
+            ),
+            (
+                "python -I skills/ppt-master/scripts/check_uvx_migration.py",
+                "exit 2 # no-op",
+            ),
+            ("id: check\n", "id: check\n        if: always()\n"),
+            ("- name: Run uvx migration check", "- name: No-op replacement"),
+        )
+        for original, replacement in mutations:
+            with self.subTest(replacement=replacement), tempfile.TemporaryDirectory() as temporary:
+                repo = Path(temporary) / "repo"
+                (repo / ".github" / "workflows").mkdir(parents=True)
+                for relative in self.module.PRIVILEGED_WORKFLOWS:
+                    destination = repo / relative
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(ROOT / relative, destination)
+                migration = repo / ".github" / "workflows" / "check-uvx-migration.yml"
+                migration.write_text(
+                    migration.read_text(encoding="utf-8").replace(original, replacement, 1),
+                    encoding="utf-8",
+                )
+                with self.assertRaises(self.module.ReleaseGateError):
+                    self.module._check_workflow_policy(repo)
 
     def test_workflow_evidence_requires_exact_successful_push_run_not_generic_check_name(self) -> None:
         release_sha = "a" * 40

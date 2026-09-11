@@ -21,22 +21,42 @@ Dependencies:
 
 from __future__ import annotations
 
-import argparse
-import hashlib
-import importlib.util
-import json
 import os
-import re
-import stat
-import subprocess
 import sys
-import tarfile
-import tempfile
-import tomllib
-import zipfile
-from pathlib import Path
-from types import ModuleType
-from typing import Any
+
+_SCRIPT_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
+
+
+def _path_without_script_directory(path_entries: list[str]) -> list[str]:
+    """Drop the gate's own directory so a co-located module cannot shadow imports."""
+    blocked = {os.path.normcase(os.path.realpath(_SCRIPT_DIRECTORY))}
+    kept: list[str] = []
+    for entry in path_entries:
+        if not entry:
+            kept.append(entry)
+            continue
+        candidate = os.path.normcase(os.path.realpath(entry))
+        if candidate not in blocked:
+            kept.append(entry)
+    return kept
+
+
+sys.path[:] = _path_without_script_directory(sys.path)
+
+import argparse  # noqa: E402
+import hashlib  # noqa: E402
+import importlib.util  # noqa: E402
+import json  # noqa: E402
+import re  # noqa: E402
+import stat  # noqa: E402
+import subprocess  # noqa: E402
+import tarfile  # noqa: E402
+import tempfile  # noqa: E402
+import tomllib  # noqa: E402
+import zipfile  # noqa: E402
+from pathlib import Path  # noqa: E402
+from types import ModuleType  # noqa: E402
+from typing import Any  # noqa: E402
 
 try:
     import yaml
@@ -81,6 +101,14 @@ REQUIRED_SOURCE_ATTRIBUTION_RELATIVES = tuple(
     suffix.replace("skills/ppt_master/", "skills/ppt-master/", 1)
     for suffix in REQUIRED_WHEEL_SUFFIXES
 )
+WHEEL_ATTRIBUTION_BASENAMES = ("SKILL.md", "LICENSE", "SPONSORS.md", "SPONSORS_CN.md")
+WHEEL_ATTRIBUTION_LOCATIONS = {
+    basename: (
+        f"skills/ppt_master/{basename}",
+        f"skills/ppt-master/{basename}",
+    )
+    for basename in WHEEL_ATTRIBUTION_BASENAMES
+}
 ACTION_LINE_RE = re.compile(
     r"^\s*(?:-\s*)?uses:\s*(?P<action>[^\s#]+)@(?P<sha>[^\s#]+)\s+#\s*(?P<release>v[^\s]+)\s*$"
 )
@@ -94,6 +122,20 @@ AUTO_TAG_PERMISSIONS = {"contents": "read", "actions": "read"}
 MIGRATION_PERMISSIONS = {"contents": "read"}
 PUBLISH_BUILD_PERMISSIONS = {"contents": "read", "actions": "read"}
 PUBLISH_PERMISSIONS = {"id-token": "write"}
+EXPECTED_UV_VERSION = "0.12.13"
+EXPECTED_UV_CHECKSUM = "745765a3b6e360ad76743599ae5c42e9278c7edf8bbff9fc76d05bf2623a04dd"
+EXPECTED_BUILD_BACKEND = "setuptools==80.9.0"
+TRUSTED_SCRIPT_DIRECTORY = ".github/scripts"
+TRUSTED_SCRIPT_MODULES = (
+    "check_release_gates.py",
+    "check_sync_candidate.py",
+    "check_upstream_ancestry.py",
+)
+MIGRATION_WORKFLOW_STEP_NAMES = (
+    "Fetch upstream",
+    "Verify recorded upstream ancestry",
+    "Run uvx migration check",
+)
 
 
 class ReleaseGateError(RuntimeError):
@@ -144,6 +186,26 @@ def _ensure_clean_checkout(repo: Path) -> None:
         raise ReleaseGateError("Unable to inspect release checkout status")
     if status.stdout.strip():
         raise ReleaseGateError("Release checkout contains untracked files")
+
+
+def _validate_trusted_script_directory(repo: Path) -> None:
+    """Reject shadow modules next to the trusted release gate files."""
+    directory = repo / TRUSTED_SCRIPT_DIRECTORY
+    if directory.is_symlink() or not directory.is_dir():
+        raise ReleaseGateError("Trusted release gate directory is unavailable")
+    entries = {entry.name: entry for entry in directory.iterdir()}
+    for name, entry in entries.items():
+        if name == "__pycache__" and entry.is_dir() and not entry.is_symlink():
+            continue
+        if name in TRUSTED_SCRIPT_MODULES and not entry.is_symlink():
+            continue
+        raise ReleaseGateError(
+            f"Trusted release gate directory contains an unexpected entry: {name}"
+        )
+    for name in TRUSTED_SCRIPT_MODULES:
+        entry = entries.get(name)
+        if entry is None or entry.is_symlink() or not stat.S_ISREG(os.lstat(entry).st_mode):
+            raise ReleaseGateError(f"Trusted release gate module is unavailable: {name}")
 
 
 def _load_trusted_module(repo: Path, relative: str, name: str) -> ModuleType:
@@ -456,6 +518,97 @@ def _step_named(steps: list[dict[str, Any]], name: str, label: str) -> tuple[int
     return matches[0]
 
 
+def _check_setup_uv_pins(workflow: dict[str, Any], label: str) -> None:
+    """Require every privileged setup-uv step to use the pinned exact release."""
+    jobs = workflow.get("jobs")
+    if not isinstance(jobs, dict):
+        raise ReleaseGateError(f"{label} has no jobs mapping for setup-uv validation")
+    setup_steps = [
+        step
+        for job in jobs.values()
+        if isinstance(job, dict)
+        for step in _workflow_steps(job, label)
+        if isinstance(step.get("uses"), str) and step["uses"].startswith("astral-sh/setup-uv@")
+    ]
+    if not setup_steps:
+        raise ReleaseGateError(f"{label} must install uv through the pinned setup-uv action")
+    for step in setup_steps:
+        with_values = step.get("with")
+        if (
+            not isinstance(with_values, dict)
+            or with_values.get("version") != EXPECTED_UV_VERSION
+            or with_values.get("checksum") != EXPECTED_UV_CHECKSUM
+        ):
+            raise ReleaseGateError(
+                f"{label} setup-uv must pin uv {EXPECTED_UV_VERSION} with its exact checksum"
+            )
+
+
+def _check_isolated_python_invocations(text: str, label: str) -> None:
+    """Reject bare or non-isolated Python invocations of trusted scripts."""
+    if re.search(r"(?m)^\s*(?:python3?|uv run)\s+(?:\.github|skills)/", text):
+        raise ReleaseGateError(f"{label} must invoke trusted Python scripts with python -I")
+    if "python3" in text:
+        raise ReleaseGateError(f"{label} must not rely on the removed python3 alias")
+    for line in text.splitlines():
+        if "check_release_gates.py" in line and "python -I " not in line:
+            raise ReleaseGateError(f"{label} must invoke the release gate with python -I")
+
+
+def _check_migration_workflow(workflow: dict[str, Any], path: Path) -> None:
+    """Require the exact fail-closed Check UVX Migration step contract."""
+    text = path.read_text(encoding="utf-8")
+    if "python3" in text:
+        raise ReleaseGateError("Check UVX Migration must invoke Python through python -I")
+    jobs = workflow.get("jobs")
+    if not isinstance(jobs, dict) or set(jobs) != {"check"}:
+        raise ReleaseGateError("Check UVX Migration must contain only the check job")
+    job = jobs["check"]
+    steps = _workflow_steps(job, "Check UVX Migration check job")
+    if [step.get("name") for step in steps] != [None, *MIGRATION_WORKFLOW_STEP_NAMES]:
+        raise ReleaseGateError("Check UVX Migration must contain exactly the four approved steps")
+    for step in steps:
+        if "if" in step or "continue-on-error" in step:
+            raise ReleaseGateError("Check UVX Migration steps must run unconditionally")
+    ancestry_run = steps[2].get("run")
+    if (
+        not isinstance(ancestry_run, str)
+        or "python -I .github/scripts/check_upstream_ancestry.py" not in ancestry_run
+        or "--head-sha" not in ancestry_run
+        or "--upstream-ref upstream/main" not in ancestry_run
+    ):
+        raise ReleaseGateError("Check UVX Migration must run the exact trusted ancestry command")
+    migration_run = steps[3].get("run")
+    if (
+        not isinstance(migration_run, str)
+        or "python -I skills/ppt-master/scripts/check_uvx_migration.py" not in migration_run
+        or "${{ github.sha }}" not in migration_run
+        or "EXIT=0" not in migration_run
+        or '"$EXIT" -eq 2' not in migration_run
+        or '"$EXIT" -ne 0' not in migration_run
+        or "exit 1" not in migration_run
+    ):
+        raise ReleaseGateError("Check UVX Migration must run the exact fail-closed migration command")
+
+
+def _check_tooling_install(run: object, label: str, *, require_build_backend: bool) -> None:
+    """Require exact-pinned tooling installed into the explicit gate interpreter."""
+    if (
+        not isinstance(run, str)
+        or "uv pip install" not in run
+        or "--system" not in run
+        or "--break-system-packages" not in run
+        or "--python" not in run
+        or "GATE_PYTHON" not in run
+        or "PyYAML==" not in run
+        or "ruff==" not in run
+        or ">=" in run
+        or "~=" in run
+        or (require_build_backend and EXPECTED_BUILD_BACKEND not in run)
+    ):
+        raise ReleaseGateError(f"{label} must install only exact pinned gate and build tooling")
+
+
 def _check_workflow_policy(repo: Path) -> None:
     data: dict[str, dict[str, Any]] = {}
     for relative in PRIVILEGED_WORKFLOWS:
@@ -468,6 +621,10 @@ def _check_workflow_policy(repo: Path) -> None:
     auto_path = repo / ".github/workflows/auto-tag.yml"
     auto_text = auto_path.read_text(encoding="utf-8")
     auto_workflow = data[".github/workflows/auto-tag.yml"]
+    _check_isolated_python_invocations(auto_text, "auto-tag")
+    _check_setup_uv_pins(auto_workflow, "auto-tag")
+    if "--require-origin-main-tip" in auto_text:
+        raise ReleaseGateError("auto-tag must accept the immutable release SHA, not the moving main tip")
     auto_on = _workflow_on(auto_workflow, auto_path)
     if set(auto_on) != {"workflow_run"} or auto_on.get("workflow_run") != {
         "workflows": ["Check UVX Migration"],
@@ -544,12 +701,36 @@ def _check_workflow_policy(repo: Path) -> None:
         or "git -c credential.helper= -c core.hooksPath=/dev/null fetch --no-tags --prune origin main" not in push_run
         or "git -c credential.helper= -c core.hooksPath=/dev/null ls-remote --exit-code --heads origin refs/heads/main" not in push_run
         or "REMOTE_MAIN_SHA" not in push_run
+        or "merge-base --is-ancestor" not in push_run
+        or '"$RELEASE_SHA"' not in push_run
         or 'refs/tags/$RELEASE_TAG' not in push_run
         or "--force" in push_run
         or "--force-with-lease" in push_run
         or len(push_pattern.findall(push_run)) != 1
     ):
         raise ReleaseGateError("auto-tag must refresh main and push only the exact release tag")
+    _, auto_gate_step = _step_named(
+        auto_steps,
+        "Run complete release gates for exact SHA",
+        "auto-tag verify-and-tag job",
+    )
+    auto_gate_run = auto_gate_step.get("run")
+    if (
+        not isinstance(auto_gate_run, str)
+        or "--workflow-runs-json" not in auto_gate_run
+        or "--require-origin-main-tip" in auto_gate_run
+    ):
+        raise ReleaseGateError("auto-tag must verify the immutable SHA without requiring the main tip")
+    _, auto_tooling_step = _step_named(
+        auto_steps,
+        "Install pinned trusted gate tooling",
+        "auto-tag verify-and-tag job",
+    )
+    _check_tooling_install(
+        auto_tooling_step.get("run"),
+        "auto-tag",
+        require_build_backend=False,
+    )
     all_push_runs = [
         step for step in auto_steps if isinstance(step.get("run"), str) and push_pattern.search(step["run"])
     ]
@@ -561,6 +742,26 @@ def _check_workflow_policy(repo: Path) -> None:
     if "uvx --from" in publish_text or re.search(r"python[^\n]*\.whl", publish_text):
         raise ReleaseGateError("publish workflow must not execute or import a wheel")
     publish_workflow = data[".github/workflows/publish-pypi.yml"]
+    _check_isolated_python_invocations(publish_text, "publish")
+    _check_setup_uv_pins(publish_workflow, "publish")
+    concurrency = publish_workflow.get("concurrency")
+    if not isinstance(concurrency, dict) or concurrency.get("cancel-in-progress") is not False:
+        raise ReleaseGateError("publish concurrency must not cancel an in-flight publication")
+    group = concurrency.get("group")
+    if (
+        not isinstance(group, str)
+        or any(
+            fragment not in group
+            for fragment in (
+                "inputs.release_tag",
+                "github.ref_name",
+                "inputs.release_sha",
+                "github.sha",
+            )
+        )
+        or "github.event_name" in group
+    ):
+        raise ReleaseGateError("publish concurrency must bind the canonical tag and release SHA only")
     publish_on = _workflow_on(publish_workflow, publish_path)
     if set(publish_on) != {"push", "workflow_dispatch"}:
         raise ReleaseGateError("publish must expose only tag-push and recovery workflow_dispatch triggers")
@@ -716,10 +917,18 @@ def _check_workflow_policy(repo: Path) -> None:
     if (
         not isinstance(build_run, str)
         or "uv build" not in build_run
+        or "--no-build-isolation" not in build_run
+        or '--python "$GATE_PYTHON"' not in build_run
         or "git diff --quiet" not in build_run
         or "git diff --cached --quiet" not in build_run
     ):
-        raise ReleaseGateError("publish must detect tracked source changes introduced by the build")
+        raise ReleaseGateError("publish must build with the locked build backend without isolation")
+    _, tooling_step = _step_named(
+        build_steps,
+        "Install pinned trusted gate tooling",
+        "publish build-and-gate job",
+    )
+    _check_tooling_install(tooling_step.get("run"), "publish", require_build_backend=True)
     gate_run = gate_step.get("run", "")
     if (
         not isinstance(gate_run, str)
@@ -799,6 +1008,7 @@ def _check_workflow_policy(repo: Path) -> None:
         "Check UVX Migration check job",
         allow_missing=True,
     )
+    _check_migration_workflow(migration, migration_path)
 
 
 def _run_migration_gate(repo: Path, release_sha: str) -> None:
@@ -938,8 +1148,28 @@ def _source_attribution_bytes(source_root: Path, relative: str, source_sha: str 
     return _normalized_text_bytes_from_bytes(result.stdout.encode("utf-8"), relative)
 
 
-def _has_metadata_line(text: str, field: str, value: str) -> bool:
-    return text.splitlines().count(f"{field}: {value}") == 1
+def _validate_core_metadata(data: bytes, version: str, label: str) -> None:
+    """Parse Core Metadata headers and require one exact Name and Version each."""
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ReleaseGateError(f"{label} metadata is not valid UTF-8") from exc
+    headers: dict[str, list[str]] = {}
+    for line in text.splitlines():
+        if not line.strip():
+            break
+        if line[:1] in (" ", "\t"):
+            continue
+        field, separator, value = line.partition(":")
+        if not separator:
+            continue
+        headers.setdefault(field, []).append(value.strip())
+    if headers.get("Name") != ["ppt-master"]:
+        raise ReleaseGateError(f"{label} metadata must contain exactly one Name: ppt-master header")
+    if headers.get("Version") != [version]:
+        raise ReleaseGateError(
+            f"{label} metadata must contain exactly one Version: {version} header"
+        )
 
 
 def _validate_wheel_static(
@@ -962,28 +1192,28 @@ def _validate_wheel_static(
             metadata_names = [name for name in names if name.endswith(".dist-info/METADATA")]
             if len(metadata_names) != 1:
                 raise ReleaseGateError("Wheel must contain exactly one dist-info METADATA file")
-            metadata = archive.read(metadata_names[0]).decode("utf-8")
-            if not _has_metadata_line(metadata, "Name", "ppt-master") or not _has_metadata_line(
-                metadata, "Version", version
-            ):
-                raise ReleaseGateError("Wheel metadata is not bound to ppt-master and its release version")
-            for suffix in REQUIRED_WHEEL_SUFFIXES:
-                matches = [name for name in names if name == suffix]
+            metadata = archive.read(metadata_names[0])
+            _validate_core_metadata(metadata, version, "Wheel")
+            wheel_attribution: dict[str, str] = {}
+            for basename, candidates in WHEEL_ATTRIBUTION_LOCATIONS.items():
+                matches = [name for name in names if name in candidates]
                 if len(matches) != 1:
-                    raise ReleaseGateError(f"Wheel is missing static attribution file: {suffix}")
-            skill = archive.read("skills/ppt_master/SKILL.md").decode("utf-8")
+                    raise ReleaseGateError(f"Wheel is missing static attribution file: {basename}")
+                wheel_attribution[basename] = matches[0]
+            skill = archive.read(wheel_attribution["SKILL.md"]).decode("utf-8")
             if skill.count("uvx ppt-master attribution-guard") != 1:
                 raise ReleaseGateError("Wheel Skill attribution marker is missing or duplicated")
-            for suffix in REQUIRED_WHEEL_SUFFIXES[1:]:
-                if not archive.read(suffix).strip():
-                    raise ReleaseGateError(f"Wheel attribution file is empty: {suffix}")
+            for basename in WHEEL_ATTRIBUTION_BASENAMES[1:]:
+                if not archive.read(wheel_attribution[basename]).strip():
+                    raise ReleaseGateError(f"Wheel attribution file is empty: {basename}")
             if source_root is not None:
-                for suffix in REQUIRED_WHEEL_SUFFIXES:
-                    source_relative = suffix.replace("skills/ppt_master/", "skills/ppt-master/", 1)
+                for basename in WHEEL_ATTRIBUTION_BASENAMES:
+                    suffix = wheel_attribution[basename]
+                    source_relative = f"skills/ppt-master/{basename}"
                     if _source_attribution_bytes(source_root, source_relative, source_sha) != _normalized_text_bytes_from_bytes(
                         archive.read(suffix), suffix
                     ):
-                        raise ReleaseGateError(f"Wheel attribution file differs from source: {suffix}")
+                        raise ReleaseGateError(f"Wheel attribution file differs from source: {basename}")
     except ReleaseGateError:
         raise
     except (OSError, UnicodeError, zipfile.BadZipFile) as exc:
@@ -1012,17 +1242,19 @@ def _validate_sdist_static(
                 _validate_archive_member_name(member.name, "Source distribution")
                 if not member.isdir() and not member.isreg():
                     raise ReleaseGateError("Source distribution contains a non-regular archive member")
-            metadata = [member for member in members if member.name.endswith("/PKG-INFO")]
+            metadata = [
+                member
+                for member in members
+                if member.name.replace("\\", "/")
+                in (f"ppt_master-{version}/PKG-INFO", f"ppt-master-{version}/PKG-INFO")
+            ]
             if len(metadata) != 1:
-                raise ReleaseGateError("Source distribution must contain one PKG-INFO")
+                raise ReleaseGateError("Source distribution must contain one root PKG-INFO")
             extracted = archive.extractfile(metadata[0])
             if extracted is None:
                 raise ReleaseGateError("Source distribution PKG-INFO is unreadable")
-            text = extracted.read().decode("utf-8")
-            if not _has_metadata_line(text, "Name", "ppt-master") or not _has_metadata_line(
-                text, "Version", version
-            ):
-                raise ReleaseGateError("Source distribution metadata is not release-bound")
+            text = extracted.read()
+            _validate_core_metadata(text, version, "Source distribution")
             if source_root is not None:
                 for relative in REQUIRED_SOURCE_ATTRIBUTION_RELATIVES:
                     matching = [
@@ -1280,6 +1512,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        _validate_trusted_script_directory(Path(args.repo))
         modes = sum(
             bool(value)
             for value in (

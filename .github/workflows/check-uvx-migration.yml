@@ -24,7 +24,7 @@ jobs:
       - name: Verify recorded upstream ancestry
         run: |
           HEAD_SHA=$(git rev-parse HEAD)
-          python3 .github/scripts/check_upstream_ancestry.py \
+          python -I .github/scripts/check_upstream_ancestry.py \
             --head-sha "$HEAD_SHA" \
             --upstream-ref upstream/main
 
@@ -32,11 +32,11 @@ jobs:
         id: check
         run: |
           EXIT=0
-          python3 skills/ppt-master/scripts/check_uvx_migration.py "${{ github.sha }}" || EXIT=$?
+          python -I skills/ppt-master/scripts/check_uvx_migration.py "${{ github.sha }}" || EXIT=$?
           echo "exit_code=$EXIT" >> $GITHUB_OUTPUT
           if [ "$EXIT" -eq 2 ]; then
             echo "::notice::Not a merge commit — skipped (no upstream code to check)"
           elif [ "$EXIT" -ne 0 ]; then
-            echo "::error::python3 remnants found in merge commit — uvx adaptation incomplete"
+            echo "::error::legacy interpreter remnants found in merge commit — uvx adaptation incomplete"
             exit 1
           fi

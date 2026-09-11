@@ -225,6 +225,7 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
         protected_files = (
             ".github/scripts/check_upstream_ancestry.py",
             ".github/scripts/check_sync_candidate.py",
+            ".github/scripts/yaml.py",
             ".github/workflows/sync-upstream.yml",
             ".github/workflows/check-upstream-ancestry.yml",
             ".github/workflows/check-uvx-migration.yml",
@@ -235,7 +236,11 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
             "skills/ppt-master/scripts/check_deps_sync.py",
             "skills/ppt-master/scripts/check_uvx_migration.py",
             "skills/ppt-master/scripts/attribution_guard.py",
+            "skills/ppt-master/scripts/console_encoding.py",
+            "skills/ppt-master/scripts/workflow_transcript.py",
             "skills/ppt-master/scripts/auto_fix_uvx.py",
+            "cli.py",
+            "skills/ppt-master/cli.py",
             "skills/ppt-master/scripts/tests/test_check_upstream_ancestry.py",
             "skills/ppt-master/scripts/tests/test_sync_upstream_ownership.py",
             "skills/ppt-master/scripts/tests/test_sync_candidate.py",
@@ -250,7 +255,8 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
                         extra_files={relative: b"trusted base\n"},
                     )
                     path = repo / relative
-                    path.write_bytes(b"candidate override\n")
+                    content = b"raise SystemExit(0)\n" if relative.endswith(("yaml.py", "console_encoding.py")) else b"candidate override\n"
+                    path.write_bytes(content)
                     run_git(repo, "add", relative)
                     run_git(repo, "commit", "-m", "candidate gate change")
                     head = git_output(repo, "rev-parse", "HEAD")

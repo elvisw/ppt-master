@@ -11,6 +11,8 @@ ROOT = Path(__file__).resolve().parents[4]
 AUTO_TAG = ROOT / ".github" / "workflows" / "auto-tag.yml"
 PUBLISH = ROOT / ".github" / "workflows" / "publish-pypi.yml"
 MIGRATION = ROOT / ".github" / "workflows" / "check-uvx-migration.yml"
+UV_VERSION = "0.12.13"
+UV_CHECKSUM = "745765a3b6e360ad76743599ae5c42e9278c7edf8bbff9fc76d05bf2623a04dd"
 ACTION_RE = re.compile(r"uses:\s*([^\s#]+)@([0-9a-f]{40})\s+#\s*v[^\s]+")
 
 
@@ -41,6 +43,9 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("fetch --no-tags --prune origin main", push_step)
         self.assertIn("ls-remote --exit-code --heads origin refs/heads/main", push_step)
         self.assertIn("REMOTE_MAIN_SHA", push_step)
+        self.assertIn("merge-base --is-ancestor", push_step)
+        self.assertNotIn("--require-origin-main-tip", text)
+        self.assertNotIn("main advanced before the immutable release tag was created", text)
 
     def test_publish_splits_non_oidc_build_and_fresh_pypi_publish_with_static_artifact_check(self) -> None:
         text = PUBLISH.read_text(encoding="utf-8")
@@ -76,6 +81,57 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             publish_text.index("Bind verified artifact hashes before OIDC"),
             publish_text.index("Setup uv for OIDC publication"),
         )
+
+        concurrency = data["concurrency"]
+        self.assertFalse(concurrency["cancel-in-progress"])
+        group = concurrency["group"]
+        for fragment in (
+            "inputs.release_tag",
+            "github.ref_name",
+            "inputs.release_sha",
+            "github.sha",
+        ):
+            self.assertIn(fragment, group)
+        self.assertNotIn("github.event_name", group)
+
+    def test_privileged_setup_uv_uses_exact_version_and_manifest_checksum(self) -> None:
+        for path in (AUTO_TAG, PUBLISH):
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+            setup_steps = []
+            for job in data["jobs"].values():
+                setup_steps.extend(
+                    step
+                    for step in job["steps"]
+                    if isinstance(step, dict)
+                    and str(step.get("uses", "")).startswith("astral-sh/setup-uv@")
+                )
+            self.assertTrue(setup_steps, path)
+            for step in setup_steps:
+                self.assertEqual(step["with"]["version"], UV_VERSION)
+                self.assertEqual(step["with"]["checksum"], UV_CHECKSUM)
+
+    def test_migration_workflow_has_isolated_exact_read_only_steps(self) -> None:
+        data = yaml.safe_load(MIGRATION.read_text(encoding="utf-8"))
+        self.assertEqual(set(data["jobs"]), {"check"})
+        steps = data["jobs"]["check"]["steps"]
+        self.assertEqual(
+            [step.get("name", "checkout") for step in steps],
+            ["checkout", "Fetch upstream", "Verify recorded upstream ancestry", "Run uvx migration check"],
+        )
+        for step in steps:
+            self.assertNotIn("if", step)
+            self.assertNotIn("continue-on-error", step)
+        self.assertIn("python -I .github/scripts/check_upstream_ancestry.py", steps[2]["run"])
+        self.assertIn("python -I skills/ppt-master/scripts/check_uvx_migration.py", steps[3]["run"])
+        self.assertIn('EXIT=0', steps[3]["run"])
+        self.assertIn('"$EXIT" -eq 2', steps[3]["run"])
+        self.assertIn('exit 1', steps[3]["run"])
+        self.assertNotIn("python3", MIGRATION.read_text(encoding="utf-8"))
+
+    def test_release_script_invocations_are_isolated(self) -> None:
+        for path in (AUTO_TAG, PUBLISH, MIGRATION):
+            text = path.read_text(encoding="utf-8")
+            self.assertNotRegex(text, r"(?m)^\s*(?:python3?|uv run)\s+(?:\.github|skills)/")
 
     def test_privileged_workflow_actions_are_immutable_sha_pins_with_release_comments(self) -> None:
         for path in (AUTO_TAG, PUBLISH, MIGRATION):

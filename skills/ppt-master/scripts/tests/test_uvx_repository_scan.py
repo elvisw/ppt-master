@@ -7,6 +7,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -137,6 +139,36 @@ class RepositoryUvxScanTests(unittest.TestCase):
 
             with self.assertRaises(self.module.ScannerError):
                 self.module.scan_repository(repo)
+
+    def test_backslash_continuations_report_the_original_command_line(self) -> None:
+        text = (
+            "python \\\n"
+            "  skills/ppt-master/scripts/project_manager.py\n"
+            "uv run \\\n"
+            "  skills/ppt-master/scripts/project_manager.py\n"
+        )
+
+        violations = self.module.scan_text("README.md", text)
+
+        self.assertEqual([violation.line for violation in violations], [1, 3])
+        self.assertEqual([violation.rule for violation in violations], ["python-script", "uv-run-script"])
+
+    def test_windows_symlink_guard_is_covered_without_creating_a_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = self._new_repo(Path(temporary))
+            readme = repo / "README.md"
+            readme.write_text("python skills/ppt-master/scripts/project_manager.py\n", encoding="utf-8")
+            self._commit(repo)
+            real_lstat = self.module.os.lstat
+
+            def fake_lstat(path: str | os.PathLike[str]) -> object:
+                if Path(path) == readme:
+                    return SimpleNamespace(st_mode=self.module.stat.S_IFLNK)
+                return real_lstat(path)
+
+            with mock.patch.object(self.module.os, "lstat", side_effect=fake_lstat):
+                with self.assertRaises(self.module.ScannerError):
+                    self.module.scan_repository(repo)
 
 
 if __name__ == "__main__":

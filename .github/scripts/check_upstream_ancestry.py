@@ -35,6 +35,7 @@ PROTECTED_PATHS = frozenset(
         ".github/scripts/check_upstream_ancestry.py",
         ".github/scripts/check_sync_candidate.py",
         ".github/scripts/check_release_gates.py",
+        ".github/scripts/yaml.py",
         ".github/pull.yml",
         ".github/workflows/sync-upstream.yml",
         ".github/workflows/check-upstream-ancestry.yml",
@@ -42,12 +43,16 @@ PROTECTED_PATHS = frozenset(
         ".github/workflows/auto-tag.yml",
         ".github/workflows/publish-pypi.yml",
         ".opencode/command/sync-upstream.md",
+        "cli.py",
+        "skills/ppt-master/cli.py",
         "skills/ppt-master/scripts/check_cli_sync.py",
         "skills/ppt-master/scripts/check_deps_sync.py",
         "skills/ppt-master/scripts/check_uvx_migration.py",
         "skills/ppt-master/scripts/check_uvx_repository.py",
         "skills/ppt-master/scripts/attribution_guard.py",
         "skills/ppt-master/scripts/auto_fix_uvx.py",
+        "skills/ppt-master/scripts/console_encoding.py",
+        "skills/ppt-master/scripts/workflow_transcript.py",
         "skills/ppt-master/scripts/tests/test_check_upstream_ancestry.py",
         "skills/ppt-master/scripts/tests/test_check_cli_sync.py",
         "skills/ppt-master/scripts/tests/test_release_gates.py",
@@ -58,7 +63,7 @@ PROTECTED_PATHS = frozenset(
         "skills/ppt-master/scripts/tests/test_sync_upstream_workflow.py",
     }
 )
-PROTECTED_PATHSPECS = (".github/workflows/**",)
+PROTECTED_PATHSPECS = (".github/scripts/**", ".github/workflows/**")
 MANIFEST_KEYS = frozenset({"base_sha", "target_sha", "verified_sha"})
 VERSION_RE = re.compile(rb"(?m)^[ \t]*version[ \t]*=[ \t]*[\"'](\d+)\.(\d+)\.(\d+)[\"'][ \t]*$")
 

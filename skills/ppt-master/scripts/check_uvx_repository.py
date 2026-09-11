@@ -31,13 +31,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-_SCRIPTS_DIR = Path(__file__).resolve().parent
-if str(_SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS_DIR))
-
-from console_encoding import configure_utf8_stdio  # noqa: E402
-
-
 TEXT_SUFFIXES = frozenset({
     ".cfg",
     ".ini",
@@ -102,7 +95,6 @@ EXPLICIT_ALLOWLIST: dict[str, frozenset[str]] = {
     }),
     # This is a repository-owned Linux CI invocation of a registered checker;
     # new workflow files do not inherit this exception.
-    ".github/workflows/check-uvx-migration.yml": frozenset({"python-script"}),
 }
 ALLOWED_LEGACY_PATHS = frozenset(EXPLICIT_ALLOWLIST)
 
@@ -151,24 +143,64 @@ def _literal_commands(cli_path: Path) -> dict[str, str]:
         tree = ast.parse(cli_path.read_text(encoding="utf-8"), filename=str(cli_path))
     except (OSError, SyntaxError, UnicodeError) as exc:
         raise ScannerError(f"Unable to parse root CLI mapping: {cli_path}") from exc
+    assignments = [
+        statement
+        for statement in tree.body
+        if isinstance(statement, (ast.Assign, ast.AnnAssign))
+        and any(
+            isinstance(target, ast.Name) and target.id == "COMMANDS"
+            for target in (
+                statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+            )
+        )
+    ]
+    if not assignments:
+        raise ScannerError("Root CLI COMMANDS mapping is missing")
+    if len(assignments) != 1:
+        raise ScannerError("Root CLI COMMANDS must be assigned exactly once at module level")
+    assignment = assignments[0]
     for node in ast.walk(tree):
-        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+        if node is assignment:
             continue
-        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-        if not any(isinstance(target, ast.Name) and target.id == "COMMANDS" for target in targets):
-            continue
-        if node.value is None:
-            raise ScannerError("Root CLI COMMANDS has no value")
-        try:
-            value = ast.literal_eval(node.value)
-        except (ValueError, TypeError, SyntaxError) as exc:
-            raise ScannerError("Root CLI COMMANDS is not a literal mapping") from exc
-        if not isinstance(value, dict) or not all(
-            isinstance(key, str) and isinstance(item, str) for key, item in value.items()
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if any(
+                (isinstance(target, ast.Name) and target.id == "COMMANDS")
+                or (
+                    isinstance(target, ast.Subscript)
+                    and isinstance(target.value, ast.Name)
+                    and target.value.id == "COMMANDS"
+                )
+                for target in targets
+            ):
+                raise ScannerError("Root CLI COMMANDS is dynamically mutated")
+        elif isinstance(node, ast.AugAssign):
+            target = node.target
+            if (isinstance(target, ast.Name) and target.id == "COMMANDS") or (
+                isinstance(target, ast.Subscript)
+                and isinstance(target.value, ast.Name)
+                and target.value.id == "COMMANDS"
+            ):
+                raise ScannerError("Root CLI COMMANDS is dynamically mutated")
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "COMMANDS"
+            and node.func.attr in {"clear", "pop", "popitem", "setdefault", "update"}
         ):
-            raise ScannerError("Root CLI COMMANDS must map string commands to script paths")
-        return value
-    raise ScannerError("Root CLI COMMANDS mapping is missing")
+            raise ScannerError("Root CLI COMMANDS is dynamically mutated")
+    if assignment.value is None:
+        raise ScannerError("Root CLI COMMANDS has no value")
+    try:
+        value = ast.literal_eval(assignment.value)
+    except (ValueError, TypeError, SyntaxError) as exc:
+        raise ScannerError("Root CLI COMMANDS is not a literal mapping") from exc
+    if not isinstance(value, dict) or not all(
+        isinstance(key, str) and isinstance(item, str) for key, item in value.items()
+    ):
+        raise ScannerError("Root CLI COMMANDS must map string commands to script paths")
+    return value
 
 
 def registered_script_paths(repo: Path) -> frozenset[str]:
@@ -209,6 +241,45 @@ def _is_document_path(path: str) -> bool:
     return path_obj.suffix.lower() in TEXT_SUFFIXES
 
 
+def _logical_command_lines(text: str) -> list[tuple[int, str]]:
+    """Join shell backslash continuations while keeping the first physical line."""
+    logical: list[tuple[int, str]] = []
+    buffer = ""
+    start_line = 1
+    for line_number, line in enumerate(text.splitlines(), 1):
+        stripped = line.rstrip()
+        if not buffer:
+            start_line = line_number
+        if stripped.endswith("\\"):
+            buffer += stripped[:-1] + " "
+            continue
+        buffer += stripped
+        logical.append((start_line, buffer))
+        buffer = ""
+    if buffer:
+        logical.append((start_line, buffer.rstrip()))
+    return logical
+
+
+def scan_text(
+    relative: str,
+    text: str,
+    registered: frozenset[str] | None = None,
+) -> list[Violation]:
+    """Report legacy script references in one document without rewriting it."""
+    violations: list[Violation] = []
+    for line_number, logical_line in _logical_command_lines(text):
+        for match in LEGACY_COMMAND_RE.finditer(logical_line):
+            script = normalize_script_path(match.group("script"))
+            if registered is not None and script not in registered:
+                continue
+            rule = "uv-run-script" if match.group("interpreter").startswith("uv") else "python-script"
+            if rule in allowed_rules_for_path(relative):
+                continue
+            violations.append(Violation(relative, line_number, rule, logical_line.rstrip()))
+    return violations
+
+
 def scan_repository(repo: Path) -> list[Violation]:
     """Scan tracked command documents and return violations without rewriting them."""
     repo = repo.resolve()
@@ -226,15 +297,7 @@ def scan_repository(repo: Path) -> list[Violation]:
             raise ScannerError(f"Tracked document is not valid UTF-8: {relative}") from exc
         except OSError as exc:
             raise ScannerError(f"Unable to read tracked document: {relative}") from exc
-        for line_number, line in enumerate(text.splitlines(), 1):
-            for match in LEGACY_COMMAND_RE.finditer(line):
-                script = normalize_script_path(match.group("script"))
-                if script not in registered:
-                    continue
-                rule = "uv-run-script" if match.group("interpreter").startswith("uv") else "python-script"
-                if rule in allowed_rules_for_path(relative):
-                    continue
-                violations.append(Violation(relative, line_number, rule, line.rstrip()))
+        violations.extend(scan_text(relative, text, registered))
     return violations
 
 
@@ -247,6 +310,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    scripts_dir = str(Path(__file__).resolve().parent)
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    from console_encoding import configure_utf8_stdio
+
     configure_utf8_stdio()
     args = build_parser().parse_args(argv)
     try:

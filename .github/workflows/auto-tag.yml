@@ -42,8 +42,8 @@ jobs:
             echo "::error::workflow_run checkout is not the immutable head SHA"
             exit 1
           fi
-          if [ "$(git rev-parse refs/remotes/origin/main)" != "$RELEASE_SHA" ]; then
-            echo "::error::main advanced before auto-tag verification"
+          if ! git merge-base --is-ancestor "$RELEASE_SHA" refs/remotes/origin/main; then
+            echo "::error::release SHA is not in current origin/main history"
             exit 1
           fi
 
@@ -52,7 +52,7 @@ jobs:
           RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          python .github/scripts/check_release_gates.py \
+          python -I .github/scripts/check_release_gates.py \
             --repo "$GITHUB_WORKSPACE" \
             --release-sha "$RELEASE_SHA" \
             --emit-release-env \
@@ -73,23 +73,27 @@ jobs:
       - name: Setup uv for trusted gate tooling
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
+          version: "0.12.13"
+          checksum: "745765a3b6e360ad76743599ae5c42e9278c7edf8bbff9fc76d05bf2623a04dd"
           enable-cache: false
 
       - name: Install pinned trusted gate tooling
-        run: uv pip install --system --no-progress "PyYAML==6.0.2" "ruff==0.12.10"
+        run: |
+          set -euo pipefail
+          GATE_PYTHON="$(python -c 'import sys; print(sys.executable)')"
+          uv pip install --system --break-system-packages --python "$GATE_PYTHON" --no-progress "PyYAML==6.0.2" "ruff==0.12.10"
 
       - name: Run complete release gates for exact SHA
         env:
           RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          python .github/scripts/check_release_gates.py \
+          python -I .github/scripts/check_release_gates.py \
             --repo "$GITHUB_WORKSPACE" \
             --release-sha "$RELEASE_SHA" \
             --release-tag "$RELEASE_TAG" \
             --upstream-ref upstream/main \
-            --workflow-runs-json "$RUNS_FILE" \
-            --require-origin-main-tip
+            --workflow-runs-json "$RUNS_FILE"
 
       - name: Push exact release tag
         env:
@@ -106,17 +110,21 @@ jobs:
             exit 1
           fi
           git -c credential.helper= -c core.hooksPath=/dev/null fetch --no-tags --prune origin main
-          if [ "$(git rev-parse HEAD)" != "$RELEASE_SHA" ] ||
-             [ "$(git rev-parse refs/remotes/origin/main)" != "$RELEASE_SHA" ]; then
-            echo "::error::main advanced before the immutable release tag was created"
+          if [ "$(git rev-parse HEAD)" != "$RELEASE_SHA" ]; then
+            echo "::error::workflow_run checkout is not the immutable release SHA"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$RELEASE_SHA" refs/remotes/origin/main; then
+            echo "::error::release SHA is not in current origin/main history"
             exit 1
           fi
           if ! REMOTE_MAIN_SHA=$(git -c credential.helper= -c core.hooksPath=/dev/null ls-remote --exit-code --heads origin refs/heads/main | awk 'NF == 2 { print $1 }'); then
             echo "::error::Unable to read the current origin/main tip"
             exit 1
           fi
-          if [ "$REMOTE_MAIN_SHA" != "$RELEASE_SHA" ]; then
-            echo "::error::origin/main advanced before the immutable release tag was created"
+          echo "Recorded origin/main at tag time: $REMOTE_MAIN_SHA"
+          if [ -z "$REMOTE_MAIN_SHA" ]; then
+            echo "::error::origin/main tip is empty at tag time"
             exit 1
           fi
           if git -c credential.helper= -c core.hooksPath=/dev/null ls-remote --exit-code --refs origin "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
