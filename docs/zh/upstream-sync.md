@@ -144,8 +144,25 @@ release gate、scanner 和 migration checker 均由 `python -I` 调用；gate �
 
 privileged workflow 的 `setup-uv` 固定精确 uv version 与 Ubuntu x86_64 可执行文件 SHA-256
 checksum；build job 以 exact pin 安装 gate/Ruff/build backend，并用
-`uv build --no-build-isolation` 构建，不解析 latest/range。wheel/sdist 的 Core Metadata 由
-header parser 校验，`Name`/`Version` 各恰好一个，body 中出现同名字段或重复 header 都会被拒绝。
+`uv build --no-build-isolation` 构建，不解析 latest/range。release policy 对 auto-tag、
+`check-uvx-migration.yml` 与 publish OIDC job 执行完整 step inventory：step 数量、名称、顺序、
+key 集合、`uses`/`with`/`env` 和 run block 都必须逐字匹配 approved 模板；任何额外 step、no-op、
+前置 `exit 0`/`true`/`set +e`、`|| EXIT=0`、重命名、删除、重排或 step-level `if` 都会
+fail-closed。三个 privileged workflow 的 run block 禁止 `git add/commit/am/apply/merge/rebase/
+cherry-pick/reset/update-ref`；auto-tag 只允许一个 approved exact tag push，`git push
+...refs/heads/main`、`git -c x=y commit` 与 `--force` 变体都会被拒绝。OIDC job 的 run 不允许
+pip/python/import/exec/eval/uvx 或 `.whl`，`WHEEL_PATH`/`SDIST_PATH` 只能出现在 approved
+bind/publish step。
+
+wheel/sdist 的 Core Metadata 使用 header parser：`Name`/`Version` 按 ASCII case-insensitive
+归并后各恰好一个，body 中出现同名字段、重复 header、非 canonical 大小写或非 ASCII 字段名都会
+被拒绝；wheel metadata 必须精确为 `ppt_master-{version}.dist-info/METADATA`，且同目录
+`WHEEL`/`RECORD` 必须存在。两份 `cli.py` 的 mapping parser 拒绝任何后续 Store 绑定
+（For/With/ExceptHandler/comprehension/NamedExpr 等）和 `exec`/`eval`/`globals`/`locals`/
+`setattr` 动态逃逸，scanner 复用同一个 trusted parser。repository scanner 的 legacy grammar
+覆盖 `python.exe`/`python3.12`/`python ./scripts` 与 `uv run` 中间 flags，扫描根包含
+`.claude-plugin/` 与 `projects/`。release gate、candidate 与 migration checker 的全部
+`text=True` 子进程调用显式使用 `encoding="utf-8", errors="replace"`。
 
 ---
 

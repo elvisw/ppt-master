@@ -1040,3 +1040,59 @@ redirect/DNS-rebinding 与 SVG SMIL sanitizer 仍明确列为 upstream residual�
 - TDD 变更 + 实现后：focused 49 tests OK（1 expected Windows symlink skip）；Task 5A
   ownership/workflow/candidate 39 tests OK（1 skip）；完整记录见
   `.superpowers/sdd/sync-upstream-task-5b-report.md`。
+
+---
+
+## Task 5B 复审修复第二轮：exact 合同与闭包收口（实现记录）
+
+reviewer 判定 Needs fixes 后，在 HEAD `9f8250a5` 上继续闭合 F1–F8；不改变版本、历史、
+Task 5A 隔离、concurrency、uv pin/checksum 或上游 out-of-scope residual。
+
+### F1/F2/F3：完整 step inventory 与 run 模板
+
+- `check_release_gates.py` 为 auto-tag、Check UVX Migration 和 publish OIDC job 定义
+  `WorkflowStepContract` 列表：step 数量、名称、顺序、key 集合、`uses`/`with`/`env` 和
+  run block 全部 exact。所有关键 run 以规范化模板逐字比较（`_normalize_run` / `_require_run`），
+  任何 no-op、前置 `exit 0`/`true`/`set +e`、`|| EXIT=0`、删除/重排/额外 step、
+  `if`/`continue-on-error` 都会失败。
+- 三个 privileged workflow 的 run block 整体扫描 `_check_git_write_surface`：禁止
+  `git add|am|apply|cherry-pick|commit|merge|rebase|reset|update-ref`，push 数量按 workflow
+  精确约束（auto-tag 唯一 1 个 approved tag push，publish/migration 0 个）；`git -c x=y commit`、
+  `git --git-dir=.git commit`、`git push ...refs/heads/main`、`--force` 变体都由 token 扫描和
+  exact push 模板拒绝。
+- publish OIDC job 增加完整 step 白名单与 `_check_oidc_run_safety`：OIDC run 中禁止 pip/python/
+  import/exec/eval/uvx/`.whl`，`WHEEL_PATH`/`SDIST_PATH` 只能出现在 approved bind/publish step；
+  额外 step 或代码执行探针 fail-closed。
+
+### F4/F5：Core Metadata 与 wheel 路径
+
+- `_validate_core_metadata` 以 ASCII case-insensitive 归并字段：`Name`/`Version` 折叠后各恰好
+  一个，非 canonical 大小写、重复大小写变体、body 中同名字段和非 ASCII 字段名都拒绝。
+- wheel metadata 必须精确为 `ppt_master-{version}.dist-info/METADATA`，同目录 `WHEEL`/`RECORD`
+  必须存在，其他 `*/METADATA` 拒绝；真实 setuptools wheel 布局兼容并在本地真实产物上验证。
+
+### F6：CLI AST 闭包
+
+- `parse_literal_mapping` 扫描全部 Store/Del 绑定，拒绝 For/AsyncFor/With/ExceptHandler/
+  comprehension/NamedExpr/arg/global/nonlocal/match 以及 `exec`/`eval`/`globals`/`locals`/
+  `setattr`/`vars`/`compile`/`__import__` 等动态逃逸。
+- `check_uvx_repository` 删除自己的 AST 副本，改为在调用时加载同一个 trusted
+  `check_cli_sync.parse_literal_mapping`，不再有漂移的 exclusion grammar。
+
+### F7：scanner grammar 与扫描根
+
+- 解释器 grammar 覆盖 `python.exe`、`python3.12`、`python3.12.exe`、`python ./scripts/...`
+  以及 `uv run` 中间 flags（`--no-sync`、`--python 3.12`）；反斜杠续行合并后仍报告原始首行号。
+- `DOCUMENT_ROOT_PREFIXES` 增加 `.claude-plugin/`、`projects/`；删除迁移 workflow 的孤立
+  allowlist 注释；allowlist 仍是精确 path+rule（新增文档根上的文件不会继承旧豁免）。
+
+### F8：文本 subprocess 解码
+
+- release gate、candidate checker 与 migration checker 的所有 `text=True` 调用显式
+  `encoding="utf-8", errors="replace"`，并以 mock 测试固定；candidate 的 Git 文本调用统一
+  经过 `_run_git_text`。
+
+### Auto-tag tip 语义
+
+维护者确认：发布 exact successful immutable SHA；验证后 main 普通前进不改变已发布产物，
+并触发独立新 run；不再要求不可能的原子 latest-tip 相等。brief/plan/design/report 已统一。

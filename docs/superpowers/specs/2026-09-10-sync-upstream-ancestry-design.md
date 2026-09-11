@@ -210,8 +210,24 @@ TOML 解析写入环境并以安全的 canonical grammar 绑定为 `v<version>`�
 `PROTECTED_PATHS` 还覆盖 `console_encoding.py`、`workflow_transcript.py` 和两份 `cli.py`。
 
 `check-uvx-migration.yml` 的 job/step 集合被 release policy 精确验证：只有 check job、四个固定
-step、无 step-level `if`/`continue-on-error`，ancestry/migration 命令必须逐字为
-`python -I ...` 的 fail-closed 形式；替换为 no-op、`exit 2`、重命名或额外步骤都会失败。
+step、无 step-level `if`/`continue-on-error`，ancestry/migration 命令必须逐字等于 approved run
+模板的 fail-closed 形式；替换为 no-op、`exit 2`、前置 `exit 0`/`true`/`set +e`、`|| EXIT=0`、
+重命名、删除、重排或额外步骤都会失败。同一 policy 对 auto-tag 与 publish OIDC job 执行完整
+step inventory：名称、顺序、key 集合、`uses`/`with`/`env` 与 run block 全部 exact；三个
+privileged workflow 的 run block 统一拒绝 `git add/am/apply/cherry-pick/commit/merge/rebase/
+reset/update-ref`，auto-tag 只允许一个 approved exact tag push（publish/migration 为 0），
+`git -c x=y commit`、`git push ...refs/heads/main` 和 force 变体都 fail-closed。OIDC job 的 run
+禁止 pip/python/import/exec/eval/uvx/`.whl`，`WHEEL_PATH`/`SDIST_PATH` 只能在 approved
+bind/publish step 使用。
+
+wheel 静态检查要求 metadata 精确位于 `ppt_master-{version}.dist-info/METADATA` 且同目录存在
+`WHEEL`/`RECORD`；Core Metadata 字段按 ASCII case-insensitive 归并，`Name`/`Version` 折叠后
+各恰好一个，重复大小写变体、body spoof 与非 ASCII 字段名都拒绝。CLI mapping parser 拒绝所有
+后续 Store 绑定（For/With/ExceptHandler/comprehension/NamedExpr 等）与 `exec`/`eval`/
+`globals`/`locals`/`setattr` 动态逃逸，scanner 复用同一个 trusted parser。repository scanner 的
+legacy grammar 覆盖 `python.exe`/`python3.12`/`python ./scripts` 与 `uv run` 中间 flags，扫描根
+包含 `.claude-plugin/` 与 `projects/`。release gate、candidate 与 migration checker 的全部
+`text=True` Git/subprocess 调用显式使用 `encoding="utf-8", errors="replace"`。
 
 `publish-pypi` 的 tag push 与 manual recovery 都必须提供/推导相同的 release SHA/tag，精确
 fetch tag ref，确认 tag 指向 SHA 且 SHA 在 `origin/main` 历史中，再查询同一成功 migration run
