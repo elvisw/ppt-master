@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import json
 import subprocess
 import sys
@@ -8,6 +10,7 @@ import tempfile
 import unittest
 from collections.abc import Callable
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -52,6 +55,7 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
         marker: bytes | None = None,
         extra_files: dict[str, bytes] | None = None,
         overlay_policy: str | None = None,
+        include_policy: bool = True,
     ) -> tuple[Path, str]:
         repo = root / "repo"
         repo.mkdir()
@@ -61,8 +65,9 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
         run_git(repo, "config", "core.fileMode", "false")
         (repo / ".github").mkdir()
         (repo / "base.txt").write_text("base\n", encoding="utf-8")
-        policy_text = "# synthetic protected overlay policy\n" if overlay_policy is None else overlay_policy
-        (repo / OVERLAY_POLICY).write_text(policy_text, encoding="utf-8")
+        if include_policy:
+            policy_text = "# synthetic protected overlay policy\n" if overlay_policy is None else overlay_policy
+            (repo / OVERLAY_POLICY).write_text(policy_text, encoding="utf-8")
         if marker is not None:
             (repo / MARKER).write_bytes(marker)
         for relative, content in (extra_files or {}).items():
@@ -615,47 +620,53 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
                 with self.assertRaises(module.CheckError):
                     module.parse_overlay_policy(text)
 
-    def test_added_deleted_mode_and_symlink_paths_must_match_upstream(self) -> None:
-        def blob_sha(repo: Path, content: str) -> str:
-            return subprocess.run(
-                ["git", "hash-object", "-w", "--stdin"],
-                cwd=repo,
-                input=content.encode("utf-8"),
-                capture_output=True,
-                check=True,
-            ).stdout.decode().strip()
+    def _write_object(self, repo: Path, content: str) -> str:
+        return subprocess.run(
+            ["git", "hash-object", "-w", "--stdin"],
+            cwd=repo,
+            input=content.encode("utf-8"),
+            capture_output=True,
+            check=True,
+        ).stdout.decode().strip()
 
-        def build_target(repo: Path, name: str) -> str:
-            if name == "added":
-                return self._commit_file(repo, "added.txt", "added\n", "upstream add")
-            if name == "deleted":
-                run_git(repo, "rm", "gone.txt")
-                run_git(repo, "commit", "-m", "upstream delete")
-                return git_output(repo, "rev-parse", "HEAD")
-            if name == "mode":
-                sha = blob_sha(repo, "mode\n")
-                run_git(repo, "update-index", "--add", "--cacheinfo", f"100755,{sha},mode.sh")
-                run_git(repo, "commit", "-m", "upstream chmod")
-                return git_output(repo, "rev-parse", "HEAD")
-            sha = blob_sha(repo, "target/path\n")
-            run_git(repo, "update-index", "--add", "--cacheinfo", f"120000,{sha},link.txt")
-            (repo / "link.txt").write_text("target/path\n", encoding="utf-8")
-            run_git(repo, "commit", "-m", "upstream symlink")
+    def _build_tree_target(self, repo: Path, name: str) -> str:
+        if name == "added":
+            return self._commit_file(repo, "added.txt", "added\n", "upstream add")
+        if name == "deleted":
+            run_git(repo, "rm", "gone.txt")
+            run_git(repo, "commit", "-m", "upstream delete")
             return git_output(repo, "rev-parse", "HEAD")
+        if name == "mode":
+            sha = self._write_object(repo, "mode\n")
+            run_git(repo, "update-index", "--add", "--cacheinfo", f"100755,{sha},mode.sh")
+            run_git(repo, "commit", "-m", "upstream chmod")
+            return git_output(repo, "rev-parse", "HEAD")
+        sha = self._write_object(repo, "target/path\n")
+        run_git(repo, "update-index", "--add", "--cacheinfo", f"120000,{sha},link.txt")
+        (repo / "link.txt").write_text("target/path\n", encoding="utf-8")
+        run_git(repo, "commit", "-m", "upstream symlink")
+        return git_output(repo, "rev-parse", "HEAD")
 
-        def mutate(repo: Path, name: str) -> None:
-            if name == "added":
-                (repo / "added.txt").unlink()
-            elif name == "deleted":
-                (repo / "gone.txt").write_text("gone\n", encoding="utf-8")
-            elif name == "mode":
-                sha = blob_sha(repo, "mode\n")
-                run_git(repo, "update-index", "--add", "--cacheinfo", f"100644,{sha},mode.sh")
-            else:
-                sha = blob_sha(repo, "target/path\n")
-                run_git(repo, "update-index", "--add", "--cacheinfo", f"100644,{sha},link.txt")
-            run_git(repo, "add", "-A")
+    def _mutate_tree_entry(self, repo: Path, name: str) -> None:
+        if name == "added":
+            (repo / "added.txt").unlink()
+        elif name == "deleted":
+            (repo / "gone.txt").write_text("gone\n", encoding="utf-8")
+        elif name == "mode":
+            sha = self._write_object(repo, "mode\n")
+            run_git(repo, "update-index", "--add", "--cacheinfo", f"100644,{sha},mode.sh")
+        else:
+            sha = self._write_object(repo, "target/path\n")
+            run_git(repo, "update-index", "--add", "--cacheinfo", f"100644,{sha},link.txt")
+        run_git(repo, "add", "-A")
 
+    def _commit_post_merge(self, repo: Path, mutate: Callable[[], None]) -> str:
+        mutate()
+        run_git(repo, "add", "-A")
+        run_git(repo, "commit", "-m", "post-merge change")
+        return git_output(repo, "rev-parse", "HEAD")
+
+    def test_added_deleted_mode_and_symlink_paths_must_match_upstream(self) -> None:
         base_files = {
             "deleted": {"gone.txt": b"gone\n"},
             "mode": {"mode.sh": b"mode\n"},
@@ -669,7 +680,7 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
                     extra_files=base_files.get(name, {}),
                 )
                 run_git(repo, "checkout", "-b", "upstream-branch")
-                target = build_target(repo, name)
+                target = self._build_tree_target(repo, name)
                 self._set_upstream(repo, target)
                 head = self._build_sync_merge(repo, base, target)
                 accepted = self._run_check(repo, base=base, head=head)
@@ -682,12 +693,227 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
                     extra_files=base_files.get(name, {}),
                 )
                 run_git(repo, "checkout", "-b", "upstream-branch")
-                target = build_target(repo, name)
+                target = self._build_tree_target(repo, name)
                 self._set_upstream(repo, target)
-                head = self._build_sync_merge(repo, base, target, resolve=lambda: mutate(repo, name))
+                head = self._build_sync_merge(
+                    repo, base, target, resolve=lambda: self._mutate_tree_entry(repo, name)
+                )
                 rejected = self._run_check(repo, base=base, head=head)
                 self.assertNotEqual(rejected.returncode, 0)
                 self.assertIn("non-overlay", rejected.stderr)
+
+    def test_post_merge_version_commit_cannot_rollback_upstream_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo, base = self._new_repo(
+                Path(temporary),
+                marker=f"{OLD_TARGET}\n".encode(),
+                extra_files={
+                    "pyproject.toml": b'[project]\nversion = "1.2.3"\n',
+                    "skills/ppt-master/pyproject.toml": b'[project]\nversion = "1.2.3"\n',
+                },
+            )
+            run_git(repo, "checkout", "-b", "upstream-branch")
+            target = self._commit_file(repo, "upstream.txt", "upstream\n", "upstream")
+            self._set_upstream(repo, target)
+            self._build_sync_merge(repo, base, target)
+
+            def mutate() -> None:
+                (repo / "upstream.txt").write_text("rolled back\n", encoding="utf-8")
+                for relative in ("pyproject.toml", "skills/ppt-master/pyproject.toml"):
+                    (repo / relative).write_text(
+                        '[project]\nversion = "1.2.4"\n', encoding="utf-8"
+                    )
+
+            head = self._commit_post_merge(repo, mutate)
+            result = self._run_check(repo, base=base, head=head, require_version_bump=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("after the sync merge", result.stderr)
+
+    def test_post_merge_overlay_rollback_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo, base = self._new_repo(
+                Path(temporary),
+                marker=f"{OLD_TARGET}\n".encode(),
+                overlay_policy="upstream.txt merge reviewed adaptation\n",
+            )
+            run_git(repo, "checkout", "-b", "upstream-branch")
+            target = self._commit_file(repo, "upstream.txt", "upstream\n", "upstream")
+
+            def resolve_adaptation() -> None:
+                (repo / "upstream.txt").write_text("fork adaptation\n", encoding="utf-8")
+                run_git(repo, "add", "upstream.txt")
+
+            self._set_upstream(repo, target)
+            self._build_sync_merge(repo, base, target, resolve=resolve_adaptation)
+
+            def mutate() -> None:
+                (repo / "upstream.txt").unlink()
+
+            head = self._commit_post_merge(repo, mutate)
+            result = self._run_check(repo, base=base, head=head, expected_target=target)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("after the sync merge", result.stderr)
+
+    def test_post_merge_tree_drift_on_added_deleted_mode_and_symlink_paths(self) -> None:
+        base_files = {
+            "deleted": {"gone.txt": b"gone\n"},
+            "mode": {"mode.sh": b"mode\n"},
+            "symlink": {"link.txt": b"old-target\n"},
+        }
+        for name in ("added", "deleted", "mode", "symlink"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                repo, base = self._new_repo(
+                    Path(temporary),
+                    marker=f"{OLD_TARGET}\n".encode(),
+                    extra_files=base_files.get(name, {}),
+                )
+                run_git(repo, "checkout", "-b", "upstream-branch")
+                target = self._build_tree_target(repo, name)
+                self._set_upstream(repo, target)
+                self._build_sync_merge(repo, base, target)
+                head = self._commit_post_merge(
+                    repo, lambda: self._mutate_tree_entry(repo, name)
+                )
+                result = self._run_check(repo, base=base, head=head, expected_target=target)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("after the sync merge", result.stderr)
+
+    def test_post_merge_pure_version_bump_with_locks_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo, base = self._new_repo(
+                Path(temporary),
+                marker=f"{OLD_TARGET}\n".encode(),
+                extra_files={
+                    "pyproject.toml": b'[project]\nversion = "1.2.3"\n',
+                    "skills/ppt-master/pyproject.toml": b'[project]\nversion = "1.2.3"\n',
+                    "uv.lock": b'version = "1.2.3"\n',
+                    "skills/ppt-master/uv.lock": b'version = "1.2.3"\n',
+                },
+            )
+            run_git(repo, "checkout", "-b", "upstream-branch")
+            target = self._commit_file(repo, "upstream.txt", "upstream\n", "upstream")
+            self._set_upstream(repo, target)
+            self._build_sync_merge(repo, base, target)
+
+            def bump() -> None:
+                for relative in ("pyproject.toml", "skills/ppt-master/pyproject.toml"):
+                    (repo / relative).write_text(
+                        '[project]\nversion = "1.2.4"\n', encoding="utf-8"
+                    )
+                for relative in ("uv.lock", "skills/ppt-master/uv.lock"):
+                    (repo / relative).write_text('version = "1.2.4"\n', encoding="utf-8")
+
+            head = self._commit_post_merge(repo, bump)
+            accepted = self._run_check(repo, base=base, head=head, require_version_bump=True)
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+            self.assertIn("no post-merge drift", accepted.stdout)
+
+    def test_post_merge_unrelated_change_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo, base = self._new_repo(Path(temporary), marker=f"{OLD_TARGET}\n".encode())
+            run_git(repo, "checkout", "-b", "upstream-branch")
+            target = self._commit_file(repo, "upstream.txt", "upstream\n", "upstream")
+            self._set_upstream(repo, target)
+            self._build_sync_merge(repo, base, target)
+
+            def add_unrelated() -> None:
+                (repo / "docs").mkdir()
+                (repo / "docs" / "new.md").write_text("new\n", encoding="utf-8")
+
+            head = self._commit_post_merge(repo, add_unrelated)
+            result = self._run_check(repo, base=base, head=head, expected_target=target)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("non-version path", result.stderr)
+
+    def test_policy_is_read_from_the_sync_merge_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo, base = self._new_repo(
+                Path(temporary),
+                marker=f"{OLD_TARGET}\n".encode(),
+                overlay_policy="upstream.txt merge reviewed adaptation\n",
+            )
+            run_git(repo, "checkout", "-b", "upstream-branch")
+            target = self._commit_file(repo, "upstream.txt", "upstream\n", "upstream")
+
+            def resolve_adaptation() -> None:
+                (repo / "upstream.txt").write_text("fork adaptation\n", encoding="utf-8")
+                run_git(repo, "add", "upstream.txt")
+
+            self._set_upstream(repo, target)
+            self._build_sync_merge(repo, base, target, resolve=resolve_adaptation)
+            (repo / OVERLAY_POLICY).write_text("# changed after the merge\n", encoding="utf-8")
+            run_git(repo, "add", "-A")
+            run_git(repo, "commit", "-m", "future policy change")
+            head = git_output(repo, "rev-parse", "HEAD")
+            accepted = self._run_check(repo, base=None, head=head)
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+    def test_missing_policy_on_non_bootstrap_merge_fails(self) -> None:
+        module = load_helper_module()
+        with tempfile.TemporaryDirectory() as temporary:
+            repo, base = self._new_repo(
+                Path(temporary),
+                marker=f"{OLD_TARGET}\n".encode(),
+                include_policy=False,
+            )
+            run_git(repo, "checkout", "-b", "upstream-branch")
+            target = self._commit_file(repo, "upstream.txt", "upstream\n", "upstream")
+            self._set_upstream(repo, target)
+            merge = self._build_sync_merge(repo, base, target)
+            with self.assertRaisesRegex(module.CheckError, "overlay policy"):
+                module._policy_for_merge(repo, merge, target, merge)
+
+    def test_bootstrap_policy_fallback_requires_the_exact_pair(self) -> None:
+        module = load_helper_module()
+        self.assertEqual(module.BOOTSTRAP_MERGE_SHA, "1fcf7154221d1162867248458048f88d863cd80d")
+        self.assertEqual(module.BOOTSTRAP_TARGET_SHA, "09ad58f0d58decc9d30799ca83374ff2604ef16b")
+        with tempfile.TemporaryDirectory() as temporary:
+            repo, base = self._new_repo(
+                Path(temporary),
+                marker=f"{OLD_TARGET}\n".encode(),
+                include_policy=False,
+            )
+            run_git(repo, "checkout", "-b", "upstream-branch")
+            target = self._commit_file(repo, "upstream.txt", "upstream\n", "upstream")
+            self._set_upstream(repo, target)
+            merge = self._build_sync_merge(repo, base, target)
+            (repo / OVERLAY_POLICY).write_text("# added after the merge\n", encoding="utf-8")
+            run_git(repo, "add", "-A")
+            run_git(repo, "commit", "-m", "add protected policy")
+            fallback = git_output(repo, "rev-parse", "HEAD")
+            output = io.StringIO()
+            with mock.patch.object(module, "BOOTSTRAP_MERGE_SHA", merge), mock.patch.object(
+                module, "BOOTSTRAP_TARGET_SHA", target
+            ), contextlib.redirect_stdout(output):
+                policy = module._policy_for_merge(repo, merge, target, fallback)
+            self.assertEqual(policy, {})
+            self.assertIn("bootstrap", output.getvalue())
+            with mock.patch.object(module, "BOOTSTRAP_MERGE_SHA", merge), mock.patch.object(
+                module, "BOOTSTRAP_TARGET_SHA", OLD_TARGET
+            ):
+                with self.assertRaisesRegex(module.CheckError, "overlay policy"):
+                    module._policy_for_merge(repo, merge, target, fallback)
+
+    def test_real_bootstrap_repair_merge_uses_the_documented_fallback(self) -> None:
+        module = load_helper_module()
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT,
+            capture_output=True,
+            check=True,
+            text=True,
+            encoding="utf-8",
+        ).stdout.strip()
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            policy = module._policy_for_merge(
+                ROOT,
+                module.BOOTSTRAP_MERGE_SHA,
+                module.BOOTSTRAP_TARGET_SHA,
+                head,
+            )
+        self.assertIn("bootstrap", output.getvalue())
+        self.assertIn("skills/ppt-master/references/native-data-interface.md", policy)
 
     def test_version_bump_commits_still_verify_the_merge_commit(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

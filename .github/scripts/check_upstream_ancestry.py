@@ -66,6 +66,19 @@ PROTECTED_PATHS = frozenset(
 )
 OVERLAY_POLICY_FILE = ".github/upstream-overlay-paths.txt"
 OVERLAY_MODES = frozenset({"merge", "retain-base"})
+# The historical bootstrap repair merge predates the protected overlay policy file.
+# Only this exact merge/target pair may fall back to the current trusted HEAD policy.
+BOOTSTRAP_MERGE_SHA = "1fcf7154221d1162867248458048f88d863cd80d"
+BOOTSTRAP_TARGET_SHA = "09ad58f0d58decc9d30799ca83374ff2604ef16b"
+# The only paths a post-merge version-bump commit may change.
+VERSION_BUMP_PATHS = frozenset(
+    {
+        "pyproject.toml",
+        "skills/ppt-master/pyproject.toml",
+        "uv.lock",
+        "skills/ppt-master/uv.lock",
+    }
+)
 PROTECTED_PATHSPECS = (".github/scripts/**", ".github/workflows/**")
 MANIFEST_KEYS = frozenset({"base_sha", "target_sha", "verified_sha"})
 VERSION_RE = re.compile(rb"(?m)^[ \t]*version[ \t]*=[ \t]*[\"'](\d+)\.(\d+)\.(\d+)[\"'][ \t]*$")
@@ -365,6 +378,17 @@ def _merge_base(repo: Path, first_parent: str, target: str) -> str:
     return value
 
 
+def _upstream_changed_paths(
+    repo: Path,
+    merge_commit: str,
+    first_parent: str,
+    target: str,
+) -> list[str]:
+    """Return every path the upstream target changed relative to the strict merge base."""
+    upstream_base = _merge_base(repo, first_parent, target)
+    return _changed_paths(repo, upstream_base, target)
+
+
 def _verify_content_boundary(
     repo: Path,
     merge_commit: str,
@@ -373,8 +397,7 @@ def _verify_content_boundary(
     policy: dict[str, str],
 ) -> str:
     """Prove the sync merge carries upstream content or a reviewed overlay resolution."""
-    upstream_base = _merge_base(repo, first_parent, target)
-    changed = _changed_paths(repo, upstream_base, target)
+    changed = _upstream_changed_paths(repo, merge_commit, first_parent, target)
     if not changed:
         return f"Verified upstream content boundary {merge_commit} (no upstream changes)"
     merge_tree = _tree_snapshot(repo, merge_commit, "sync merge")
@@ -407,6 +430,38 @@ def _verify_content_boundary(
     return f"Verified upstream content boundary {merge_commit} ({len(changed)} upstream paths)"
 
 
+def _verify_post_merge_drift(
+    repo: Path,
+    merge_commit: str,
+    head_sha: str,
+    upstream_changed: list[str],
+) -> str:
+    """Reject candidate commits after the sync merge that drift from its tree.
+
+    Only the version-bump paths may differ between the strict merge and the
+    candidate head; every upstream-changed path is additionally compared
+    exactly, so a bump commit cannot smuggle a rollback of any resolved path.
+    """
+    merge_tree = _tree_snapshot(repo, merge_commit, "sync merge")
+    head_tree = _tree_snapshot(repo, head_sha, "candidate head")
+    changed = set(upstream_changed)
+    for path in sorted(changed):
+        if path in VERSION_BUMP_PATHS:
+            continue
+        if merge_tree.get(path) != head_tree.get(path):
+            raise CheckError(
+                f"The candidate changed the upstream path {path} after the sync merge"
+            )
+    for path in sorted(set(merge_tree) | set(head_tree)):
+        if path in changed or path in VERSION_BUMP_PATHS:
+            continue
+        if merge_tree.get(path) != head_tree.get(path):
+            raise CheckError(
+                f"The candidate changed the non-version path {path} after the sync merge"
+            )
+    return f"Verified no post-merge drift on {len(changed)} upstream paths"
+
+
 def _find_sync_merge(repo: Path, head_sha: str, target: str) -> tuple[str, str]:
     """Locate the unique merge whose second parent is the upstream target."""
     result = _run_git(repo, "rev-list", "--merges", "--parents", head_sha)
@@ -434,6 +489,26 @@ def _read_sync_policy(repo: Path, base_sha: str, head_sha: str) -> dict[str, str
     if head_entry != base_entry:
         raise CheckError("The sync candidate changes the protected upstream overlay policy")
     return _read_overlay_policy(repo, base_sha)
+
+
+def _policy_for_merge(
+    repo: Path,
+    merge_commit: str,
+    target: str,
+    fallback_commit: str,
+) -> dict[str, str]:
+    """Prefer the overlay policy recorded in the strict merge tree itself."""
+    entry = _read_path_entry(repo, merge_commit, OVERLAY_POLICY_FILE, "merge overlay policy")
+    if entry is not None:
+        _require_regular_blob(entry, "merge overlay policy")
+        return _read_overlay_policy(repo, merge_commit)
+    if merge_commit == BOOTSTRAP_MERGE_SHA and target == BOOTSTRAP_TARGET_SHA:
+        print(
+            "Notice: bootstrap repair merge 1fcf7154 predates the protected overlay policy; "
+            "reading the current trusted HEAD policy once"
+        )
+        return _read_overlay_policy(repo, fallback_commit)
+    raise CheckError("The sync merge does not contain the protected upstream overlay policy")
 
 
 def _assert_no_protected_changes(repo: Path, base_sha: str, head_sha: str) -> None:
@@ -472,8 +547,9 @@ def verify_head_commit(
         if target != expected_target_sha:
             raise CheckError("The recorded upstream target differs from the immutable expected target")
     _verify_target_ancestry(repo, target, head_sha, upstream_ref)
+    verify_overlay_policy(repo, head_sha)
     merge_commit, first_parent = _find_sync_merge(repo, head_sha, target)
-    policy = _read_overlay_policy(repo, head_sha)
+    policy = _policy_for_merge(repo, merge_commit, target, head_sha)
     boundary = _verify_content_boundary(repo, merge_commit, first_parent, target, policy)
     return f"Verified recorded upstream ancestry; {boundary}"
 
@@ -519,9 +595,15 @@ def verify_pull_request(
     merge_commit = _verify_strict_merge(repo, base_sha, head_sha, target)
     if require_version_bump:
         _verify_version_bump(repo, base_sha, head_sha)
-    policy = _read_sync_policy(repo, base_sha, head_sha)
+    _read_sync_policy(repo, base_sha, head_sha)
+    policy = _policy_for_merge(repo, merge_commit, target, head_sha)
     boundary = _verify_content_boundary(repo, merge_commit, base_sha, target, policy)
-    return f"Verified two-parent merge commit {merge_commit}; {boundary}"
+    message = f"Verified two-parent merge commit {merge_commit}; {boundary}"
+    if sync_mode:
+        changed = _upstream_changed_paths(repo, merge_commit, base_sha, target)
+        drift = _verify_post_merge_drift(repo, merge_commit, head_sha, changed)
+        message = f"{message}; {drift}"
+    return message
 
 
 def build_parser() -> argparse.ArgumentParser:
