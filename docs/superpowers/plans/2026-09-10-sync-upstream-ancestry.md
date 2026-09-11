@@ -1146,3 +1146,10 @@ step 合同、CLI Call 参数与 Core Metadata 字段名做最后收口；不改
 ### 验证
 
 第二轮全量记录见 `.superpowers/sdd/sync-upstream-task-5b-report.md` 的 M1–M4 章节。
+
+## 最终整分支复审收口（F1–F4）
+
+- 2026-09-11 在 HEAD `ca648396` 之上新增同步模式 M..HEAD 漂移门禁（除版本文件外 upstream
+  changed path 必须与 strict merge 一致）、内容评估的 M-tree policy 绑定与 bootstrap 精确
+  回退、3 个 `retain-base` 条目的持续复审义务，以及“本地完成、远端待 bootstrap”的状态口径。
+- 全部实现、测试与验证证据见 `.superpowers/sdd/sync-upstream-task-5b-report.md` 最终轮章节。

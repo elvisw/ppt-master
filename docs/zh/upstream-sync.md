@@ -171,7 +171,12 @@ commit `M`（不把 version-bump HEAD 当身份），计算 `upstream_base = mer
 （拒绝 `-s ours` 或事后整文件回滚），只有 `.github/upstream-overlay-paths.txt` 中以
 `retain-base` 逐路径标注并给出理由时才能保留 fork 内容。该清单是受保护文件，只允许精确路径，
 禁止目录/glob/重复；当前清单为 24 个路径（21 个 `merge`、3 个 `retain-base`）。trusted PR
-helper、两个 sync job、main gate 与 release chain 共用该 owner。
+helper、两个 sync job、main gate 与 release chain 共用该 owner。同步模式还追加 M..HEAD
+漂移门禁：除版本文件（两份 `pyproject.toml`/`uv.lock`）外，upstream changed path 在 strict
+merge 与 candidate HEAD 之间必须完全一致，version-bump 提交无法夹带回滚。内容评估优先读取
+strict merge `M` 自身 tree 的 policy；仅 `1fcf7154` + `09ad58f0` 精确配对允许一次性回退到
+当前 trusted HEAD 并输出 bootstrap 提示。21 个 `merge` 条目需人工审阅第三方 resolution，3 个
+`retain-base` 条目在上游再次触及时由 protected policy 变更强制复审。
 
 `sync-upstream.yml` 的 upload/download artifact、`check-upstream-ancestry.yml` 与
 `opencode.yml` 的 checkout、`opencode.yml` 的 `anomalyco/opencode/github` 也已固定到

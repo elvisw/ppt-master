@@ -1,7 +1,7 @@
 # 设计文档：上游同步提交关系修复
 
 **日期**: 2026-09-10
-**状态**: 已确认，Task 5A/5B 实现后待复审
+**状态**: 本地实现与评审完成（Task 5A/5B），待远端 bootstrap/integration；不宣称远端完成。
 **来源**: GitHub Actions 运行 `34400493716` 与 PR #65
 
 ## 1. 背景
@@ -267,6 +267,21 @@ delete+add）。非 overlay path 的 `M` tree entry（mode/type/object 或 absen
 entry（拒绝 `-s ours` 或事后整文件回滚），只有 policy 中以 `retain-base` 逐路径标注并给出
 理由时才允许保留 first-parent 内容。overlay 清单是精确文件路径，禁止目录、glob 与重复项；
 `M^1` 已等于 target 时 overlay 也必须等于 target。
+
+同步模式（提供 expected target 或要求版本 bump）还在内容边界之后追加 M..HEAD 漂移门禁：
+对除版本文件外的每个 upstream changed path，比较 `M` 与 candidate HEAD 的 tree entry 必须
+完全一致；M..HEAD 也只允许 `pyproject.toml` 与两份 `uv.lock` 版本文件不同。因此
+version-bump 提交无法夹带任何 non-overlay、overlay 或 `retain-base` 路径的回滚。普通
+marker-unchanged PR 跳过与 head/main 模式不应用该门禁。
+
+内容评估优先读取严格 merge `M` 自身 tree 中的 overlay policy（历史绑定）；`M` 缺少 policy
+默认 fail。只有 bootstrap repair merge `1fcf7154` + target `09ad58f0` 精确配对允许一次性
+回退到当前 trusted HEAD policy，并输出显式 bootstrap 提示；其他任何 missing-policy merge
+都拒绝。HEAD policy 仍做格式与受保护一致性检查。
+
+清单中 21 个 `merge` 条目仍需人工审阅第三方 resolution 是否符合 fork 契约；3 个
+`retain-base` 条目在每次上游再次触及对应路径时，由 protected policy 变更与 trusted
+maintenance 流程强制复审，不能静默沿用。
 
 清单文件 `.github/upstream-overlay-paths.txt` 受 protected set、candidate trusted closure 与
 release chain 保护；trusted PR helper、两个 sync job、main gate 与 release chain 全部调用
