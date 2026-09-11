@@ -23,6 +23,7 @@ import json
 import re
 import subprocess
 import sys
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -430,6 +431,85 @@ def _verify_content_boundary(
     return f"Verified upstream content boundary {merge_commit} ({len(changed)} upstream paths)"
 
 
+def _read_blob(repo: Path, commit_sha: str, path: str, label: str) -> bytes:
+    result = _run_git(repo, "cat-file", "blob", f"{commit_sha}:{path}")
+    if result.returncode != 0:
+        raise CheckError(f"The {label} blob {path} is unavailable")
+    return result.stdout
+
+
+def _parse_toml(data: bytes, path: str) -> dict:
+    try:
+        parsed = tomllib.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        raise CheckError(f"The version path {path} is not valid TOML") from exc
+    if not isinstance(parsed, dict):
+        raise CheckError(f"The version path {path} must contain a TOML table")
+    return parsed
+
+
+def _lock_without_project_version(data: dict, path: str) -> dict:
+    packages = data.get("package")
+    if not isinstance(packages, list):
+        raise CheckError(f"The lock file {path} has no package table")
+    roots = []
+    for index, package in enumerate(packages):
+        if not isinstance(package, dict):
+            raise CheckError(f"The lock file {path} has a malformed package entry")
+        source = package.get("source")
+        if isinstance(source, dict) and set(source) & {"virtual", "editable", "directory"}:
+            roots.append(index)
+    if len(roots) != 1:
+        raise CheckError(f"The lock file {path} must contain exactly one root project package")
+    copied = dict(data)
+    copied_packages = list(packages)
+    root = dict(copied_packages[roots[0]])
+    root.pop("version", None)
+    copied_packages[roots[0]] = root
+    copied["package"] = copied_packages
+    return copied
+
+
+def _verify_version_only_drift(
+    repo: Path,
+    merge_commit: str,
+    head_sha: str,
+    path: str,
+) -> None:
+    """Bound M..HEAD changes for a version path that upstream also changed."""
+    merge_data = _parse_toml(_read_blob(repo, merge_commit, path, "merge"), path)
+    head_data = _parse_toml(_read_blob(repo, head_sha, path, "candidate head"), path)
+    if path.endswith("pyproject.toml"):
+        merge_project = merge_data.get("project")
+        head_project = head_data.get("project")
+        if not isinstance(merge_project, dict) or not isinstance(head_project, dict):
+            raise CheckError(f"The pyproject path {path} must define a project table")
+        merge_version = merge_project.get("version")
+        head_version = head_project.get("version")
+        if not isinstance(merge_version, str) or not isinstance(head_version, str):
+            raise CheckError(f"The pyproject path {path} must define a string project version")
+        merge_project = dict(merge_project)
+        head_project = dict(head_project)
+        del merge_project["version"]
+        del head_project["version"]
+        merge_data["project"] = merge_project
+        head_data["project"] = head_project
+        if merge_data != head_data:
+            raise CheckError(
+                f"The version path {path} changed beyond the project version field"
+            )
+        return
+    if path.endswith("uv.lock"):
+        if _lock_without_project_version(merge_data, path) != _lock_without_project_version(
+            head_data, path
+        ):
+            raise CheckError(
+                f"The lock version path {path} changed beyond the root project version"
+            )
+        return
+    raise CheckError(f"The version path {path} has no approved version-only contract")
+
+
 def _verify_post_merge_drift(
     repo: Path,
     merge_commit: str,
@@ -438,15 +518,18 @@ def _verify_post_merge_drift(
 ) -> str:
     """Reject candidate commits after the sync merge that drift from its tree.
 
-    Only the version-bump paths may differ between the strict merge and the
-    candidate head; every upstream-changed path is additionally compared
-    exactly, so a bump commit cannot smuggle a rollback of any resolved path.
+    Version paths may differ between the strict merge and the candidate head
+    only when upstream did not change them; when upstream did change one, the
+    change is constrained to the project version by _verify_version_only_drift.
+    Every other upstream-changed path is compared exactly, so a candidate
+    commit cannot smuggle a rollback of any resolved path.
     """
     merge_tree = _tree_snapshot(repo, merge_commit, "sync merge")
     head_tree = _tree_snapshot(repo, head_sha, "candidate head")
     changed = set(upstream_changed)
     for path in sorted(changed):
         if path in VERSION_BUMP_PATHS:
+            _verify_version_only_drift(repo, merge_commit, head_sha, path)
             continue
         if merge_tree.get(path) != head_tree.get(path):
             raise CheckError(
@@ -479,53 +562,82 @@ def _find_sync_merge(repo: Path, head_sha: str, target: str) -> tuple[str, str]:
     return matches[0]
 
 
-def _read_sync_policy(repo: Path, base_sha: str, head_sha: str) -> dict[str, str]:
-    """Require the protected overlay policy to be identical at the trusted base and head."""
-    base_entry = _read_path_entry(repo, base_sha, OVERLAY_POLICY_FILE, "base overlay policy")
-    if base_entry is None:
-        raise CheckError("The protected upstream overlay policy is missing from the sync base")
-    _require_regular_blob(base_entry, "sync base overlay policy")
-    head_entry = _read_path_entry(repo, head_sha, OVERLAY_POLICY_FILE, "head overlay policy")
-    if head_entry != base_entry:
-        raise CheckError("The sync candidate changes the protected upstream overlay policy")
-    return _read_overlay_policy(repo, base_sha)
-
-
-def _policy_for_merge(
+def _policy_from_first_parent(
     repo: Path,
     merge_commit: str,
+    first_parent: str,
     target: str,
     fallback_commit: str,
 ) -> dict[str, str]:
-    """Prefer the overlay policy recorded in the strict merge tree itself."""
-    entry = _read_path_entry(repo, merge_commit, OVERLAY_POLICY_FILE, "merge overlay policy")
-    if entry is not None:
-        _require_regular_blob(entry, "merge overlay policy")
-        return _read_overlay_policy(repo, merge_commit)
-    if merge_commit == BOOTSTRAP_MERGE_SHA and target == BOOTSTRAP_TARGET_SHA:
-        print(
-            "Notice: bootstrap repair merge 1fcf7154 predates the protected overlay policy; "
-            "reading the current trusted HEAD policy once"
-        )
-        return _read_overlay_policy(repo, fallback_commit)
-    raise CheckError("The sync merge does not contain the protected upstream overlay policy")
+    """Read the overlay policy from the trusted first parent of the sync merge.
 
-
-def _assert_no_protected_changes(repo: Path, base_sha: str, head_sha: str) -> None:
-    result = _run_git(
-        repo,
-        "diff",
-        "--no-renames",
-        "--name-only",
-        f"{base_sha}..{head_sha}",
-        "--",
-        *sorted(PROTECTED_PATHS),
-        *PROTECTED_PATHSPECS,
+    The merge's own policy entry must equal the first-parent entry, so a
+    candidate cannot resolve content under a policy of its own choosing.  Only
+    the documented bootstrap merge may fall back to the current trusted HEAD
+    when the first parent predates the protected policy file.
+    """
+    first_entry = _read_path_entry(
+        repo, first_parent, OVERLAY_POLICY_FILE, "first-parent overlay policy"
     )
+    if first_entry is None:
+        if merge_commit == BOOTSTRAP_MERGE_SHA and target == BOOTSTRAP_TARGET_SHA:
+            print(
+                "Notice: bootstrap repair merge 1fcf7154 predates the protected overlay "
+                "policy; reading the current trusted HEAD policy once"
+            )
+            return _read_overlay_policy(repo, fallback_commit)
+        raise CheckError(
+            "The first parent of the sync merge has no protected upstream overlay policy"
+        )
+    _require_regular_blob(first_entry, "first-parent overlay policy")
+    merge_entry = _read_path_entry(repo, merge_commit, OVERLAY_POLICY_FILE, "merge overlay policy")
+    if merge_entry != first_entry:
+        raise CheckError("The sync merge changes the protected upstream overlay policy")
+    return _read_overlay_policy(repo, first_parent)
+
+
+def _assert_no_protected_changes(
+    repo: Path,
+    base_sha: str,
+    head_sha: str,
+    *,
+    excluded_ancestors: tuple[str, ...] = (),
+) -> None:
+    """Reject any commit in the range whose first-parent diff touches a protected path.
+
+    The endpoint diff is insufficient: an intermediate commit could modify a
+    protected file and a later commit could restore it.  Each commit is
+    therefore compared against its own first parent, merge commits included.
+    Commits that are ancestors of the trusted upstream target are not
+    candidate-controlled and are excluded when a target is known.
+    """
+    arguments = ["rev-list", "--parents", f"{base_sha}..{head_sha}"]
+    if excluded_ancestors:
+        arguments.append("--not")
+        arguments.extend(excluded_ancestors)
+    result = _run_git(repo, *arguments)
     if result.returncode != 0:
-        raise CheckError("Unable to inspect protected CI files in the PR diff")
-    if result.stdout.strip():
-        raise CheckError("The PR changes a protected CI gate file")
+        raise CheckError("Unable to enumerate PR commits for protected CI file inspection")
+    for line in result.stdout.decode("ascii", errors="replace").splitlines():
+        fields = line.split()
+        if len(fields) < 2:
+            continue
+        commit, first_parent = fields[0], fields[1]
+        diff = _run_git(
+            repo,
+            "diff",
+            "--no-renames",
+            "--name-only",
+            first_parent,
+            commit,
+            "--",
+            *sorted(PROTECTED_PATHS),
+            *PROTECTED_PATHSPECS,
+        )
+        if diff.returncode != 0:
+            raise CheckError("Unable to inspect protected CI files in the PR diff")
+        if diff.stdout.strip():
+            raise CheckError(f"The PR changes a protected CI gate file in commit {commit}")
 
 
 def verify_head_commit(
@@ -549,7 +661,7 @@ def verify_head_commit(
     _verify_target_ancestry(repo, target, head_sha, upstream_ref)
     verify_overlay_policy(repo, head_sha)
     merge_commit, first_parent = _find_sync_merge(repo, head_sha, target)
-    policy = _policy_for_merge(repo, merge_commit, target, head_sha)
+    policy = _policy_from_first_parent(repo, merge_commit, first_parent, target, head_sha)
     boundary = _verify_content_boundary(repo, merge_commit, first_parent, target, policy)
     return f"Verified recorded upstream ancestry; {boundary}"
 
@@ -566,12 +678,12 @@ def verify_pull_request(
     """Verify the marker transition and strict merge ancestry for a PR."""
     _require_commit(repo, base_sha, "base")
     _require_commit(repo, head_sha, "head")
-    _assert_no_protected_changes(repo, base_sha, head_sha)
     base_entry = _read_tree_entry(repo, base_sha, "base")
     head_entry = _read_tree_entry(repo, head_sha, "head")
 
     sync_mode = expected_target_sha is not None or require_version_bump
     if base_entry is None and head_entry is None:
+        _assert_no_protected_changes(repo, base_sha, head_sha)
         if sync_mode:
             raise CheckError("The sync candidate marker is missing at both ends")
         return "Recorded upstream marker absent at both ends; ordinary PR skipped"
@@ -582,6 +694,7 @@ def verify_pull_request(
     _require_regular_blob(head_entry, "head")
 
     if base_entry is not None and base_entry.object_name == head_entry.object_name:
+        _assert_no_protected_changes(repo, base_sha, head_sha)
         if sync_mode:
             raise CheckError("The sync candidate marker is unchanged")
         return "Recorded upstream marker unchanged; ordinary PR skipped"
@@ -592,18 +705,15 @@ def verify_pull_request(
         if target != expected_target_sha:
             raise CheckError("The recorded upstream target differs from the immutable expected target")
     _verify_target_ancestry(repo, target, head_sha, upstream_ref)
+    _assert_no_protected_changes(repo, base_sha, head_sha, excluded_ancestors=(target,))
     merge_commit = _verify_strict_merge(repo, base_sha, head_sha, target)
     if require_version_bump:
         _verify_version_bump(repo, base_sha, head_sha)
-    _read_sync_policy(repo, base_sha, head_sha)
-    policy = _policy_for_merge(repo, merge_commit, target, head_sha)
+    policy = _policy_from_first_parent(repo, merge_commit, base_sha, target, head_sha)
     boundary = _verify_content_boundary(repo, merge_commit, base_sha, target, policy)
-    message = f"Verified two-parent merge commit {merge_commit}; {boundary}"
-    if sync_mode:
-        changed = _upstream_changed_paths(repo, merge_commit, base_sha, target)
-        drift = _verify_post_merge_drift(repo, merge_commit, head_sha, changed)
-        message = f"{message}; {drift}"
-    return message
+    changed = _upstream_changed_paths(repo, merge_commit, base_sha, target)
+    drift = _verify_post_merge_drift(repo, merge_commit, head_sha, changed)
+    return f"Verified two-parent merge commit {merge_commit}; {boundary}; {drift}"
 
 
 def build_parser() -> argparse.ArgumentParser:

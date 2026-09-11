@@ -660,7 +660,7 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
             run_git(repo, "update-index", "--add", "--cacheinfo", f"100644,{sha},link.txt")
         run_git(repo, "add", "-A")
 
-    def _commit_post_merge(self, repo: Path, mutate: Callable[[], None]) -> str:
+    def _commit_post_merge(self, repo: Path, mutate: Callable[[], object]) -> str:
         mutate()
         run_git(repo, "add", "-A")
         run_git(repo, "commit", "-m", "post-merge change")
@@ -825,7 +825,7 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("non-version path", result.stderr)
 
-    def test_policy_is_read_from_the_sync_merge_tree(self) -> None:
+    def test_policy_is_read_from_the_first_parent_not_candidate_head(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repo, base = self._new_repo(
                 Path(temporary),
@@ -848,6 +848,188 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
             accepted = self._run_check(repo, base=None, head=head)
             self.assertEqual(accepted.returncode, 0, accepted.stderr)
 
+    def test_candidate_merge_policy_cannot_override_base_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo, base = self._new_repo(
+                Path(temporary),
+                marker=f"{OLD_TARGET}\n".encode(),
+                overlay_policy="upstream.txt merge reviewed adaptation\n",
+            )
+            run_git(repo, "checkout", "-b", "upstream-branch")
+            target = self._commit_file(repo, "upstream.txt", "upstream\n", "upstream")
+
+            def tamper_policy() -> None:
+                (repo / OVERLAY_POLICY).write_text("# permissive\n", encoding="utf-8")
+                run_git(repo, "add", OVERLAY_POLICY)
+
+            self._set_upstream(repo, target)
+            head = self._build_sync_merge(repo, base, target, resolve=tamper_policy)
+            result = self._run_check(repo, base=base, head=head)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("protected CI gate file", result.stderr)
+
+    def test_merge_commit_policy_tamper_is_rejected_in_head_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo, base = self._new_repo(
+                Path(temporary),
+                marker=f"{OLD_TARGET}\n".encode(),
+                overlay_policy="upstream.txt merge reviewed adaptation\n",
+            )
+            run_git(repo, "checkout", "-b", "upstream-branch")
+            target = self._commit_file(repo, "upstream.txt", "upstream\n", "upstream")
+
+            def tamper_policy() -> None:
+                (repo / OVERLAY_POLICY).write_text("# permissive\n", encoding="utf-8")
+                run_git(repo, "add", OVERLAY_POLICY)
+
+            self._set_upstream(repo, target)
+            head = self._build_sync_merge(repo, base, target, resolve=tamper_policy)
+            result = self._run_check(repo, base=None, head=head)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("overlay policy", result.stderr)
+
+    def test_protected_paths_are_scanned_per_commit_even_if_restored(self) -> None:
+        module = load_helper_module()
+        with tempfile.TemporaryDirectory() as temporary:
+            repo, base = self._new_repo(
+                Path(temporary),
+                marker=f"{OLD_TARGET}\n".encode(),
+                overlay_policy="upstream.txt merge reviewed adaptation\n",
+            )
+            original_policy = (repo / OVERLAY_POLICY).read_text(encoding="utf-8")
+
+            def tamper_policy() -> None:
+                (repo / OVERLAY_POLICY).write_text("# P prime\n", encoding="utf-8")
+                run_git(repo, "add", "-A")
+                run_git(repo, "commit", "-m", "tamper policy")
+
+            tamper_policy()
+            (repo / OVERLAY_POLICY).write_text(original_policy, encoding="utf-8")
+            run_git(repo, "add", "-A")
+            run_git(repo, "commit", "-m", "restore policy")
+            head = git_output(repo, "rev-parse", "HEAD")
+            result = self._run_check(repo, base=base, head=head)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("protected CI gate file", result.stderr)
+            self.assertIn("commit", result.stderr)
+            self.assertNotIn(module.BOOTSTRAP_MERGE_SHA, result.stderr)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            repo, base = self._new_repo(
+                Path(temporary),
+                marker=f"{OLD_TARGET}\n".encode(),
+                extra_files={".github/scripts/check_release_gates.py": b"# original\n"},
+            )
+            protected = repo / ".github" / "scripts" / "check_release_gates.py"
+            protected.write_text("# tampered\n", encoding="utf-8")
+            run_git(repo, "add", "-A")
+            run_git(repo, "commit", "-m", "tamper protected gate")
+            protected.write_text("# original\n", encoding="utf-8")
+            run_git(repo, "add", "-A")
+            run_git(repo, "commit", "-m", "restore protected gate")
+            head = git_output(repo, "rev-parse", "HEAD")
+            result = self._run_check(repo, base=base, head=head)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("protected CI gate file", result.stderr)
+
+    def test_post_merge_drift_applies_without_sync_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo, base = self._new_repo(Path(temporary), marker=f"{OLD_TARGET}\n".encode())
+            run_git(repo, "checkout", "-b", "upstream-branch")
+            target = self._commit_file(repo, "upstream.txt", "upstream\n", "upstream")
+            self._set_upstream(repo, target)
+            self._build_sync_merge(repo, base, target)
+            head = self._commit_post_merge(
+                repo,
+                lambda: (repo / "upstream.txt").write_text("rolled back\n", encoding="utf-8"),
+            )
+            result = self._run_check(repo, base=base, head=head)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("after the sync merge", result.stderr)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            repo, base = self._new_repo(
+                Path(temporary),
+                marker=f"{OLD_TARGET}\n".encode(),
+                overlay_policy="upstream.txt merge reviewed adaptation\n",
+            )
+            run_git(repo, "checkout", "-b", "upstream-branch")
+            target = self._commit_file(repo, "upstream.txt", "upstream\n", "upstream")
+
+            def resolve_adaptation() -> None:
+                (repo / "upstream.txt").write_text("fork adaptation\n", encoding="utf-8")
+                run_git(repo, "add", "upstream.txt")
+
+            self._set_upstream(repo, target)
+            self._build_sync_merge(repo, base, target, resolve=resolve_adaptation)
+            head = self._commit_post_merge(repo, lambda: (repo / "upstream.txt").unlink())
+            result = self._run_check(repo, base=base, head=head)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("after the sync merge", result.stderr)
+
+    def test_upstream_version_paths_allow_only_version_drift(self) -> None:
+        pyproject_base = b'[project]\nname = "ppt-master"\nversion = "1.2.3"\n'
+        lock_base = (
+            b'version = 1\n\n[[package]]\nname = "ppt-master"\nversion = "1.2.3"\n'
+            b'source = { virtual = "." }\n'
+        )
+        for name, path in (("pyproject", "pyproject.toml"), ("lock", "uv.lock")):
+            with self.subTest(path=name, outcome="version-only"), tempfile.TemporaryDirectory() as temporary:
+                repo, base = self._new_repo(
+                    Path(temporary),
+                    marker=f"{OLD_TARGET}\n".encode(),
+                    extra_files={path: pyproject_base if name == "pyproject" else lock_base},
+                )
+                run_git(repo, "checkout", "-b", "upstream-branch")
+                upstream_content = (
+                    pyproject_base.replace(b"1.2.3", b"2.0.0")
+                    if name == "pyproject"
+                    else lock_base.replace(b"1.2.3", b"2.0.0")
+                )
+                target = self._commit_file(
+                    repo, path, upstream_content.decode("utf-8"), "upstream version"
+                )
+                self._set_upstream(repo, target)
+                self._build_sync_merge(repo, base, target)
+                bumped = upstream_content.replace(b"2.0.0", b"2.0.1").decode("utf-8")
+                head = self._commit_post_merge(
+                    repo,
+                    lambda: (repo / path).write_text(bumped, encoding="utf-8"),
+                )
+                accepted = self._run_check(repo, base=base, head=head)
+                self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+            with self.subTest(path=name, outcome="extra-change"), tempfile.TemporaryDirectory() as temporary:
+                repo, base = self._new_repo(
+                    Path(temporary),
+                    marker=f"{OLD_TARGET}\n".encode(),
+                    extra_files={path: pyproject_base if name == "pyproject" else lock_base},
+                )
+                run_git(repo, "checkout", "-b", "upstream-branch")
+                upstream_content = (
+                    pyproject_base.replace(b"1.2.3", b"2.0.0")
+                    if name == "pyproject"
+                    else lock_base.replace(b"1.2.3", b"2.0.0")
+                )
+                target = self._commit_file(
+                    repo, path, upstream_content.decode("utf-8"), "upstream version"
+                )
+                self._set_upstream(repo, target)
+                self._build_sync_merge(repo, base, target)
+
+                def drift() -> None:
+                    mutated = upstream_content.replace(b"2.0.0", b"2.0.1")
+                    if name == "pyproject":
+                        mutated = mutated + b'description = "drift"\n'
+                    else:
+                        mutated = mutated + b'dependencies = []\n'
+                    (repo / path).write_text(mutated.decode("utf-8"), encoding="utf-8")
+
+                head = self._commit_post_merge(repo, drift)
+                result = self._run_check(repo, base=base, head=head)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("beyond", result.stderr)
+
     def test_missing_policy_on_non_bootstrap_merge_fails(self) -> None:
         module = load_helper_module()
         with tempfile.TemporaryDirectory() as temporary:
@@ -861,7 +1043,7 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
             self._set_upstream(repo, target)
             merge = self._build_sync_merge(repo, base, target)
             with self.assertRaisesRegex(module.CheckError, "overlay policy"):
-                module._policy_for_merge(repo, merge, target, merge)
+                module._policy_from_first_parent(repo, merge, base, target, merge)
 
     def test_bootstrap_policy_fallback_requires_the_exact_pair(self) -> None:
         module = load_helper_module()
@@ -885,14 +1067,14 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
             with mock.patch.object(module, "BOOTSTRAP_MERGE_SHA", merge), mock.patch.object(
                 module, "BOOTSTRAP_TARGET_SHA", target
             ), contextlib.redirect_stdout(output):
-                policy = module._policy_for_merge(repo, merge, target, fallback)
+                policy = module._policy_from_first_parent(repo, merge, base, target, fallback)
             self.assertEqual(policy, {})
             self.assertIn("bootstrap", output.getvalue())
             with mock.patch.object(module, "BOOTSTRAP_MERGE_SHA", merge), mock.patch.object(
                 module, "BOOTSTRAP_TARGET_SHA", OLD_TARGET
             ):
                 with self.assertRaisesRegex(module.CheckError, "overlay policy"):
-                    module._policy_for_merge(repo, merge, target, fallback)
+                    module._policy_from_first_parent(repo, merge, base, target, fallback)
 
     def test_real_bootstrap_repair_merge_uses_the_documented_fallback(self) -> None:
         module = load_helper_module()
@@ -904,11 +1086,15 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
             text=True,
             encoding="utf-8",
         ).stdout.strip()
+        _merge, first_parent = module._find_sync_merge(
+            ROOT, head, module.BOOTSTRAP_TARGET_SHA
+        )
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            policy = module._policy_for_merge(
+            policy = module._policy_from_first_parent(
                 ROOT,
                 module.BOOTSTRAP_MERGE_SHA,
+                first_parent,
                 module.BOOTSTRAP_TARGET_SHA,
                 head,
             )
