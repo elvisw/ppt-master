@@ -12,6 +12,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[4]
 WORKFLOW = ROOT / ".github" / "workflows" / "sync-upstream.yml"
+OPENCODE_WORKFLOW = ROOT / ".github" / "workflows" / "opencode.yml"
 HELPER = ROOT / ".github" / "scripts" / "check_upstream_ancestry.py"
 
 
@@ -92,6 +93,46 @@ class SyncUpstreamWorkflowContractTests(unittest.TestCase):
         self.assertIn("--expected-target-sha", verify["run"])
         self.assertIn("--require-version-bump", verify["run"])
         self.assertNotIn("candidate/.github/scripts", verify["run"])
+
+    def test_trusted_job_runs_base_candidate_gates_before_publication(self) -> None:
+        trusted = self._job("verify-and-open-pr")
+        materialize = self._step(trusted, "Materialize candidate as data")
+        self.assertIn("worktree add", materialize["run"])
+        self.assertIn("read-tree", materialize["run"])
+        checker = self._step(trusted, "Run trusted candidate structure gates")
+        self.assertIn(".github/scripts/check_sync_candidate.py", checker["run"])
+        self.assertIn("--candidate-root", checker["run"])
+        self.assertIn("--base-sha", checker["run"])
+        self.assertIn("--head-sha", checker["run"])
+        self.assertNotIn("candidate_root/.github/scripts", checker["run"])
+
+        tools = self._step(trusted, "Install trusted candidate gate tools")
+        self.assertIn("PyYAML==", tools["run"])
+        self.assertIn("ruff==", tools["run"])
+        syntax = self._step(trusted, "Run trusted syntax and F821 gates")
+        self.assertIn("python -I -m py_compile", syntax["run"])
+        self.assertIn("ruff check --isolated --select F821", syntax["run"])
+        self.assertIn("PYTHONPATH=", syntax["run"])
+        self.assertIn("confirm_ui/server.py", syntax["run"])
+
+    def test_candidate_gate_policy_is_directory_wide_and_includes_pull_workflow(self) -> None:
+        helper = HELPER.read_text(encoding="utf-8")
+        self.assertIn(".github/workflows/", helper)
+        self.assertIn(".github/pull.yml", helper)
+        self.assertIn("check_sync_candidate.py", helper)
+
+    def test_opencode_workflow_is_pinned_without_business_trigger_changes(self) -> None:
+        text = OPENCODE_WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a", text)
+        self.assertNotIn("anomalyco/opencode/github@latest", text)
+        self.assertIn("issue_comment:", text)
+        self.assertIn("pull_request_review_comment:", text)
+        data = yaml.safe_load(text)
+        jobs = data["jobs"]
+        self.assertEqual(
+            jobs["opencode"]["permissions"],
+            {"id-token": "write", "contents": "read"},
+        )
 
     def test_final_publication_pushes_verified_sha_to_unique_branch_and_creates_pr(self) -> None:
         trusted = self._job("verify-and-open-pr")

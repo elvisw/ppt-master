@@ -139,23 +139,43 @@ authoritative `verified_sha`。只有最后的 publication step 才注入 `PUSH_
 `elvisw/ppt-master` 指向 `main` 的 PR。main 前进、non-fast-forward、manifest/object/ref mismatch
 任一情况都 fail-closed，不 rebase、不 rewrite、不 force-push。
 
-### 4.4 Trusted-file policy
+### 4.4 Trusted candidate gates
 
-`.github/scripts/check_upstream_ancestry.py` 的 protected set 覆盖五个 sync/release workflow、
+trusted runner 在 base checkout 中以 `git worktree add --no-checkout` 加 `read-tree` 把 candidate
+materialize 到隔离临时目录，只当作数据读取。base 版本的 `check_sync_candidate.py` lstat
+关键文件、拒绝全部 symlink，并以 AST/text/digest 逻辑检查 root/Skill 的 `COMMANDS` 与 `ALIASES`
+映射、依赖与双 `uv.lock`、attribution frontmatter/marker/license digest/files、MANIFEST 与
+README/FAQ/roadmap/CONTRIBUTING/PyPI notices/sponsors、8 个 fork Python marker/import 合同和
+YAML 语法；它绝不 import 或执行 candidate 脚本。候选版本还由 base 的 `check_uvx_migration`
+逻辑读取检查，不能用 candidate 的同名 checker 替换。
+
+trusted job 安装固定的 PyYAML/Ruff gate tooling 后，只对明确 lstat 为 regular 的 8 个 fork
+Python 绝对路径执行 trusted `python -I -m py_compile` 与 `ruff check --isolated --select F821`，
+并清空 `PYTHONPATH`、使用 trusted cwd。所有结构、语法和 F821 gate 都在 PAT step 之前失败即止。
+
+### 4.5 Trusted-file policy
+
+`.github/scripts/check_upstream_ancestry.py` 的 protected set 覆盖整个 `.github/workflows/` 目录、
+`.github/pull.yml`、
 trusted helper、`.opencode/command/sync-upstream.md`、`check_cli_sync.py`、`check_deps_sync.py`、
 `check_uvx_migration.py`、`attribution_guard.py`、`auto_fix_uvx.py` 以及作为这些 gate executable
 specification 的 focused tests。普通 sync PR 修改任一文件都失败；维护这些文件必须走显式 trusted
 maintenance/bootstrap 流程。Python 同步策略按 hunk/contract 保留 fork marker/import，并合入
 其他上游功能和安全修复，不再使用“整文件零 diff” allowlist。
 
-### 4.5 Bootstrap boundary
+独立的 `.github/workflows/opencode.yml` 保持原有 issue/review-comment 触发和授权者 guard，
+但 action 固定为 `anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a`。
+其 checkout 只保留 `contents: read`；action 未显式 `use_github_token: true`，当前实现依赖
+OIDC，因此保留唯一必需的 `id-token: write`，删除 `contents/pull-requests/issues: write`。
+
+### 4.6 Bootstrap boundary
 
 首次把该 trusted workflow/helper 部署到 main 的 PR，其 base 可能尚无当前 gate，因此不能声称该
 PR 已被新 workflow 自身保护。Task 5A 的安全性由人工 diff 审查、独立 unit/YAML/CLI/deps/
 attribution 检查和真实临时 Git/artifact 沙盘证明。部署到 main 后，protected gate 文件只能通过
 trusted maintenance/bootstrap 流程修改。
 
-### 4.6 发布边界
+### 4.7 发布边界
 
 Task 5A 不修改 release workflows；现有 `check-uvx-migration`、`auto-tag` 和 `publish-pypi` 的
 ancestry/release owner 继续由 Task 2/5B 管理。同步 PR 进入 `main` 后才由既有发布链处理。

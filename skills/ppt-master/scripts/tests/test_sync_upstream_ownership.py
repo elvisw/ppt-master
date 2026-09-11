@@ -509,6 +509,14 @@ printf() {
         self.assertNotIn("零改动", self.command_text)
         self.assertNotIn("git push origin main", self.command_text)
 
+    def test_dangling_symlink_has_static_contract_and_unix_runner_path(self) -> None:
+        source = Path(__file__).read_text(encoding="utf-8")
+        self.assertIn("discover_bash", source)
+        self.assertIn("shutil.which(\"bash\")", source)
+        self.assertIn("marker.symlink_to(\"missing-target\")", source)
+        self.assertIn("symlink creation unavailable", source)
+        self.assertIn("[ -e .github/upstream-main.sha ] || [ -L .github/upstream-main.sha ]", self.command_text)
+
     @unittest.skipUnless(BASH_AVAILABLE, "Bash is required for the ownership sandbox")
     def test_dangling_marker_symlink_is_rejected_without_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

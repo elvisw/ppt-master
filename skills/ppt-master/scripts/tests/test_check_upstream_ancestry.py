@@ -113,6 +113,32 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("skipped", result.stdout)
 
+    def test_sync_mode_rejects_missing_marker_instead_of_ordinary_skip(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo, base = self._new_repo(Path(temporary))
+            head = self._commit_file(repo, "ordinary.txt", "ordinary\n", "ordinary change")
+            result = self._run_check(
+                repo,
+                base=base,
+                head=head,
+                expected_target="a" * 40,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn("skipped", result.stdout)
+
+    def test_sync_mode_rejects_unchanged_marker_instead_of_ordinary_skip(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo, base = self._new_repo(Path(temporary), marker=b"not a target\n")
+            head = self._commit_file(repo, "ordinary.txt", "ordinary\n", "ordinary change")
+            result = self._run_check(
+                repo,
+                base=base,
+                head=head,
+                require_version_bump=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn("unchanged", result.stdout)
+
     def test_added_empty_marker_fails_instead_of_skipping(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repo, base = self._new_repo(Path(temporary))
@@ -198,6 +224,7 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
     def test_candidate_changes_to_protected_gate_files_fail_closed(self) -> None:
         protected_files = (
             ".github/scripts/check_upstream_ancestry.py",
+            ".github/scripts/check_sync_candidate.py",
             ".github/workflows/sync-upstream.yml",
             ".github/workflows/check-upstream-ancestry.yml",
             ".github/workflows/check-uvx-migration.yml",
@@ -212,6 +239,7 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
             "skills/ppt-master/scripts/tests/test_check_upstream_ancestry.py",
             "skills/ppt-master/scripts/tests/test_sync_upstream_ownership.py",
             "skills/ppt-master/scripts/tests/test_sync_upstream_workflow.py",
+            ".github/pull.yml",
         )
         for relative in protected_files:
             with self.subTest(relative=relative):
@@ -228,6 +256,20 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
                     result = self._run_check(repo, base=base, head=head)
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn("protected", result.stderr)
+
+    def test_new_unlisted_workflow_is_protected_by_directory_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo, base = self._new_repo(Path(temporary))
+            relative = ".github/workflows/new-unlisted-gate.yml"
+            path = repo / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("name: tampered\n", encoding="utf-8")
+            run_git(repo, "add", relative)
+            run_git(repo, "commit", "-m", "add unlisted workflow")
+            head = git_output(repo, "rev-parse", "HEAD")
+            result = self._run_check(repo, base=base, head=head)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("protected", result.stderr)
 
     def test_changed_marker_requires_strict_two_parent_merge(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

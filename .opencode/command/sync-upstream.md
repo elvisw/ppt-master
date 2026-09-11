@@ -1477,7 +1477,7 @@ fi
 
 **schedule / workflow_dispatch 触发路径：** trusted runner 会创建同步 PR；合并后由现有发布门禁继续。查看 https://github.com/elvisw/ppt-master/actions
 
-**workflow_dispatch 路径：** 输出 "同步提交完成，workflow 将验证 ancestry 并自动 push，下游 CI 链自动触发。查看 https://github.com/elvisw/ppt-master/actions"
+**workflow_dispatch 路径：** 输出 "同步候选已提交，trusted workflow 将复核并创建同步 PR；不会直接 push main。查看 https://github.com/elvisw/ppt-master/actions"
 
 **本地流程：** 输出 Actions 页面 URL，提醒用户运行 `uvx ppt-master --version` 验证。
 

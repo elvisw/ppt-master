@@ -24,8 +24,10 @@ upstream  → https://github.com/hugohe3/ppt-master.git   (原作者)
 `sync-upstream.yml` 使用固定 `sync-upstream` concurrency group，`cancel-in-progress: false`。
 schedule 和 workflow_dispatch 共用相同的两 job 路径：
 
-1. `prepare-candidate` 只声明 `contents: read`，以 `${{ github.sha }}` 完整检出并验证 immutable
-   base；workflow_dispatch 非 `refs/heads/main` 时 fail-closed。
+1. `prepare-candidate` 只声明 `contents: read`，以 canonical public URL 无凭据完整 fetch（等价
+   `fetch-depth: 0`）并以 `${{ github.sha }}` detached 检出 immutable base；workflow_dispatch 非
+   `refs/heads/main` 时 fail-closed。trusted job 使用同一无凭据 checkout 语义，避免 required token
+   的 `actions/checkout` 重新引入 authenticated checkout。
 2. 该 job 明确 fetch canonical `upstream/main`；fetch 失败不使用 stale ref。无变化时模型、artifact、
    trusted job、分支和 PR 全部跳过。
 3. 有变化时只执行一次固定 `opencode-ai@1.18.30`。模型只获得 API key、模型名、immutable target
@@ -33,16 +35,24 @@ schedule 和 workflow_dispatch 共用相同的两 job 路径：
    `id-token: write`，也不能 push 或创建 PR。
 4. 模型提交后只上传 `candidate.bundle` 与严格三字段 `manifest.json`；不上传 worktree 或 `.git/config`。
 5. `verify-and-open-pr` 在 fresh runner 上从 base SHA 检出 trusted helper，只将 bundle/manifest 当作
-   不可信 Git object data。它不 checkout 或执行 candidate 文件、hook、workflow、配置、action 或进程。
-6. trusted helper 重新验证 manifest key/SHA、bundle ref tip、base/target/candidate object、marker、
+   不可信 Git object data；candidate 只被 materialize 到隔离 worktree 作为数据，不执行 candidate
+   文件、hook、workflow、配置、action 或进程。
+6. base 版本 `check_sync_candidate.py` 重新验证 CLI `COMMANDS`/`ALIASES`、依赖与 locks、attribution
+   frontmatter/digest/files、manifest/notices/sponsors、YAML、uvx diff 和 8 个 fork marker/import；
+   trusted `python -I -m py_compile` 与 `ruff --isolated --select F821` 只检查明确 regular 文件。
+   ancestry helper 另外验证 manifest key/SHA、bundle ref tip、base/target/candidate object、marker、
    upstream ancestry、唯一严格双父 merge、版本 bump 和 protected gate policy。
 7. 最终 publication step 才注入 `PUSH_PAT`，使用 null global/system Git config 和 disabled hooks，
    将明确 verified SHA 推到 `opencode/sync-<run-id>-<attempt>`，再创建 `elvisw/ppt-master` → `main` PR。
    绝不推送 `main`；main 前进、non-fast-forward 或任意 artifact mismatch 都 fail-closed。
 
-普通 PR 不得修改 protected workflow/helper/command/gate/test 文件；这些文件必须通过显式 trusted
+普通 PR 不得修改整个 `.github/workflows/**`、`.github/pull.yml`、protected helper/command/gate/test 文件；这些文件必须通过显式 trusted
 maintenance/bootstrap 流程维护。首次部署该 gate 的 PR 可能没有被 base 自身保护，必须依靠人工审查、
 独立测试和真实 Git/artifact 沙盘证明，不能声称新 gate 已保护它。
+
+独立 `opencode.yml` 保持原有触发和授权者 guard，action 固定为
+`anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a`；只保留 checkout 所需
+`contents: read` 与 OIDC 所需 `id-token: write`，不把它混入同步模型 job。
 
 ---
 
@@ -125,7 +135,7 @@ Gate 6: wheel attribution 文件完整
 
 ### 核心原则
 
-**保留 fork 的 uvx 适配，合入上游的新功能。`skills/ppt-master/scripts/*.py` 除 `attribution_guard.py` 与 `register_template.py` 外零改动。**
+**保留 fork 的 uvx 适配，按 hunk 和契约保留 fork 标记/import，并合入上游的新功能与安全修复；不使用整文件零改动规则。**
 
 | 冲突类型 | 解决策略 |
 |----------|----------|
@@ -135,7 +145,7 @@ Gate 6: wheel attribution 文件完整
 | `pyproject.toml` | 保留 fork 结构（version, tool.uv, tool.setuptools），只同步依赖 |
 | `README.md` / `README_CN.md` | 接受上游内容后，在语言切换行与赞助商 `<details>` 块之间重新插入 fork 声明块（`Fork notice` / `Fork 声明`），声明赞助商与捐赠信息属于原作者、与本 fork 无关 |
 | `update_repo.py` | 保留 fork 的 uv 功能，合入上游改进 |
-| `skills/ppt-master/scripts/*.py` | **零改动** —— docstring 中 `python3` 残留已知且可接受 |
+| `skills/ppt-master/scripts/*.py` | 按 hunk/contract 审查：保留 fork marker/import，合入其他上游功能与安全修复；用聚焦测试和 F821 验证 |
 | `attribution_guard.py` | **保留 fork 的 `_SKILL_GATE_MARKER`（`uvx ppt-master attribution-guard`）**；合入上游其他改动；合并后必须运行 guard 验证（exit 0） |
 | `register_template.py` | **保留 fork 的 `PPT_MASTER_TEMPLATES_DIR` 库根解析**（env > cwd 检出 > wheel 内置）；合入上游其他改动。uvx wheel 缓存只读，注册必须落到可写检出目录 |
 

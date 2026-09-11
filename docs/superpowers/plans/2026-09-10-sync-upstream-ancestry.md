@@ -6,7 +6,12 @@
 
 **Architecture:** `.github/workflows/sync-upstream.yml` 将同步拆成只读 `prepare-candidate` 和新 runner 上的 `verify-and-open-pr` 两个 job。准备 job 只运行固定 `opencode-ai@1.18.30`，验证 immutable base/target 后只上传 Git bundle 与三 SHA manifest；trusted job 只执行 base checkout 中的 helper，验证对象、祖先关系、protected gate 文件、版本形状和 main tip，最后一步才用 PAT 将明确 SHA 推到唯一分支并创建 PR。`.opencode/command/sync-upstream.md` 仍是模型提交关系程序的唯一所有者。
 
-**Tech Stack:** Git、GitHub Actions YAML、POSIX shell、pinned OpenCode CLI、GitHub CLI、Python 3.12 + PyYAML（仅做 YAML 语法验证）。
+Task 5A reviewer 修复后的 trusted contract 还保护整个 `.github/workflows/**`、`.github/pull.yml` 和
+所有 gate/helper/command 文件；`.github/workflows/opencode.yml` 保持触发语义，固定到
+`anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a`，只保留 checkout 所需
+`contents: read` 与 action OIDC 所需的 `id-token: write`。
+
+**Tech Stack:** Git、GitHub Actions YAML、POSIX shell、pinned OpenCode CLI、GitHub CLI、Python 3.12 + pinned PyYAML/Ruff（只由 trusted runner 用于 candidate data gates）。
 
 ## Global Constraints
 
@@ -78,6 +83,13 @@ Task 5A 的最终架构覆盖下方早期 Task 1–2 记录中的旧单 job 发�
 - 仅在 `has_changes == true` 时运行，使用新 runner，并只声明 `contents: read` 与 artifact download 所需的 `actions: read`。
 - 从 base SHA 做无凭据 trusted checkout；下载的 bundle 和 manifest 只作为不可信 Git object data，
   绝不 checkout、import、执行 candidate 文件、hook、workflow 或 action。
+- 将 candidate 以 `git worktree add --no-checkout` + `read-tree` materialize 到隔离临时目录，
+  只作为数据交给 base 版本 `check_sync_candidate.py`：lstat regular files，拒绝 symlink，
+  AST/text/digest 检查 CLI `COMMANDS`/`ALIASES`、deps/locks、attribution、manifest/notices、
+  YAML、8 个 fork marker/import 和 trusted uvx diff；candidate 同名 checker 永不执行。
+- trusted tool step 固定安装 PyYAML/Ruff；随后只对 8 个明确 regular absolute Python 文件执行
+  `PYTHONPATH= python -I -m py_compile` 与 `PYTHONPATH= ruff check --isolated --select F821`，
+  全部 gate 在 PAT step 前完成。
 - 由 base helper 严格拒绝额外/缺失 manifest key、非法或不匹配 SHA、缺失 base/target/candidate object、candidate tip mismatch、protected gate diff、非严格 parent order、marker symlink 和版本形状错误。
 - 复核 canonical upstream 和 `origin/main == base_sha`；发布前立即重新读取 candidate ref，要求等于 authoritative `verified_sha`。
 - 只有最后的 publication step 获得 `PUSH_PAT`。该 step 使用 `GIT_CONFIG_GLOBAL=/dev/null`、`GIT_CONFIG_SYSTEM=/dev/null`、`core.hooksPath=/dev/null`，推明确 verified SHA 到唯一 sync branch，再用相同 PAT 创建 `elvisw/ppt-master` → `main` PR。

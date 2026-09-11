@@ -33,6 +33,8 @@ MARKER_CONTENT_RE = re.compile(rb"^[0-9a-f]{40}\n$")
 PROTECTED_PATHS = frozenset(
     {
         ".github/scripts/check_upstream_ancestry.py",
+        ".github/scripts/check_sync_candidate.py",
+        ".github/pull.yml",
         ".github/workflows/sync-upstream.yml",
         ".github/workflows/check-upstream-ancestry.yml",
         ".github/workflows/check-uvx-migration.yml",
@@ -49,6 +51,7 @@ PROTECTED_PATHS = frozenset(
         "skills/ppt-master/scripts/tests/test_sync_upstream_workflow.py",
     }
 )
+PROTECTED_PATHSPECS = (".github/workflows/**",)
 MANIFEST_KEYS = frozenset({"base_sha", "target_sha", "verified_sha"})
 VERSION_RE = re.compile(rb"(?m)^[ \t]*version[ \t]*=[ \t]*[\"'](\d+)\.(\d+)\.(\d+)[\"'][ \t]*$")
 
@@ -245,10 +248,12 @@ def _assert_no_protected_changes(repo: Path, base_sha: str, head_sha: str) -> No
     result = _run_git(
         repo,
         "diff",
+        "--no-renames",
         "--name-only",
         f"{base_sha}..{head_sha}",
         "--",
         *sorted(PROTECTED_PATHS),
+        *PROTECTED_PATHSPECS,
     )
     if result.returncode != 0:
         raise CheckError("Unable to inspect protected CI files in the PR diff")
@@ -294,7 +299,10 @@ def verify_pull_request(
     base_entry = _read_tree_entry(repo, base_sha, "base")
     head_entry = _read_tree_entry(repo, head_sha, "head")
 
+    sync_mode = expected_target_sha is not None or require_version_bump
     if base_entry is None and head_entry is None:
+        if sync_mode:
+            raise CheckError("The sync candidate marker is missing at both ends")
         return "Recorded upstream marker absent at both ends; ordinary PR skipped"
     if base_entry is not None:
         _require_regular_blob(base_entry, "base")
@@ -303,6 +311,8 @@ def verify_pull_request(
     _require_regular_blob(head_entry, "head")
 
     if base_entry is not None and base_entry.object_name == head_entry.object_name:
+        if sync_mode:
+            raise CheckError("The sync candidate marker is unchanged")
         return "Recorded upstream marker unchanged; ordinary PR skipped"
 
     target = _read_marker(repo, head_sha, "head")
