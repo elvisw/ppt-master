@@ -227,7 +227,15 @@ wheel 静态检查要求 metadata 精确位于 `ppt_master-{version}.dist-info/M
 `globals`/`locals`/`setattr` 动态逃逸，scanner 复用同一个 trusted parser。repository scanner 的
 legacy grammar 覆盖 `python.exe`/`python3.12`/`python ./scripts` 与 `uv run` 中间 flags，扫描根
 包含 `.claude-plugin/` 与 `projects/`。release gate、candidate 与 migration checker 的全部
-`text=True` Git/subprocess 调用显式使用 `encoding="utf-8", errors="replace"`。
+`text=True` Git/subprocess 调用显式使用 `encoding="utf-8", errors="replace"`。所有 privileged
+workflow 的 workflow/job key 另以白名单钉死：workflow 层拒绝 env/defaults/container/services，
+job 层禁止任何未批准的 `env`（含 BASH_ENV）、`defaults`、`container`、`services` 和多余 `if`；
+auto-tag 的唯一 job 必须保持 exact condition 与 runner/timeout。publish 的 build-and-gate 与
+verify-artifact 也改为完整 step inventory + exact run/with/env 合同，因此无凭据的构建与静态验证
+job 也自证只执行 approved 步骤。Core Metadata 字段名还必须满足 `field == field.strip()`，
+colon 前不得出现 space/tab。CLI parser 除 Store 绑定与动态逃逸外，还拒绝把 COMMANDS/ALIASES
+作为任意未批准 Call 的 positional/keyword 参数，拒绝 `getattr`/`operator.setitem`/
+`builtins.__dict__[...]` 等间接调用，同时仍允许 `sorted(COMMANDS)`、`.get()`、`.keys()` 等只读读取。
 
 `publish-pypi` 的 tag push 与 manual recovery 都必须提供/推导相同的 release SHA/tag，精确
 fetch tag ref，确认 tag 指向 SHA 且 SHA 在 `origin/main` 历史中，再查询同一成功 migration run

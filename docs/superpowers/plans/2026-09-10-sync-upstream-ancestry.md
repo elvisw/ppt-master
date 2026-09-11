@@ -1096,3 +1096,43 @@ Task 5A 隔离、concurrency、uv pin/checksum 或上游 out-of-scope residual�
 
 维护者确认：发布 exact successful immutable SHA；验证后 main 普通前进不改变已发布产物，
 并触发独立新 run；不再要求不可能的原子 latest-tip 相等。brief/plan/design/report 已统一。
+
+---
+
+## Task 5B Approved 后尾项：M1–M4 环境与参数逃逸收口（实现记录）
+
+在 Approved 判定后的维护轮，对三个 privileged workflow 的 job 信封、publish build/verify
+step 合同、CLI Call 参数与 Core Metadata 字段名做最后收口；不改变已批准语义。
+
+### M1：workflow/job key 白名单
+
+- 每个 privileged workflow 的顶层 key 只允许 `name/on/permissions/concurrency/jobs`；workflow 层
+  显式拒绝 `env`（含 `BASH_ENV`）、`defaults`、`container`、`services`。
+- 每个 job 使用 key 白名单与 exact 值：auto-tag 唯一 job 保留 exact condition、`ubuntu-latest`
+  与 30 分钟 timeout；migration job 只允许 `runs-on/steps`；publish 三个 job 分别固定
+  runner/timeout/needs/outputs/environment。未批准的 job-level `env`/`defaults`/`container`/
+  `services` 与多余 `if` 一律 fail-closed。
+- 探针：migration 的 BASH_ENV/defaults/`if: false`，auto-tag 的 BASH_ENV 与条件改写，
+  publish 的 container/services/workflow-level env 都拒绝。
+
+### M4：publish build-and-gate 与 verify-artifact exact step 合同
+
+- 两个 job 的 step 数量、名称、顺序、key 集合、`uses`/`with`/`env`、run 模板和 step id 全部
+  exact；额外/重排/rename/`with`/env/run 变形都失败，无凭据 job 也自证只执行 approved 步骤。
+
+### M2：CLI Call 参数与间接调用
+
+- `parse_literal_mapping` 拒绝把 COMMANDS/ALIASES 作为未批准 Call 的 positional/keyword/
+  `*args`/`**kwargs` 参数，拒绝 `getattr`、`operator.setitem`、`builtins.__dict__[...]` 等间接
+  调用与 subscript callable；只读白名单（`sorted`/`len`/`.get()`/`.keys()` 等）不误杀。
+- 探针：`unknown_helper(COMMANDS)`、`dict.update(COMMANDS)`、`operator.setitem`、`getattr exec`、
+  `builtins.__dict__['exec']`；正例覆盖 `sorted(COMMANDS)` 与 `.get()` 读取。
+
+### M3：Core Metadata 字段名空白
+
+- 字段名必须满足 `field == field.strip()`，colon 前不得有 space/tab；wheel 与 sdist 测试都覆盖
+  `Name :`/`Name\t:` 形态。
+
+### 验证
+
+第二轮全量记录见 `.superpowers/sdd/sync-upstream-task-5b-report.md` 的 M1–M4 章节。
