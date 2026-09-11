@@ -82,6 +82,12 @@ PRIVILEGED_WORKFLOWS = (
     ".github/workflows/check-uvx-migration.yml",
     ".github/workflows/publish-pypi.yml",
 )
+ADDITIONAL_PINNED_WORKFLOWS = (
+    ".github/workflows/sync-upstream.yml",
+    ".github/workflows/check-upstream-ancestry.yml",
+    ".github/workflows/opencode.yml",
+)
+OVERLAY_POLICY_PATH = ".github/upstream-overlay-paths.txt"
 FORK_PYTHON_FILES = (
     "skills/ppt-master/scripts/confirm_ui/server.py",
     "skills/ppt-master/scripts/svg_editor/server.py",
@@ -111,13 +117,14 @@ WHEEL_ATTRIBUTION_LOCATIONS = {
     for basename in WHEEL_ATTRIBUTION_BASENAMES
 }
 ACTION_LINE_RE = re.compile(
-    r"^\s*(?:-\s*)?uses:\s*(?P<action>[^\s#]+)@(?P<sha>[^\s#]+)\s+#\s*(?P<release>v[^\s]+)\s*$"
+    r"^\s*(?:-\s*)?uses:\s*(?P<action>[^\s#]+)@(?P<sha>[^\s#]+)\s+#\s*(?P<release>\S+)\s*$"
 )
 EXPECTED_ACTION_PINS = {
     "actions/checkout": ("3d3c42e5aac5ba805825da76410c181273ba90b1", "v7.0.1"),
     "astral-sh/setup-uv": ("c771a70e6277c0a99b617c7a806ffedaca235ff9", "v9.0.0"),
     "actions/upload-artifact": ("043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", "v7.0.1"),
     "actions/download-artifact": ("3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", "v8.0.1"),
+    "anomalyco/opencode/github": ("77fc88c8ade8e5a620ebbe1197f3a572d29ae91a", "github-v1.2.19"),
 }
 AUTO_TAG_PERMISSIONS = {"contents": "read", "actions": "read"}
 MIGRATION_PERMISSIONS = {"contents": "read"}
@@ -1371,6 +1378,11 @@ def _check_workflow_policy(repo: Path) -> None:
         workflow = _load_workflow(path)
         _require_workflow_envelope(workflow, relative)
         data[relative] = workflow
+    for relative in ADDITIONAL_PINNED_WORKFLOWS:
+        path = repo / relative
+        if path.is_symlink() or not path.is_file():
+            raise ReleaseGateError(f"Pinned workflow is unavailable: {relative}")
+        _check_action_pins(path)
     approved_push_counts = {
         ".github/workflows/auto-tag.yml": 1,
         ".github/workflows/check-uvx-migration.yml": 0,
@@ -1861,6 +1873,7 @@ def run_release_gates(
     _verify_origin_main(repo, release_sha, origin_ref, require_origin_main_tip)
 
     ancestry = _load_trusted_module(repo, ".github/scripts/check_upstream_ancestry.py", "trusted_release_ancestry")
+    ancestry.verify_overlay_policy(repo, release_sha)
     ancestry.verify_head_commit(repo, release_sha, upstream_ref)
 
     cli = _load_trusted_module(repo, "skills/ppt-master/scripts/check_cli_sync.py", "trusted_release_cli")
@@ -2338,7 +2351,20 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _configure_utf8_stdio() -> None:
+    """Use UTF-8 replacement streams so Windows legacy consoles cannot crash the gate."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            continue
+
+
 def main(argv: list[str] | None = None) -> int:
+    _configure_utf8_stdio()
     args = build_parser().parse_args(argv)
     try:
         _validate_trusted_script_directory(Path(args.repo))

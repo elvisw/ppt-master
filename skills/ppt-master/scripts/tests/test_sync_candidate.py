@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -43,7 +44,7 @@ class TrustedCandidateCheckerTests(unittest.TestCase):
         head_sha = run_git(ROOT, "rev-parse", "HEAD").stdout.strip()
         return subprocess.run(
             [
-                "python",
+                sys.executable,
                 str(CHECKER),
                 "--repo",
                 str(ROOT),
@@ -105,6 +106,23 @@ class TrustedCandidateCheckerTests(unittest.TestCase):
             module._run_git_text(ROOT, "status")
         self.assertEqual(mocked.call_args.kwargs.get("encoding"), "utf-8")
         self.assertEqual(mocked.call_args.kwargs.get("errors"), "replace")
+
+
+    def test_candidate_overlay_policy_change_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            candidate_root = Path(temporary) / "candidate"
+            self._materialize_candidate(ROOT, candidate_root)
+            try:
+                policy = candidate_root / ".github" / "upstream-overlay-paths.txt"
+                policy.write_text(
+                    policy.read_text(encoding="utf-8") + "injected.txt merge unauthorized\n",
+                    encoding="utf-8",
+                )
+                result = self._run_checker(candidate_root)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("overlay", result.stderr)
+            finally:
+                run_git(ROOT, "worktree", "remove", "--force", str(candidate_root), check=False)
 
 
 if __name__ == "__main__":

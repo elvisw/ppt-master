@@ -4,6 +4,7 @@ import hashlib
 import io
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -177,7 +178,7 @@ class ReleaseGateHelperTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             repo = Path(temporary) / "repo"
             (repo / ".github" / "workflows").mkdir(parents=True)
-            for relative in self.module.PRIVILEGED_WORKFLOWS:
+            for relative in (*self.module.PRIVILEGED_WORKFLOWS, *self.module.ADDITIONAL_PINNED_WORKFLOWS):
                 source = ROOT / relative
                 destination = repo / relative
                 destination.parent.mkdir(parents=True, exist_ok=True)
@@ -214,7 +215,7 @@ class ReleaseGateHelperTests(unittest.TestCase):
             with self.subTest(replacement=replacement), tempfile.TemporaryDirectory() as temporary:
                 repo = Path(temporary) / "repo"
                 (repo / ".github" / "workflows").mkdir(parents=True)
-                for relative in self.module.PRIVILEGED_WORKFLOWS:
+                for relative in (*self.module.PRIVILEGED_WORKFLOWS, *self.module.ADDITIONAL_PINNED_WORKFLOWS):
                     destination = repo / relative
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copyfile(ROOT / relative, destination)
@@ -290,7 +291,7 @@ class ReleaseGateHelperTests(unittest.TestCase):
             with self.subTest(replacement=replacement), tempfile.TemporaryDirectory() as temporary:
                 repo = Path(temporary) / "repo"
                 (repo / ".github" / "workflows").mkdir(parents=True)
-                for relative in self.module.PRIVILEGED_WORKFLOWS:
+                for relative in (*self.module.PRIVILEGED_WORKFLOWS, *self.module.ADDITIONAL_PINNED_WORKFLOWS):
                     destination = repo / relative
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copyfile(ROOT / relative, destination)
@@ -881,6 +882,97 @@ class ReleaseGateHelperTests(unittest.TestCase):
             migration.is_merge_commit("a" * 40)
         self.assertEqual(mocked.call_args.kwargs.get("encoding"), "utf-8")
         self.assertEqual(mocked.call_args.kwargs.get("errors"), "replace")
+
+
+    def test_additional_trusted_workflows_pin_every_privileged_action(self) -> None:
+        expected_lines = {
+            ".github/workflows/sync-upstream.yml": (
+                "uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1",
+                "uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1",
+            ),
+            ".github/workflows/check-upstream-ancestry.yml": (
+                "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
+            ),
+            ".github/workflows/opencode.yml": (
+                "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
+                "uses: anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a # github-v1.2.19",
+            ),
+        }
+        for relative, lines in expected_lines.items():
+            with self.subTest(relative=relative):
+                text = (ROOT / relative).read_text(encoding="utf-8")
+                for line in lines:
+                    self.assertIn(line, text)
+                self.module._check_action_pins(ROOT / relative)
+
+    def test_pinned_workflow_pin_mutations_fail_policy(self) -> None:
+        mutations = (
+            (
+                ".github/workflows/opencode.yml",
+                "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
+                "actions/checkout@v6",
+            ),
+            (
+                ".github/workflows/sync-upstream.yml",
+                "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1",
+                "actions/upload-artifact@v4",
+            ),
+            (
+                ".github/workflows/check-upstream-ancestry.yml",
+                "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
+                "actions/checkout@v4",
+            ),
+        )
+        for relative, original, replacement in mutations:
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as temporary:
+                repo = Path(temporary) / "repo"
+                (repo / ".github" / "workflows").mkdir(parents=True)
+                for workflow in (*self.module.PRIVILEGED_WORKFLOWS, *self.module.ADDITIONAL_PINNED_WORKFLOWS):
+                    destination = repo / workflow
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(ROOT / workflow, destination)
+                target = repo / relative
+                target.write_text(
+                    target.read_text(encoding="utf-8").replace(original, replacement, 1),
+                    encoding="utf-8",
+                )
+                with self.assertRaises(self.module.ReleaseGateError):
+                    self.module._check_workflow_policy(repo)
+
+    def test_entry_reconfigures_utf8_replacement_streams(self) -> None:
+        class FakeStream:
+            def __init__(self) -> None:
+                self.kwargs: dict[str, str] | None = None
+
+            def reconfigure(self, **kwargs: str) -> None:
+                self.kwargs = kwargs
+
+        stdout = FakeStream()
+        stderr = FakeStream()
+        with mock.patch.object(self.module.sys, "stdout", stdout), mock.patch.object(
+            self.module.sys, "stderr", stderr
+        ):
+            self.module._configure_utf8_stdio()
+        self.assertEqual(stdout.kwargs, {"encoding": "utf-8", "errors": "replace"})
+        self.assertEqual(stderr.kwargs, {"encoding": "utf-8", "errors": "replace"})
+
+    def test_entry_tolerates_streams_without_reconfigure(self) -> None:
+        with mock.patch.object(self.module.sys, "stdout", object()), mock.patch.object(
+            self.module.sys, "stderr", object()
+        ):
+            self.module._configure_utf8_stdio()
+
+    def test_gbk_console_cannot_break_gate_output(self) -> None:
+        script = (
+            "import importlib.util,sys; "
+            f"spec=importlib.util.spec_from_file_location('g', r'{SCRIPT}'); "
+            "m=importlib.util.module_from_spec(spec); sys.modules['g']=m; spec.loader.exec_module(m); "
+            "m._configure_utf8_stdio(); print('\\u2713 gate ok')"
+        )
+        env = dict(os.environ, PYTHONIOENCODING="gbk")
+        result = subprocess.run([sys.executable, "-c", script], capture_output=True, env=env, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", errors="replace"))
+        self.assertIn(b"gate ok", result.stdout)
 
 
 if __name__ == "__main__":

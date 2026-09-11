@@ -1,0 +1,47 @@
+# Reviewed exact overlay policy for upstream sync content verification.
+#
+# Owner: .github/scripts/check_upstream_ancestry.py (the single content-boundary
+# owner used by the trusted PR helper, both sync jobs, the main gate, and the
+# release chain).  This file is protected: sync PRs may not change it; updates
+# require the trusted maintenance/bootstrap flow.
+#
+# Format: one exact repository-relative file path per line, followed by a mode
+# and a reason:
+#
+#   <path> <mode> <reason...>
+#
+# Modes:
+#   merge        upstream changed this path; the sync merge must contain a
+#                resolution that differs from the fork first parent
+#   retain-base  the fork intentionally keeps first-parent content even though
+#                upstream changed the path; the reason must justify it
+#
+# Paths must be exact files: no directories, globs, duplicates, or "..".
+# Entries apply only when the path is part of the current upstream diff; paths
+# not touched by upstream are ignored.  Broad directory allowances are not
+# permitted.  This list was generated from the 09ad58f0 sync merge
+# (1fcf7154) and reviewed per path.
+skills/ppt-master/SKILL.md merge fork uvx command and marker adaptation resolved during the 09ad58f0 sync merge
+skills/ppt-master/references/animations.md merge upstream reference update merged with fork uvx command adaptations
+skills/ppt-master/references/executor-base.md merge upstream reference update merged with fork uvx command adaptations
+skills/ppt-master/references/image-generator.md merge upstream reference update merged with fork uvx command adaptations
+skills/ppt-master/references/native-data-interface.md retain-base upstream change only reverts the uvx command to python3; fork keeps the uvx mapping
+skills/ppt-master/references/native-shape-authoring.md merge upstream reference update merged with fork uvx command adaptations
+skills/ppt-master/references/plan-core.md merge upstream reference update merged with fork uvx command adaptations
+skills/ppt-master/references/shared-standards-core.md merge upstream reference update merged with fork uvx command adaptations
+skills/ppt-master/references/strategist.md merge upstream reference update merged with fork uvx command adaptations
+skills/ppt-master/scripts/confirm_ui/server.py merge upstream server update merged with fork launch-token and project-key markers
+skills/ppt-master/scripts/docs/conversion.md merge upstream script documentation update merged with fork uvx command adaptations
+skills/ppt-master/scripts/docs/image.md merge upstream script documentation update merged with fork uvx command adaptations
+skills/ppt-master/scripts/docs/narration.md merge upstream script documentation update merged with fork uvx command adaptations
+skills/ppt-master/scripts/docs/svg-pipeline.md merge upstream script documentation update merged with fork uvx command adaptations
+skills/ppt-master/scripts/image_gen.py merge upstream script update merged with fork uvx and backend adaptations
+skills/ppt-master/scripts/source_to_md/web_to_md.py merge upstream script update merged with fork security adaptations
+skills/ppt-master/scripts/svg_editor/server.py merge upstream server update merged with fork launch-token and project-key markers
+skills/ppt-master/scripts/svg_finalize/flatten_tspan.py merge upstream script update merged with fork uvx invocation context
+skills/ppt-master/scripts/svg_position_calculator.py merge upstream script update merged with fork uvx invocation context
+skills/ppt-master/workflows/generate-pptx.md merge upstream workflow update merged with fork uvx command adaptations
+skills/ppt-master/workflows/stages/apply-template-workspace.md retain-base upstream change only reverts uvx commands to python3; fork keeps the uvx mappings
+skills/ppt-master/workflows/stages/customize-animations.md retain-base upstream change only reverts uvx commands to python3; fork keeps the uvx mappings
+skills/ppt-master/workflows/stages/topic-research.md merge upstream workflow update merged with fork uvx command adaptations
+skills/ppt-master/workflows/stages/verify-charts.md merge upstream workflow update merged with fork uvx command adaptations

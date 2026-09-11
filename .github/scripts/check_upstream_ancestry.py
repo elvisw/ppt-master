@@ -36,6 +36,7 @@ PROTECTED_PATHS = frozenset(
         ".github/scripts/check_sync_candidate.py",
         ".github/scripts/check_release_gates.py",
         ".github/scripts/yaml.py",
+        ".github/upstream-overlay-paths.txt",
         ".github/pull.yml",
         ".github/workflows/sync-upstream.yml",
         ".github/workflows/check-upstream-ancestry.yml",
@@ -63,6 +64,8 @@ PROTECTED_PATHS = frozenset(
         "skills/ppt-master/scripts/tests/test_sync_upstream_workflow.py",
     }
 )
+OVERLAY_POLICY_FILE = ".github/upstream-overlay-paths.txt"
+OVERLAY_MODES = frozenset({"merge", "retain-base"})
 PROTECTED_PATHSPECS = (".github/scripts/**", ".github/workflows/**")
 MANIFEST_KEYS = frozenset({"base_sha", "target_sha", "verified_sha"})
 VERSION_RE = re.compile(rb"(?m)^[ \t]*version[ \t]*=[ \t]*[\"'](\d+)\.(\d+)\.(\d+)[\"'][ \t]*$")
@@ -188,8 +191,9 @@ def _require_commit(repo: Path, value: str, label: str) -> None:
         raise CheckError(f"{label} commit object is unavailable")
 
 
-def _read_tree_entry(repo: Path, commit_sha: str, label: str) -> TreeEntry | None:
-    result = _run_git(repo, "ls-tree", "-z", "--full-tree", commit_sha, "--", TARGET_FILE)
+def _read_path_entry(repo: Path, commit_sha: str, path: str, label: str) -> TreeEntry | None:
+    """Read one exact tree entry from a commit object, or None when absent."""
+    result = _run_git(repo, "ls-tree", "-z", "--full-tree", commit_sha, "--", path)
     if result.returncode != 0:
         raise CheckError(f"Unable to inspect the {label} commit object")
 
@@ -197,17 +201,74 @@ def _read_tree_entry(repo: Path, commit_sha: str, label: str) -> TreeEntry | Non
     if not records:
         return None
     if len(records) != 1:
-        raise CheckError(f"The {label} marker path is ambiguous in the commit object")
+        raise CheckError(f"The {label} path is ambiguous in the commit object")
 
     try:
-        metadata, path = records[0].split(b"\t", 1)
+        metadata, record_path = records[0].split(b"\t", 1)
         mode, object_type, object_name = metadata.decode("ascii").split()
-        path_text = path.decode("utf-8")
+        path_text = record_path.decode("utf-8")
     except (UnicodeDecodeError, ValueError) as exc:
-        raise CheckError(f"The {label} marker tree entry is malformed") from exc
-    if path_text != TARGET_FILE:
-        raise CheckError(f"The {label} marker tree entry is malformed")
+        raise CheckError(f"The {label} tree entry is malformed") from exc
+    if path_text != path:
+        raise CheckError(f"The {label} tree entry is malformed")
     return TreeEntry(mode, object_type, object_name)
+
+
+def _read_tree_entry(repo: Path, commit_sha: str, label: str) -> TreeEntry | None:
+    return _read_path_entry(repo, commit_sha, TARGET_FILE, label)
+
+
+def parse_overlay_policy(text: str) -> dict[str, str]:
+    """Parse the reviewed exact overlay policy for upstream sync content."""
+    policy: dict[str, str] = {}
+    for number, raw_line in enumerate(text.splitlines(), 1):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        fields = line.split(None, 2)
+        if len(fields) != 3:
+            raise CheckError(
+                f"The overlay policy line {number} must contain an exact path, mode, and reason"
+            )
+        path, mode, reason = fields
+        if mode not in OVERLAY_MODES:
+            raise CheckError(f"The overlay policy mode on line {number} is not approved")
+        if (
+            not path
+            or path.startswith("/")
+            or path.startswith("./")
+            or path.endswith("/")
+            or "\\" in path
+            or any(character in path for character in "*?[]")
+            or ".." in Path(path).parts
+            or not reason.strip()
+        ):
+            raise CheckError(f"The overlay policy entry on line {number} is not an exact file path")
+        if path in policy:
+            raise CheckError(f"The overlay policy path on line {number} is duplicated")
+        policy[path] = mode
+    return policy
+
+
+def verify_overlay_policy(repo: Path, commit_sha: str) -> dict[str, str]:
+    """Require the protected overlay policy at one commit object and parse it."""
+    _require_commit(repo, commit_sha, "overlay policy")
+    entry = _read_path_entry(repo, commit_sha, OVERLAY_POLICY_FILE, "overlay policy")
+    if entry is None:
+        raise CheckError("The protected upstream overlay policy is missing")
+    _require_regular_blob(entry, "overlay policy")
+    result = _run_git(repo, "show", f"{commit_sha}:{OVERLAY_POLICY_FILE}")
+    if result.returncode != 0:
+        raise CheckError("Unable to read the protected upstream overlay policy")
+    try:
+        text = result.stdout.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise CheckError("The protected upstream overlay policy is not valid UTF-8") from exc
+    return parse_overlay_policy(text)
+
+
+def _read_overlay_policy(repo: Path, commit_sha: str) -> dict[str, str]:
+    return verify_overlay_policy(repo, commit_sha)
 
 
 def _require_regular_blob(entry: TreeEntry, label: str) -> None:
@@ -256,6 +317,125 @@ def _verify_strict_merge(repo: Path, base_sha: str, head_sha: str, target: str) 
     return matches[0]
 
 
+def _tree_snapshot(repo: Path, commit_sha: str, label: str) -> dict[str, TreeEntry]:
+    """Return every blob/tree entry in one commit tree, keyed by exact path."""
+    result = _run_git(repo, "ls-tree", "-r", "-z", "--full-tree", commit_sha)
+    if result.returncode != 0:
+        raise CheckError(f"Unable to inspect the {label} tree for content verification")
+    snapshot: dict[str, TreeEntry] = {}
+    for record in result.stdout.split(b"\0"):
+        if not record:
+            continue
+        try:
+            metadata, path = record.split(b"\t", 1)
+            mode, object_type, object_name = metadata.decode("ascii").split()
+            decoded = path.decode("utf-8")
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise CheckError(f"The {label} tree contains a malformed entry") from exc
+        snapshot[decoded] = TreeEntry(mode, object_type, object_name)
+    return snapshot
+
+
+def _changed_paths(repo: Path, base_sha: str, target: str) -> list[str]:
+    """Enumerate every upstream-changed path, with renames expanded to add/delete."""
+    result = _run_git(
+        repo,
+        "diff",
+        "--name-only",
+        "-z",
+        "--no-renames",
+        "--no-ext-diff",
+        base_sha,
+        target,
+    )
+    if result.returncode != 0:
+        raise CheckError("Unable to enumerate upstream paths for content verification")
+    try:
+        return [path.decode("utf-8") for path in result.stdout.split(b"\0") if path]
+    except UnicodeDecodeError as exc:
+        raise CheckError("The upstream diff contains a non-UTF-8 path") from exc
+
+
+def _merge_base(repo: Path, first_parent: str, target: str) -> str:
+    result = _run_git(repo, "merge-base", first_parent, target)
+    if result.returncode != 0:
+        raise CheckError("Unable to compute the upstream base for content verification")
+    value = result.stdout.decode("ascii", errors="replace").strip()
+    _validate_sha(value, "computed upstream base")
+    return value
+
+
+def _verify_content_boundary(
+    repo: Path,
+    merge_commit: str,
+    first_parent: str,
+    target: str,
+    policy: dict[str, str],
+) -> str:
+    """Prove the sync merge carries upstream content or a reviewed overlay resolution."""
+    upstream_base = _merge_base(repo, first_parent, target)
+    changed = _changed_paths(repo, upstream_base, target)
+    if not changed:
+        return f"Verified upstream content boundary {merge_commit} (no upstream changes)"
+    merge_tree = _tree_snapshot(repo, merge_commit, "sync merge")
+    target_tree = _tree_snapshot(repo, target, "upstream target")
+    first_tree = _tree_snapshot(repo, first_parent, "fork base")
+    for path in changed:
+        merge_entry = merge_tree.get(path)
+        target_entry = target_tree.get(path)
+        first_entry = first_tree.get(path)
+        mode = policy.get(path)
+        if mode is None:
+            if merge_entry != target_entry:
+                raise CheckError(
+                    f"The sync merge does not carry the upstream content for the non-overlay path {path}"
+                )
+            continue
+        if first_entry == target_entry:
+            if merge_entry != target_entry:
+                raise CheckError(
+                    f"The overlay path {path} must equal upstream content when no adaptation is needed"
+                )
+            continue
+        if mode == "retain-base":
+            if merge_entry != first_entry:
+                raise CheckError(f"The retain-base overlay path {path} was not kept from the fork base")
+        elif merge_entry == first_entry:
+            raise CheckError(
+                f"The overlay path {path} silently kept fork content instead of a reviewed resolution"
+            )
+    return f"Verified upstream content boundary {merge_commit} ({len(changed)} upstream paths)"
+
+
+def _find_sync_merge(repo: Path, head_sha: str, target: str) -> tuple[str, str]:
+    """Locate the unique merge whose second parent is the upstream target."""
+    result = _run_git(repo, "rev-list", "--merges", "--parents", head_sha)
+    if result.returncode != 0:
+        raise CheckError("Unable to enumerate merge commits for content verification")
+    matches = []
+    for line in result.stdout.decode("ascii", errors="replace").splitlines():
+        fields = line.split()
+        if len(fields) == 3 and fields[2] == target:
+            matches.append((fields[0], fields[1]))
+    if len(matches) != 1:
+        raise CheckError(
+            "Expected exactly one upstream sync merge with the recorded target as second parent"
+        )
+    return matches[0]
+
+
+def _read_sync_policy(repo: Path, base_sha: str, head_sha: str) -> dict[str, str]:
+    """Require the protected overlay policy to be identical at the trusted base and head."""
+    base_entry = _read_path_entry(repo, base_sha, OVERLAY_POLICY_FILE, "base overlay policy")
+    if base_entry is None:
+        raise CheckError("The protected upstream overlay policy is missing from the sync base")
+    _require_regular_blob(base_entry, "sync base overlay policy")
+    head_entry = _read_path_entry(repo, head_sha, OVERLAY_POLICY_FILE, "head overlay policy")
+    if head_entry != base_entry:
+        raise CheckError("The sync candidate changes the protected upstream overlay policy")
+    return _read_overlay_policy(repo, base_sha)
+
+
 def _assert_no_protected_changes(repo: Path, base_sha: str, head_sha: str) -> None:
     result = _run_git(
         repo,
@@ -292,7 +472,10 @@ def verify_head_commit(
         if target != expected_target_sha:
             raise CheckError("The recorded upstream target differs from the immutable expected target")
     _verify_target_ancestry(repo, target, head_sha, upstream_ref)
-    return "Verified recorded upstream ancestry"
+    merge_commit, first_parent = _find_sync_merge(repo, head_sha, target)
+    policy = _read_overlay_policy(repo, head_sha)
+    boundary = _verify_content_boundary(repo, merge_commit, first_parent, target, policy)
+    return f"Verified recorded upstream ancestry; {boundary}"
 
 
 def verify_pull_request(
@@ -336,7 +519,9 @@ def verify_pull_request(
     merge_commit = _verify_strict_merge(repo, base_sha, head_sha, target)
     if require_version_bump:
         _verify_version_bump(repo, base_sha, head_sha)
-    return f"Verified two-parent merge commit {merge_commit}"
+    policy = _read_sync_policy(repo, base_sha, head_sha)
+    boundary = _verify_content_boundary(repo, merge_commit, base_sha, target, policy)
+    return f"Verified two-parent merge commit {merge_commit}; {boundary}"
 
 
 def build_parser() -> argparse.ArgumentParser:

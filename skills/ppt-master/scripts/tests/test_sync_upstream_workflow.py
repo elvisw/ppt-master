@@ -6,6 +6,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
@@ -514,7 +515,7 @@ class BundleManifestSandboxTests(unittest.TestCase):
                 trusted_repo,
                 "fetch",
                 "origin",
-                f"refs/heads/main:refs/remotes/origin/main",
+                "refs/heads/main:refs/remotes/origin/main",
             )
             self._run_git(trusted_repo, "checkout", "-b", "main", "refs/remotes/origin/main")
             self._run_git(
@@ -543,7 +544,7 @@ class BundleManifestSandboxTests(unittest.TestCase):
             )
             result = subprocess.run(
                 [
-                    "python",
+                    sys.executable,
                     str(HELPER),
                     "--manifest",
                     str(manifest),
@@ -569,7 +570,7 @@ class BundleManifestSandboxTests(unittest.TestCase):
             )
             rejected = subprocess.run(
                 [
-                    "python",
+                    sys.executable,
                     str(HELPER),
                     "--manifest",
                     str(manifest),
@@ -608,7 +609,7 @@ class BundleManifestSandboxTests(unittest.TestCase):
                 path.write_text(json.dumps(manifest), encoding="utf-8")
                 result = subprocess.run(
                     [
-                        "python",
+                        sys.executable,
                         str(HELPER),
                         "--manifest",
                         str(path),

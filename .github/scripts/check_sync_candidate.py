@@ -53,6 +53,7 @@ FORK_CONTRACTS = {
 }
 
 REQUIRED_REGULAR_FILES = {
+    ".github/upstream-overlay-paths.txt",
     "cli.py",
     "skills/ppt-master/cli.py",
     "pyproject.toml",
@@ -143,6 +144,7 @@ def _load_trusted_module(repo: Path, relative: str, name: str) -> ModuleType:
     if spec is None or spec.loader is None:
         raise CandidateGateError(f"unable to load trusted gate module: {relative}")
     module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -159,6 +161,27 @@ def _candidate_mapping(
         return trusted_cli.parse_literal_mapping(str(candidate / relative), name)
     except ValueError as exc:
         raise CandidateGateError(f"candidate mapping is invalid: {relative}:{name}: {exc}") from exc
+
+
+def _check_overlay_policy_contract(repo: Path, candidate: Path) -> None:
+    """Require the candidate to carry the trusted protected overlay policy exactly."""
+    relative = ".github/upstream-overlay-paths.txt"
+    trusted_ancestry = _load_trusted_module(
+        repo,
+        ".github/scripts/check_upstream_ancestry.py",
+        "trusted_upstream_overlay_policy",
+    )
+    try:
+        trusted_bytes = _regular(repo, relative).read_bytes()
+        candidate_bytes = _regular(candidate, relative).read_bytes()
+    except OSError as exc:
+        raise CandidateGateError("unable to read the protected upstream overlay policy") from exc
+    if candidate_bytes != trusted_bytes:
+        raise CandidateGateError("candidate changes the protected upstream overlay policy")
+    try:
+        trusted_ancestry.parse_overlay_policy(candidate_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, trusted_ancestry.CheckError) as exc:
+        raise CandidateGateError("candidate overlay policy is invalid") from exc
 
 
 def _check_cli_contract(repo: Path, candidate: Path) -> None:
@@ -340,6 +363,7 @@ def check_candidate(
         if result.returncode != 0 or result.stdout.strip() != head_sha:
             raise CandidateGateError("candidate ref tip does not match the trusted verified SHA")
     _check_cli_contract(repo, candidate)
+    _check_overlay_policy_contract(repo, candidate)
     if base_sha is not None and head_sha is not None:
         _check_uvx_contract(repo, candidate, base_sha, head_sha)
     _check_dependency_contract(repo, candidate)
