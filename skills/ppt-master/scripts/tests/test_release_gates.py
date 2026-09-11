@@ -130,6 +130,9 @@ class ReleaseGateHelperTests(unittest.TestCase):
             b"Name: ppt-master\nname: ppt-master\nVersion: 0.1.2\n",
             b"Name: ppt-master\nVersion: 0.1.2\nVERSION: 0.1.2\n",
             b"N\xe4me: ppt-master\nVersion: 0.1.2\n",
+            b"Name : ppt-master\nVersion: 0.1.2\n",
+            b"Name\t: ppt-master\nVersion: 0.1.2\n",
+            b"Version : 0.1.2\nName: ppt-master\n",
         ):
             with self.subTest(metadata=metadata):
                 with self.assertRaises(self.module.ReleaseGateError):
@@ -143,6 +146,7 @@ class ReleaseGateHelperTests(unittest.TestCase):
                     "Version: 0.1.2\n\nName: ppt-master\n",
                     "Name: ppt-master\nName: ppt-master\nVersion: 0.1.2\n",
                     "NAME: ppt-master\nVersion: 0.1.2\n",
+                    "Name : ppt-master\nVersion: 0.1.2\n",
                 )
             ):
                 wheel = root / f"ppt_master-0.1.2-py3-none-any-{index}.whl"
@@ -648,6 +652,145 @@ class ReleaseGateHelperTests(unittest.TestCase):
             with self.subTest(steps=steps):
                 with self.assertRaises(self.module.ReleaseGateError):
                     self.module._check_oidc_run_safety(list(steps), "probe")
+
+    def test_workflow_job_envelopes_reject_injection_scopes(self) -> None:
+        probes = (
+            (
+                ".github/workflows/check-uvx-migration.yml",
+                lambda text: text.replace(
+                    "    runs-on: ubuntu-latest\n    steps:",
+                    "    runs-on: ubuntu-latest\n    env:\n      BASH_ENV: /tmp/evil\n    steps:",
+                    1,
+                ),
+            ),
+            (
+                ".github/workflows/check-uvx-migration.yml",
+                lambda text: text.replace(
+                    "    runs-on: ubuntu-latest\n    steps:",
+                    "    runs-on: ubuntu-latest\n    defaults:\n      run:\n        shell: bash\n    steps:",
+                    1,
+                ),
+            ),
+            (
+                ".github/workflows/check-uvx-migration.yml",
+                lambda text: text.replace(
+                    "    runs-on: ubuntu-latest\n    steps:",
+                    "    runs-on: ubuntu-latest\n    if: false\n    steps:",
+                    1,
+                ),
+            ),
+            (
+                ".github/workflows/auto-tag.yml",
+                lambda text: text.replace(
+                    "    steps:\n      - name: Checkout immutable workflow-run commit",
+                    "    env:\n      BASH_ENV: /tmp/evil\n    steps:\n"
+                    "      - name: Checkout immutable workflow-run commit",
+                    1,
+                ),
+            ),
+            (
+                ".github/workflows/auto-tag.yml",
+                lambda text: text.replace(
+                    "github.event.workflow_run.conclusion == 'success'",
+                    "true",
+                    1,
+                ),
+            ),
+            (
+                ".github/workflows/publish-pypi.yml",
+                lambda text: text.replace(
+                    "    steps:\n      - name: Checkout immutable release SHA\n",
+                    "    container: ubuntu:latest\n"
+                    "    steps:\n      - name: Checkout immutable release SHA\n",
+                    1,
+                ),
+            ),
+            (
+                ".github/workflows/publish-pypi.yml",
+                lambda text: text.replace(
+                    "    steps:\n      - name: Checkout immutable release SHA for static verifier",
+                    "    services:\n      db:\n        image: busybox\n"
+                    "    steps:\n      - name: Checkout immutable release SHA for static verifier",
+                    1,
+                ),
+            ),
+            (
+                ".github/workflows/publish-pypi.yml",
+                lambda text: text.replace(
+                    "\njobs:\n",
+                    "\nenv:\n  BASH_ENV: /tmp/evil\njobs:\n",
+                    1,
+                ),
+            ),
+        )
+        for relative, transform in probes:
+            with self.subTest(relative=relative, probe=transform.__name__):
+                self._mutated_workflow_policy(relative, transform)
+
+    def test_publish_build_and_verify_step_contracts_reject_mutations(self) -> None:
+        def _extra_build_step(text: str) -> str:
+            return text.replace(
+                "      - name: Upload only verified distributions and manifest",
+                "      - name: Sneaky build step\n        run: echo x\n"
+                "      - name: Upload only verified distributions and manifest",
+                1,
+            )
+
+        def _renamed_build_step(text: str) -> str:
+            return text.replace(
+                "- name: Build distributions without OIDC",
+                "- name: Build",
+                1,
+            )
+
+        def _shrunk_build_run(text: str) -> str:
+            return text.replace(
+                'uv build --no-build-isolation --python "$GATE_PYTHON"',
+                "uv build",
+                1,
+            )
+
+        def _upload_with_mutation(text: str) -> str:
+            return text.replace("retention-days: 7", "retention-days: 30", 1)
+
+        def _extra_verify_step(text: str) -> str:
+            return text.replace(
+                "      - name: Run verify_artifact_manifest for artifact and attribution",
+                "      - name: Sneaky verify step\n        run: echo x\n"
+                "      - name: Run verify_artifact_manifest for artifact and attribution",
+                1,
+            )
+
+        def _renamed_verify_step(text: str) -> str:
+            return text.replace(
+                "- name: Run verify_artifact_manifest for artifact and attribution",
+                "- name: Verify",
+                1,
+            )
+
+        def _verify_checkout_with_mutation(text: str) -> str:
+            return text.replace("fetch-depth: 1", "fetch-depth: 0", 1)
+
+        def _env_mutation(text: str) -> str:
+            return text.replace(
+                "          RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.release_tag }}\n",
+                "          RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.release_tag }}\n"
+                "          EVIL: x\n",
+                1,
+            )
+
+        for transform in (
+            _extra_build_step,
+            _renamed_build_step,
+            _shrunk_build_run,
+            _upload_with_mutation,
+            _extra_verify_step,
+            _renamed_verify_step,
+            _verify_checkout_with_mutation,
+            _env_mutation,
+        ):
+            with self.subTest(transform=transform.__name__):
+                self._mutated_workflow_policy(".github/workflows/publish-pypi.yml", transform)
 
     def test_wheel_metadata_path_and_companions_are_exact(self) -> None:
         version = "0.1.2"

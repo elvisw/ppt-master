@@ -132,6 +132,22 @@ TRUSTED_SCRIPT_MODULES = (
     "check_sync_candidate.py",
     "check_upstream_ancestry.py",
 )
+_UNSET = object()
+WORKFLOW_ALLOWED_KEYS = frozenset({"name", "on", "permissions", "concurrency", "jobs"})
+JOB_STRUCTURAL_KEYS = frozenset({"env", "defaults", "container", "services"})
+AUTO_TAG_JOB_ALLOWED_KEYS = frozenset(
+    {"runs-on", "timeout-minutes", "if", "permissions", "steps"}
+)
+MIGRATION_JOB_ALLOWED_KEYS = frozenset({"runs-on", "steps"})
+PUBLISH_BUILD_JOB_ALLOWED_KEYS = frozenset(
+    {"runs-on", "timeout-minutes", "permissions", "outputs", "steps"}
+)
+PUBLISH_VERIFY_JOB_ALLOWED_KEYS = frozenset(
+    {"needs", "runs-on", "timeout-minutes", "permissions", "outputs", "steps"}
+)
+PUBLISH_OIDC_JOB_ALLOWED_KEYS = frozenset(
+    {"needs", "runs-on", "timeout-minutes", "environment", "permissions", "steps"}
+)
 
 
 def _template(text: str) -> str:
@@ -338,6 +354,237 @@ PUBLISH_OIDC_BIND_ENV = {
     "VERIFIED_MANIFEST_SHA256": "${{ needs.verify-artifact.outputs.manifest_sha256 }}",
 }
 
+class WorkflowStepContract:
+    """Describe one approved privileged-workflow step."""
+
+    __slots__ = ("name", "keys", "uses", "with_values", "env", "run_template", "step_id")
+
+    def __init__(
+        self,
+        name: str | None,
+        keys: frozenset[str],
+        uses: str | None = None,
+        with_values: dict[str, Any] | None = None,
+        env: dict[str, Any] | None = None,
+        run_template: str | None = None,
+        step_id: str | None = None,
+    ) -> None:
+        self.name = name
+        self.keys = keys
+        self.uses = uses
+        self.with_values = with_values
+        self.env = env
+        self.run_template = run_template
+        self.step_id = step_id
+
+
+DISPATCH_SHA = "${{ github.event_name == 'push' && github.sha || inputs.release_sha }}"
+DISPATCH_TAG = "${{ github.event_name == 'push' && github.ref_name || inputs.release_tag }}"
+PUBLISH_IDENTITY_ENV = {"RELEASE_SHA": DISPATCH_SHA, "RELEASE_TAG": DISPATCH_TAG}
+PUBLISH_QUERY_ENV = {"GH_TOKEN": "${{ github.token }}", "RELEASE_SHA": DISPATCH_SHA}
+AUTO_TAG_JOB_CONDITION = (
+    "github.event_name == 'workflow_run' && "
+    "github.event.workflow_run.conclusion == 'success' && "
+    "github.event.workflow_run.event == 'push' && "
+    "github.event.workflow_run.head_branch == 'main' && "
+    "github.event.workflow_run.repository.full_name == 'elvisw/ppt-master'"
+)
+
+PUBLISH_VALIDATE_RUN = _template(
+    r"""
+    set -euo pipefail
+    python -I .github/scripts/check_release_gates.py \
+      --repo "$GITHUB_WORKSPACE" \
+      --release-sha "$RELEASE_SHA" \
+      --release-tag "$RELEASE_TAG" \
+      --validate-only
+    if [ "$GITHUB_EVENT_NAME" = "push" ] || [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+      if [ "$GITHUB_REF" != "refs/tags/$RELEASE_TAG" ]; then
+        echo "::error::Publication must be dispatched from the exact release tag ref"
+        exit 1
+      fi
+    fi
+    """
+)
+PUBLISH_FETCH_RUN = _template(
+    r"""
+    set -euo pipefail
+    git fetch --no-tags --prune origin main
+    git fetch --no-tags origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+    git remote add upstream https://github.com/hugohe3/ppt-master.git
+    git fetch --no-tags upstream main
+    if [ "$(git rev-parse HEAD)" != "$RELEASE_SHA" ]; then
+      echo "::error::Checkout is not release_sha"
+      exit 1
+    fi
+    if [ "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" != "$RELEASE_SHA" ]; then
+      echo "::error::Exact tag ref does not point to release_sha"
+      exit 1
+    fi
+    """
+)
+PUBLISH_QUERY_RUN = _template(
+    r"""
+    set -euo pipefail
+    gh api --paginate --slurp \
+      "repos/elvisw/ppt-master/actions/workflows/check-uvx-migration.yml/runs?event=push&head_sha=$RELEASE_SHA&status=completed&per_page=100" \
+      > "$RUNNER_TEMP/check-uvx-migration-runs.json"
+    """
+)
+PUBLISH_TOOLING_RUN = _template(
+    r"""
+    set -euo pipefail
+    GATE_PYTHON="$(python -c 'import sys; print(sys.executable)')"
+    uv pip install --system --break-system-packages --python "$GATE_PYTHON" --no-progress "PyYAML==6.0.2" "ruff==0.12.10" "setuptools==80.9.0"
+    printf 'GATE_PYTHON=%s\n' "$GATE_PYTHON" >> "$GITHUB_ENV"
+    """
+)
+PUBLISH_GATE_RUN = _template(
+    r"""
+    set -euo pipefail
+    python -I .github/scripts/check_release_gates.py \
+      --repo "$GITHUB_WORKSPACE" \
+      --release-sha "$RELEASE_SHA" \
+      --release-tag "$RELEASE_TAG" \
+      --upstream-ref upstream/main \
+      --workflow-runs-json "$RUNNER_TEMP/check-uvx-migration-runs.json" \
+      --require-existing-tag
+    """
+)
+PUBLISH_BUILD_RUN = _template(
+    r"""
+    set -euo pipefail
+    rm -rf dist
+    uv build --no-build-isolation --python "$GATE_PYTHON"
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+      echo "::error::The build modified tracked release sources"
+      exit 1
+    fi
+    """
+)
+PUBLISH_STAGE_RUN = _template(
+    r"""
+    set -euo pipefail
+    ARTIFACT_DIR="$RUNNER_TEMP/release-artifact"
+    rm -rf "$ARTIFACT_DIR"
+    mkdir -p "$ARTIFACT_DIR"
+    cp dist/*.whl dist/*.tar.gz "$ARTIFACT_DIR/"
+    python -I .github/scripts/check_release_gates.py \
+      --repo "$GITHUB_WORKSPACE" \
+      --release-sha "$RELEASE_SHA" \
+      --release-tag "$RELEASE_TAG" \
+      --artifact-dir "$ARTIFACT_DIR" \
+      --write-artifact-manifest "$ARTIFACT_DIR/manifest.json"
+    """
+)
+PUBLISH_VERIFY_RUN = _template(
+    r"""
+    set -euo pipefail
+    python -I .github/scripts/check_release_gates.py \
+      --repo "$GITHUB_WORKSPACE" \
+      --release-sha "$RELEASE_SHA" \
+      --release-tag "$RELEASE_TAG" \
+      --artifact-dir "$RUNNER_TEMP/release-artifact" \
+      --verify-artifact-manifest "$RUNNER_TEMP/release-artifact/manifest.json" \
+      --emit-artifact-env "$GITHUB_OUTPUT"
+    """
+)
+
+PUBLISH_BUILD_STEP_CONTRACTS = (
+    WorkflowStepContract(
+        name="Checkout immutable release SHA",
+        keys=frozenset({"name", "uses", "with"}),
+        uses=USES_CHECKOUT,
+        with_values={"ref": DISPATCH_SHA, "fetch-depth": 0, "persist-credentials": False},
+    ),
+    WorkflowStepContract(
+        name="Validate canonical manual or tag identity",
+        keys=frozenset({"name", "env", "run"}),
+        env=PUBLISH_IDENTITY_ENV,
+        run_template=PUBLISH_VALIDATE_RUN,
+    ),
+    WorkflowStepContract(
+        name="Fetch and bind exact release refs",
+        keys=frozenset({"name", "env", "run"}),
+        env=PUBLISH_IDENTITY_ENV,
+        run_template=PUBLISH_FETCH_RUN,
+    ),
+    WorkflowStepContract(
+        name="Query immutable Check UVX Migration run evidence",
+        keys=frozenset({"name", "env", "run"}),
+        env=PUBLISH_QUERY_ENV,
+        run_template=PUBLISH_QUERY_RUN,
+    ),
+    WorkflowStepContract(
+        name="Setup uv for trusted gate and build tooling",
+        keys=frozenset({"name", "uses", "with"}),
+        uses=USES_SETUP_UV,
+        with_values={
+            "version": EXPECTED_UV_VERSION,
+            "checksum": EXPECTED_UV_CHECKSUM,
+            "enable-cache": False,
+        },
+    ),
+    WorkflowStepContract(
+        name="Install pinned trusted gate tooling",
+        keys=frozenset({"name", "run"}),
+        run_template=PUBLISH_TOOLING_RUN,
+    ),
+    WorkflowStepContract(
+        name="Rerun complete release gates for exact tag and SHA",
+        keys=frozenset({"name", "env", "run"}),
+        env=PUBLISH_IDENTITY_ENV,
+        run_template=PUBLISH_GATE_RUN,
+    ),
+    WorkflowStepContract(
+        name="Build distributions without OIDC",
+        keys=frozenset({"name", "run"}),
+        run_template=PUBLISH_BUILD_RUN,
+    ),
+    WorkflowStepContract(
+        name="Stage and statically bind exact distributions",
+        keys=frozenset({"name", "env", "run"}),
+        env=PUBLISH_IDENTITY_ENV,
+        run_template=PUBLISH_STAGE_RUN,
+    ),
+    WorkflowStepContract(
+        name="Upload only verified distributions and manifest",
+        keys=frozenset({"name", "uses", "with"}),
+        uses=USES_UPLOAD_ARTIFACT,
+        with_values={
+            "name": "release-distributions-${{ github.run_id }}-${{ github.run_attempt }}",
+            "path": "${{ runner.temp }}/release-artifact",
+            "if-no-files-found": "error",
+            "retention-days": 7,
+        },
+    ),
+)
+
+PUBLISH_VERIFY_STEP_CONTRACTS = (
+    WorkflowStepContract(
+        name="Checkout immutable release SHA for static verifier",
+        keys=frozenset({"name", "uses", "with"}),
+        uses=USES_CHECKOUT,
+        with_values={"ref": DISPATCH_SHA, "fetch-depth": 1, "persist-credentials": False},
+    ),
+    WorkflowStepContract(
+        name="Download exact build artifact to runner temp",
+        keys=frozenset({"name", "uses", "with"}),
+        uses=USES_DOWNLOAD_ARTIFACT,
+        with_values={
+            "name": "${{ needs.build-and-gate.outputs.artifact_name }}",
+            "path": "${{ runner.temp }}/release-artifact",
+        },
+    ),
+    WorkflowStepContract(
+        name="Run verify_artifact_manifest for artifact and attribution",
+        keys=frozenset({"name", "id", "env", "run"}),
+        env=PUBLISH_IDENTITY_ENV,
+        run_template=PUBLISH_VERIFY_RUN,
+        step_id="verify",
+    ),
+)
+
 GIT_SUBCOMMAND_RE = re.compile(
     r"(?<![\w.-])git\s+"
     r"(?P<options>(?:(?:-c|-C|--exec-path|--git-dir|--work-tree|--namespace)\s+\S+\s+"
@@ -366,30 +613,6 @@ OIDC_FORBIDDEN_RUN_PATTERNS = (
     r"(?<![\w-])uvx\b",
     r"\.whl\b",
 )
-
-
-class WorkflowStepContract:
-    """Describe one approved privileged-workflow step."""
-
-    __slots__ = ("name", "keys", "uses", "with_values", "env", "run_template", "step_id")
-
-    def __init__(
-        self,
-        name: str | None,
-        keys: frozenset[str],
-        uses: str | None = None,
-        with_values: dict[str, Any] | None = None,
-        env: dict[str, Any] | None = None,
-        run_template: str | None = None,
-        step_id: str | None = None,
-    ) -> None:
-        self.name = name
-        self.keys = keys
-        self.uses = uses
-        self.with_values = with_values
-        self.env = env
-        self.run_template = run_template
-        self.step_id = step_id
 
 
 AUTO_TAG_STEP_CONTRACTS = (
@@ -975,6 +1198,44 @@ def _require_with(step: dict[str, Any], expected: dict[str, Any], label: str) ->
         raise ReleaseGateError(f"{label} with mapping does not match the approved mapping")
 
 
+def _require_workflow_envelope(workflow: dict[str, Any], label: str) -> None:
+    """Whitelist workflow-level keys and reject workflow-wide shell injection scopes."""
+    normalized = {("on" if key is True else key) for key in workflow}
+    structural = normalized & JOB_STRUCTURAL_KEYS
+    if structural:
+        raise ReleaseGateError(f"{label} must not declare workflow-level {sorted(structural)}")
+    unexpected = normalized - WORKFLOW_ALLOWED_KEYS
+    if unexpected:
+        raise ReleaseGateError(f"{label} contains unapproved workflow keys: {sorted(unexpected)}")
+
+
+def _require_job_envelope(
+    job: dict[str, Any],
+    label: str,
+    *,
+    allowed_keys: frozenset[str],
+    if_value: object = _UNSET,
+    environment: object = _UNSET,
+) -> None:
+    """Whitelist job-level keys and pin or forbid job-level if/environment."""
+    structural = set(job) & JOB_STRUCTURAL_KEYS
+    if structural:
+        raise ReleaseGateError(f"{label} must not declare job-level {sorted(structural)}")
+    unexpected = set(job) - allowed_keys
+    if unexpected:
+        raise ReleaseGateError(f"{label} contains unapproved job keys: {sorted(unexpected)}")
+    if if_value is _UNSET:
+        if "if" in job:
+            raise ReleaseGateError(f"{label} must not declare an unapproved job-level if")
+    elif job.get("if") != if_value:
+        raise ReleaseGateError(f"{label} job-level if does not match the approved condition")
+    if environment is _UNSET:
+        if "environment" in job:
+            raise ReleaseGateError(f"{label} must not declare an unapproved environment")
+    elif job.get("environment") != environment:
+        raise ReleaseGateError(f"{label} environment does not match the approved mapping")
+
+
 def _require_step_contracts(
     steps: list[dict[str, Any]],
     contracts: tuple[WorkflowStepContract, ...],
@@ -1069,6 +1330,15 @@ def _check_migration_workflow(workflow: dict[str, Any], path: Path) -> None:
     if not isinstance(jobs, dict) or set(jobs) != {"check"}:
         raise ReleaseGateError("Check UVX Migration must contain only the check job")
     job = jobs["check"]
+    if not isinstance(job, dict):
+        raise ReleaseGateError("Check UVX Migration check job is malformed")
+    _require_job_envelope(
+        job,
+        "Check UVX Migration check job",
+        allowed_keys=MIGRATION_JOB_ALLOWED_KEYS,
+    )
+    if job.get("runs-on") != "ubuntu-latest":
+        raise ReleaseGateError("Check UVX Migration check job must run on ubuntu-latest")
     steps = _workflow_steps(job, "Check UVX Migration check job")
     _require_step_contracts(steps, MIGRATION_STEP_CONTRACTS, "Check UVX Migration check job")
 
@@ -1098,7 +1368,9 @@ def _check_workflow_policy(repo: Path) -> None:
         if path.is_symlink() or not path.is_file():
             raise ReleaseGateError(f"Privileged workflow is unavailable: {relative}")
         _check_action_pins(path)
-        data[relative] = _load_workflow(path)
+        workflow = _load_workflow(path)
+        _require_workflow_envelope(workflow, relative)
+        data[relative] = workflow
     approved_push_counts = {
         ".github/workflows/auto-tag.yml": 1,
         ".github/workflows/check-uvx-migration.yml": 0,
@@ -1131,6 +1403,14 @@ def _check_workflow_policy(repo: Path) -> None:
     auto_job = auto_jobs["verify-and-tag"]
     if not isinstance(auto_job, dict):
         raise ReleaseGateError("auto-tag verify-and-tag job is malformed")
+    _require_job_envelope(
+        auto_job,
+        "auto-tag verify-and-tag job",
+        allowed_keys=AUTO_TAG_JOB_ALLOWED_KEYS,
+        if_value=AUTO_TAG_JOB_CONDITION,
+    )
+    if auto_job.get("runs-on") != "ubuntu-latest" or auto_job.get("timeout-minutes") != 30:
+        raise ReleaseGateError("auto-tag job must keep its approved runner and timeout")
     _require_permissions(auto_job.get("permissions"), AUTO_TAG_PERMISSIONS, "auto-tag verify-and-tag job")
     if any(
         isinstance(scope, dict) and "PUSH_PAT" in scope
@@ -1284,16 +1564,30 @@ def _check_workflow_policy(repo: Path) -> None:
         "publish",
     }:
         raise ReleaseGateError("publish must contain exactly build-and-gate, verify-artifact, and publish jobs")
-    for name in ("build-and-gate", "verify-artifact"):
+    for name, allowed_keys, timeout in (
+        ("build-and-gate", PUBLISH_BUILD_JOB_ALLOWED_KEYS, 45),
+        ("verify-artifact", PUBLISH_VERIFY_JOB_ALLOWED_KEYS, 15),
+    ):
         job = publish_jobs[name]
         if not isinstance(job, dict):
             raise ReleaseGateError(f"publish {name} job is malformed")
+        _require_job_envelope(job, f"publish {name} job", allowed_keys=allowed_keys)
+        if job.get("runs-on") != "ubuntu-latest" or job.get("timeout-minutes") != timeout:
+            raise ReleaseGateError(f"publish {name} job must keep its approved runner and timeout")
         _require_permissions(job.get("permissions"), PUBLISH_BUILD_PERMISSIONS, f"publish {name} job")
         if "secrets." in json.dumps(job):
             raise ReleaseGateError(f"{name} job must not receive publication secrets")
     publish_job = publish_jobs.get("publish")
     if not isinstance(publish_job, dict):
         raise ReleaseGateError("publish workflow is missing publish job")
+    _require_job_envelope(
+        publish_job,
+        "publish OIDC job",
+        allowed_keys=PUBLISH_OIDC_JOB_ALLOWED_KEYS,
+        environment={"name": "pypi"},
+    )
+    if publish_job.get("runs-on") != "ubuntu-latest" or publish_job.get("timeout-minutes") != 15:
+        raise ReleaseGateError("publish OIDC job must keep its approved runner and timeout")
     _require_permissions(
         publish_job.get("permissions"),
         PUBLISH_PERMISSIONS,
@@ -1319,6 +1613,11 @@ def _check_workflow_policy(repo: Path) -> None:
     }:
         raise ReleaseGateError("verify-artifact must expose the verified artifact identity outputs")
     verify_steps = _workflow_steps(verify_job, "publish verify-artifact job")
+    _require_step_contracts(
+        verify_steps,
+        PUBLISH_VERIFY_STEP_CONTRACTS,
+        "publish verify-artifact job",
+    )
     _, verify_step = _step_named(
         verify_steps,
         "Run verify_artifact_manifest for artifact and attribution",
@@ -1340,6 +1639,11 @@ def _check_workflow_policy(repo: Path) -> None:
     }:
         raise ReleaseGateError("publish build job must expose only its run-scoped artifact name")
     build_steps = _workflow_steps(build_job, "publish build-and-gate job")
+    _require_step_contracts(
+        build_steps,
+        PUBLISH_BUILD_STEP_CONTRACTS,
+        "publish build-and-gate job",
+    )
     _, build_checkout = _step_named(
         build_steps,
         "Checkout immutable release SHA",
@@ -1661,7 +1965,11 @@ def _validate_core_metadata(data: bytes, version: str, label: str) -> None:
         field, separator, value = line.partition(":")
         if not separator:
             continue
-        name = field.strip()
+        if field != field.strip():
+            raise ReleaseGateError(
+                f"{label} metadata field name must not contain surrounding whitespace"
+            )
+        name = field
         if not name.isascii():
             raise ReleaseGateError(f"{label} metadata field name is not ASCII")
         folded.setdefault(name.lower(), []).append((name, value.strip()))

@@ -62,8 +62,53 @@ class CliMappingError(ValueError):
 
 _MUTATING_METHODS = frozenset({"clear", "pop", "popitem", "setdefault", "update"})
 _DYNAMIC_ESCAPES = frozenset(
-    {"compile", "eval", "exec", "globals", "locals", "setattr", "vars", "__import__"}
+    {"compile", "eval", "exec", "getattr", "globals", "locals", "setattr", "vars", "__import__"}
 )
+_SAFE_READONLY_CALLS = frozenset(
+    {
+        "all",
+        "any",
+        "bool",
+        "dict",
+        "enumerate",
+        "frozenset",
+        "iter",
+        "len",
+        "list",
+        "max",
+        "min",
+        "repr",
+        "reversed",
+        "set",
+        "sorted",
+        "str",
+        "sum",
+        "tuple",
+        "zip",
+    }
+)
+
+
+def _unsafe_call_violation(node: ast.AST, name: str) -> str | None:
+    """Detect a mapping passed into an unapproved or dynamically built call."""
+    if not isinstance(node, ast.Call):
+        return None
+    func = node.func
+    if isinstance(func, ast.Subscript):
+        return "is called through a dynamically subscripted callable"
+    if isinstance(func, (ast.Lambda, ast.IfExp)):
+        return "is called through a dynamically constructed callable"
+    safe_callee = isinstance(func, ast.Name) and func.id in _SAFE_READONLY_CALLS
+    if safe_callee:
+        return None
+    arguments = list(node.args) + [keyword.value for keyword in node.keywords]
+    for argument in arguments:
+        if isinstance(argument, ast.Name) and argument.id == name:
+            return "is passed as an argument to an unapproved call"
+        if isinstance(argument, ast.Starred) and isinstance(argument.value, ast.Name):
+            if argument.value.id == name:
+                return "is passed as an argument to an unapproved call"
+    return None
 
 
 def _dynamic_escape_name(node: ast.AST) -> str | None:
@@ -223,6 +268,10 @@ def parse_literal_mapping(cli_path: str, name: str) -> dict[str, str]:
             raise CliMappingError(
                 f"{cli_path} uses dynamic escape {escape!r} near the {name} mapping"
             )
+    for node in ast.walk(tree):
+        call_violation = _unsafe_call_violation(node, name)
+        if call_violation is not None:
+            raise CliMappingError(f"{name} in {cli_path} {call_violation}")
     for node in ast.walk(tree):
         if _mutates_mapping(node, name, assignment):
             raise CliMappingError(f"{name} in {cli_path} is dynamically mutated")

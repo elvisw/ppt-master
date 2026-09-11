@@ -136,6 +136,45 @@ class CliMappingTests(unittest.TestCase):
                 with self.assertRaises(self.module.CliMappingError):
                     self.module.parse_literal_mapping(path, mapping_name)
 
+    def test_parser_rejects_mapping_argument_passing_and_indirect_calls(self) -> None:
+        base = "COMMANDS = {'render': 'render.py'}\n"
+        snippets = (
+            base + "unknown_helper(COMMANDS)\n",
+            base + "unknown_helper(mapping=COMMANDS)\n",
+            base + "unknown_helper(*COMMANDS)\n",
+            base + "unknown_helper(**COMMANDS)\n",
+            base + "dict.update(COMMANDS)\n",
+            base + "operator.setitem(COMMANDS, 'x', 'y')\n",
+            base + "getattr(builtins, 'exec')('COMMANDS = {}')\n",
+            base + "getattr(builtins, 'eval')('{}')\n",
+            base + "builtins.__dict__['exec']('COMMANDS = {}')\n",
+            "ALIASES = {'r': 'render'}\nunknown_helper(ALIASES)\n",
+        )
+        for snippet in snippets:
+            with self.subTest(snippet=snippet), tempfile.TemporaryDirectory() as temporary:
+                path = Path(temporary) / "cli.py"
+                path.write_text(snippet, encoding="utf-8")
+                mapping_name = "ALIASES" if snippet.startswith("ALIASES") else "COMMANDS"
+                with self.assertRaises(self.module.CliMappingError):
+                    self.module.parse_literal_mapping(path, mapping_name)
+
+    def test_parser_allows_readonly_mapping_reads(self) -> None:
+        base = "COMMANDS = {'render': 'render.py'}\nALIASES = {'r': 'render'}\n"
+        snippets = (
+            base + "for key in sorted(COMMANDS):\n    pass\n",
+            base + "value = COMMANDS.get('render')\n",
+            base + "names = list(COMMANDS.keys())\n",
+            base + "for name, path in COMMANDS.items():\n    pass\n",
+            base + "value = ALIASES.get('r', 'render')\n",
+            base + "size = len(COMMANDS)\n",
+        )
+        for snippet in snippets:
+            with self.subTest(snippet=snippet), tempfile.TemporaryDirectory() as temporary:
+                path = Path(temporary) / "cli.py"
+                path.write_text(snippet, encoding="utf-8")
+                commands = self.module.parse_literal_mapping(path, "COMMANDS")
+                self.assertEqual(commands, {"render": "render.py"})
+
     def test_real_cli_files_still_parse_with_strict_parser(self) -> None:
         root = Path(__file__).resolve().parents[4]
         for relative in ("cli.py", "skills/ppt-master/cli.py"):
