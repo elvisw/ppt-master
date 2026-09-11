@@ -1153,3 +1153,12 @@ step 合同、CLI Call 参数与 Core Metadata 字段名做最后收口；不改
   changed path 必须与 strict merge 一致）、内容评估的 M-tree policy 绑定与 bootstrap 精确
   回退、3 个 `retain-base` 条目的持续复审义务，以及“本地完成、远端待 bootstrap”的状态口径。
 - 全部实现、测试与验证证据见 `.superpowers/sdd/sync-upstream-task-5b-report.md` 最终轮章节。
+
+## F1′ 收口（base/first-parent policy 信任）
+
+- `verify_pull_request` 的 strict sync 分支始终使用 trusted base 的 overlay policy，并要求
+  strict merge `M` 的 policy entry 与 base entry 完全相等；`M..HEAD` 漂移门禁不再依赖
+  expected-target/require-version 标志；版本路径仅在不在 upstream changed 集合时整文件豁免。
+- protected 检查改为逐 commit first-parent 扫描（排除 target 祖先提交），中间篡改即使恢复
+  也 fail。head/main/release 模式从 `M^1` 读取 policy，仅 bootstrap 精确配对回退 trusted HEAD。
+- 测试、设计、中文文档与本计划同步，证据见 `.superpowers/sdd/sync-upstream-task-5b-report.md`。

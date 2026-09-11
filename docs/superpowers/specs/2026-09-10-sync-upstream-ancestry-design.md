@@ -268,16 +268,24 @@ entry（拒绝 `-s ours` 或事后整文件回滚），只有 policy 中以 `ret
 理由时才允许保留 first-parent 内容。overlay 清单是精确文件路径，禁止目录、glob 与重复项；
 `M^1` 已等于 target 时 overlay 也必须等于 target。
 
-同步模式（提供 expected target 或要求版本 bump）还在内容边界之后追加 M..HEAD 漂移门禁：
-对除版本文件外的每个 upstream changed path，比较 `M` 与 candidate HEAD 的 tree entry 必须
-完全一致；M..HEAD 也只允许 `pyproject.toml` 与两份 `uv.lock` 版本文件不同。因此
-version-bump 提交无法夹带任何 non-overlay、overlay 或 `retain-base` 路径的回滚。普通
-marker-unchanged PR 跳过与 head/main 模式不应用该门禁。
+只要 marker 发生变化并找到 strict merge，就无条件追加 M..HEAD 漂移门禁（不再取决于
+expected-target/require-version 标志）：除版本文件外的每个 upstream changed path，比较 `M`
+与 candidate HEAD 的 tree entry 必须完全一致；M..HEAD 也只允许版本文件不同。版本文件仅当
+不在 upstream changed 集合时整文件豁免；若 upstream 也改动了它，则只允许 project version
+字段变化（pyproject）或 root package version 变化（uv.lock，lock 其余语义不变），否则拒绝。
+因此 candidate 提交无法夹带任何 non-overlay、overlay 或 `retain-base` 路径的回滚。普通
+marker-unchanged PR 在更早阶段 skip，不应用该门禁。
 
-内容评估优先读取严格 merge `M` 自身 tree 中的 overlay policy（历史绑定）；`M` 缺少 policy
-默认 fail。只有 bootstrap repair merge `1fcf7154` + target `09ad58f0` 精确配对允许一次性
-回退到当前 trusted HEAD policy，并输出显式 bootstrap 提示；其他任何 missing-policy merge
-都拒绝。HEAD policy 仍做格式与受保护一致性检查。
+内容评估的 policy 来源永远是 strict merge 的 trusted first parent（PR 模式即 trusted base，
+head/main/release 模式即 `M^1`），并要求 `M` 的 policy tree entry 与 first parent 完全相等；
+candidate 的 `M`/HEAD 不能控制规则。first parent 缺 policy 默认 fail；只有 bootstrap repair
+merge `1fcf7154` + target `09ad58f0` 精确配对允许一次性回退到当前 trusted HEAD policy，并
+输出显式 bootstrap 提示，其他 missing-policy 一律拒绝。HEAD policy 仍做格式与受保护检查。
+
+protected 文件检查不再只看 base..head 端点：逐 commit 扫描范围内每个提交，比较其 first
+parent→commit 的 path changes（merge commit 同样以 first parent 为基准），任何中间新增/
+修改/删除 protected path 都 fail，即使后续提交恢复；head/main 检查另要求 HEAD 的策略文件
+合法。上游目标祖先提交不属于 candidate 控制，进行保护扫描时排除。
 
 清单中 21 个 `merge` 条目仍需人工审阅第三方 resolution 是否符合 fork 契约；3 个
 `retain-base` 条目在每次上游再次触及对应路径时，由 protected policy 变更与 trusted
