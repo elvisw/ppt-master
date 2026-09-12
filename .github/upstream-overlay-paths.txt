@@ -20,12 +20,15 @@
 # Entries apply only when the path is part of the current upstream diff; paths
 # not touched by upstream are ignored.  Broad directory allowances are not
 # permitted.  This list was generated from the 09ad58f0 sync merge
-# (1fcf7154) and reviewed per path.
+# (1fcf7154) and reviewed per path.  The 8900e87c sync extended it with the
+# entries noted below, reviewed per path in the same maintenance flow.
+README.md merge upstream README update merged with fork sponsor/attribution notice and uvx installation block
+README_CN.md merge upstream README update merged with fork sponsor/attribution notice and uvx installation block
 skills/ppt-master/SKILL.md merge fork uvx command and marker adaptation resolved during the 09ad58f0 sync merge
 skills/ppt-master/references/animations.md merge upstream reference update merged with fork uvx command adaptations
 skills/ppt-master/references/executor-base.md merge upstream reference update merged with fork uvx command adaptations
 skills/ppt-master/references/image-generator.md merge upstream reference update merged with fork uvx command adaptations
-skills/ppt-master/references/native-data-interface.md retain-base upstream change only reverts the uvx command to python3; fork keeps the uvx mapping
+skills/ppt-master/references/native-data-interface.md merge upstream schema update merged with fork uvx command adaptations (8900e87c sync)
 skills/ppt-master/references/native-shape-authoring.md merge upstream reference update merged with fork uvx command adaptations
 skills/ppt-master/references/plan-core.md merge upstream reference update merged with fork uvx command adaptations
 skills/ppt-master/references/shared-standards-core.md merge upstream reference update merged with fork uvx command adaptations
@@ -34,14 +37,20 @@ skills/ppt-master/scripts/confirm_ui/server.py merge upstream server update merg
 skills/ppt-master/scripts/docs/conversion.md merge upstream script documentation update merged with fork uvx command adaptations
 skills/ppt-master/scripts/docs/image.md merge upstream script documentation update merged with fork uvx command adaptations
 skills/ppt-master/scripts/docs/narration.md merge upstream script documentation update merged with fork uvx command adaptations
+skills/ppt-master/scripts/docs/project.md merge upstream script documentation update merged with fork uvx command adaptations (8900e87c sync)
 skills/ppt-master/scripts/docs/svg-pipeline.md merge upstream script documentation update merged with fork uvx command adaptations
 skills/ppt-master/scripts/image_gen.py merge upstream script update merged with fork uvx and backend adaptations
+skills/ppt-master/scripts/project_management/cli.py merge upstream project management update merged with fork projects_root and Windows adaptations (8900e87c sync)
 skills/ppt-master/scripts/source_to_md/web_to_md.py merge upstream script update merged with fork security adaptations
 skills/ppt-master/scripts/svg_editor/server.py merge upstream server update merged with fork launch-token and project-key markers
 skills/ppt-master/scripts/svg_finalize/flatten_tspan.py merge upstream script update merged with fork uvx invocation context
 skills/ppt-master/scripts/svg_position_calculator.py merge upstream script update merged with fork uvx invocation context
+skills/ppt-master/scripts/svg_quality/cli.py merge upstream script update merged with fork uvx command adaptations (8900e87c sync)
+skills/ppt-master/scripts/tts_backends/backend_edge.py merge upstream backend update merged with fork adaptations (8900e87c sync)
 skills/ppt-master/workflows/generate-pptx.md merge upstream workflow update merged with fork uvx command adaptations
+skills/ppt-master/workflows/profiles/beautify-pptx.md merge upstream workflow update merged with fork uvx command adaptations (8900e87c sync)
 skills/ppt-master/workflows/stages/apply-template-workspace.md retain-base upstream change only reverts uvx commands to python3; fork keeps the uvx mappings
-skills/ppt-master/workflows/stages/customize-animations.md retain-base upstream change only reverts uvx commands to python3; fork keeps the uvx mappings
+skills/ppt-master/workflows/stages/customize-animations.md merge upstream workflow update merged with fork uvx command adaptations (8900e87c sync)
+skills/ppt-master/workflows/stages/generate-audio.md merge upstream workflow update merged with fork uvx command adaptations (8900e87c sync)
 skills/ppt-master/workflows/stages/topic-research.md merge upstream workflow update merged with fork uvx command adaptations
 skills/ppt-master/workflows/stages/verify-charts.md merge upstream workflow update merged with fork uvx command adaptations
