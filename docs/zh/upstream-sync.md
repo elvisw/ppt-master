@@ -54,6 +54,7 @@ schedule 和 workflow_dispatch 共用相同的两 job 路径：
 `pull_request_target` 只豁免 protected-path 拒绝，仍执行 marker、ancestry、content、version 等其余门禁。
 标签的新增和删除都会重新触发检查。首次部署或修复该 trusted gate 的 PR 无法由旧 base 自我证明，
 必须依靠人工审查、独立测试和真实 Git/artifact 沙盘证明，不能声称新 gate 已保护它。
+修复上线后应新建一个普通 PR 作为验证 PR，确认新的 trusted workflow 实际通过后再启用 required checks。
 
 独立 `opencode.yml` 保持原有触发和授权者 guard，action 固定为
 `anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a`；只保留 checkout 所需
