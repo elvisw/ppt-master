@@ -31,6 +31,10 @@ def projects_root() -> Path:
     return (Path.cwd() / "projects").resolve()
 
 
+# Fork constant kept for upstream test imports; runtime code uses projects_root().
+PROJECTS_ROOT = projects_root()
+
+
 SOURCE_TO_MD_DIR = SCRIPTS_DIR / "source_to_md"
 CHARTS_DIR = SKILL_DIR / "templates" / "charts"
 SCHEMA_DIR = SKILL_DIR / "templates" / "schemas"

@@ -175,9 +175,11 @@ PPT_SAFE_FONTS = frozenset({
     'meiryo', 'meiryo ui',
     'ms gothic', 'ms mincho', 'ms pgothic', 'ms pmincho', 'ms ui gothic',
     'malgun gothic', 'gulim', 'dotum', 'batang',
+    'nirmala ui', 'mangal', 'kokila', 'aparajita', 'utsaah',
+    'leelawadee ui', 'leelawadee', 'cordia new', 'angsana new', 'browallia new',
     'arial', 'arial black', 'calibri', 'segoe ui', 'verdana',
     'helvetica', 'helvetica neue', 'tahoma', 'trebuchet ms',
-    'times new roman', 'times', 'georgia', 'cambria', 'palatino',
+    'times new roman', 'times', 'georgia', 'cambria', 'cambria math', 'palatino',
     'garamond', 'book antiqua',
     'consolas', 'courier new', 'menlo', 'monaco',
     'impact',
@@ -263,6 +265,7 @@ PROJECT_FILTER_PUBLIC_TARGETS = frozenset({
     'circle',
     'image',
     'path',
+    'polygon',
     'text',
 })
 _PROJECT_MARKER_NUMBER_TOKEN = (
@@ -2821,7 +2824,7 @@ def project_filter_errors(root: ET.Element) -> list[str]:
         ):
             errors.add(
                 f'{label} cannot use filter; supported native targets are '
-                'rect, circle, image, path, text, a validated compact authored-'
+                'rect, circle, image, path, polygon, text, a validated compact authored-'
                 'preset shape, and an exact registered carrier group'
             )
         if tag == 'image' and elem.get('clip-path') is not None:
@@ -3190,7 +3193,41 @@ def get_effective_filter_id(elem: ET.Element, ctx: ConvertContext) -> str | None
 # Font parsing
 # ---------------------------------------------------------------------------
 
-def parse_font_family(font_family_str: str) -> dict[str, str]:
+# Windows EA faces for decks whose primary language is not Simplified Chinese:
+# (sans, serif) by BCP-47 language/script prefix.
+_EA_DEFAULTS_BY_LANGUAGE = (
+    (('ja',), ('Yu Gothic', 'Yu Mincho')),
+    (('ko',), ('Malgun Gothic', 'Batang')),
+    (('zh-hant', 'zh-tw', 'zh-hk', 'zh-mo'), ('Microsoft JhengHei', 'PMingLiU')),
+)
+# macOS Japanese faces map to Japanese Windows faces, not to Chinese ones.
+_JA_FONT_FALLBACK_WIN = {
+    'Hiragino Sans': 'Yu Gothic',
+    'Hiragino Kaku Gothic ProN': 'Yu Gothic',
+    'Hiragino Kaku Gothic Pro': 'Yu Gothic',
+    'Hiragino Mincho ProN': 'Yu Mincho',
+    'Hiragino Mincho Pro': 'Yu Mincho',
+}
+
+
+def _language_is(language: str | None, prefix: str) -> bool:
+    """Return whether a BCP-47 tag equals or starts with one subtag prefix."""
+    tag = (language or '').lower()
+    return tag == prefix or tag.startswith(prefix + '-')
+
+
+def _ea_default(language: str | None, serif: bool) -> str:
+    """Return the Windows EA fallback face for one deck language."""
+    for prefixes, faces in _EA_DEFAULTS_BY_LANGUAGE:
+        if any(_language_is(language, prefix) for prefix in prefixes):
+            return faces[1] if serif else faces[0]
+    return 'SimSun' if serif else 'Microsoft YaHei'
+
+
+def parse_font_family(
+    font_family_str: str,
+    language: str | None = None,
+) -> dict[str, str]:
     """Parse CSS font-family into latin/ea typeface names.
 
     Prioritizes Windows-available fonts since PPTX is primarily opened on
@@ -3198,9 +3235,13 @@ def parse_font_family(font_family_str: str) -> dict[str, str]:
     first named Latin face fills ``latin`` and the first named CJK face fills
     ``ea``; a CJK face also serves ``latin`` when no named Latin face exists,
     and a generic family fills ``latin`` only when it precedes every named face.
+    ``language`` (the deck's BCP-47 primary language) picks the EA fallback
+    when the stack names no CJK face, so Japanese text never lands on a
+    Chinese face.
     """
+    is_japanese = _language_is(language, 'ja')
     if not font_family_str:
-        return {'latin': 'Segoe UI', 'ea': 'Microsoft YaHei'}
+        return {'latin': 'Segoe UI', 'ea': _ea_default(language, False)}
 
     fonts = [f.strip().strip("'\"") for f in font_family_str.split(',')]
     latin_font = None
@@ -3217,7 +3258,9 @@ def parse_font_family(font_family_str: str) -> dict[str, str]:
                 latin_font = GENERIC_FONT_MAP[font]
             continue
 
-        win_font = FONT_FALLBACK_WIN.get(font, font)
+        win_font = (
+            _JA_FONT_FALLBACK_WIN.get(font) if is_japanese else None
+        ) or FONT_FALLBACK_WIN.get(font, font)
         if font in EA_FONTS:
             ea_font = ea_font or win_font
         else:
@@ -3231,7 +3274,7 @@ def parse_font_family(font_family_str: str) -> dict[str, str]:
 
     # EA must always be a CJK-capable font
     if not ea_font:
-        ea_font = 'SimSun' if final_latin in _SERIF_LATIN else 'Microsoft YaHei'
+        ea_font = _ea_default(language, final_latin in _SERIF_LATIN)
 
     return {'latin': final_latin, 'ea': ea_font}
 
@@ -3600,7 +3643,13 @@ def _estimate_grapheme_width(cluster: str, font_size: float) -> float:
         and all(_is_regional_indicator(ch) for ch in bases)
     ) or '\u20e3' in cluster or any(_is_emoji_base(ch) for ch in bases):
         return font_size
-    return max(_estimate_character_width(ch, font_size) for ch in bases)
+    # Spacing combining marks (Indic vowel signs such as Devanagari aa/ii/o)
+    # sit beside the base and advance the pen; non-spacing marks do not.
+    spacing_marks = sum(1 for ch in cluster if unicodedata.category(ch) == 'Mc')
+    return (
+        max(_estimate_character_width(ch, font_size) for ch in bases)
+        + font_size * 0.3 * spacing_marks
+    )
 
 
 _FONT_ADVANCES_CACHE = None

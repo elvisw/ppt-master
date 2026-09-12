@@ -35,7 +35,7 @@ uvx ppt-master notes-to-audio --list-voices --locale <locale>
 uvx ppt-master notes-to-audio --provider <elevenlabs|minimax|qwen|cosyvoice> --list-voices
 ```
 
-From the flat list, pick **3–6 candidates**: cover both genders when the locale has them; for edge prefer the curated `COMMON_VOICES` set; for ElevenLabs prefer voices already in the user's account and never override a user-supplied `voice_id`; for MiniMax / Qwen / CosyVoice use a supplied cloned `voice_id` directly and never attempt cloning here; for CosyVoice subtitles use a timestamp-capable model/voice pair, and `--cosyvoice-audio-only` only when the user accepts no page-local SRT. Match the deck's tone — a Chinese consultant / financial deck leans a steady male (`zh-CN-YunjianNeural`) or clear female (`zh-CN-XiaoxiaoNeural`) voice; teaching / product decks a bright female or young male (`zh-CN-XiaoyiNeural` / `zh-CN-YunxiNeural`); launch / broadcast decks `zh-CN-YunyangNeural`; English consultant decks `en-US-GuyNeural` or `en-US-JennyNeural`; Japanese / Korean from `ja-JP-*` / `ko-KR-*` with gender + tone noted. Describe each candidate in one line in the user's chat language (gender · tone · best-fit scenario), with the exact name/ID to pass to `--voice-id` for cloud providers.
+From the flat list, pick **3–6 candidates**: cover both genders when the locale has them; for edge prefer the curated `COMMON_VOICES` set; for ElevenLabs prefer voices already in the user's account and never override a user-supplied `voice_id`; for MiniMax / Qwen / CosyVoice `--list-voices` prints no catalog — use a supplied cloned `voice_id` directly (never attempt cloning here) or a system voice id from the provider's documentation; for CosyVoice subtitles use a timestamp-capable model/voice pair, and `--cosyvoice-audio-only` only when the user accepts no page-local SRT. Match the deck's tone — a Chinese consultant / financial deck leans a steady male (`zh-CN-YunjianNeural`) or clear female (`zh-CN-XiaoxiaoNeural`) voice; teaching / product decks a bright female or young male (`zh-CN-XiaoyiNeural` / `zh-CN-YunxiNeural`); launch / broadcast decks `zh-CN-YunyangNeural`; English consultant decks `en-US-GuyNeural` or `en-US-JennyNeural`; Japanese / Korean from `ja-JP-*` / `ko-KR-*` with gender + tone noted. Describe each candidate in one line in the user's chat language (gender · tone · best-fit scenario), with the exact name/ID to pass to `--voice-id` for cloud providers.
 
 ---
 
@@ -88,6 +88,7 @@ uvx ppt-master svg-to-pptx <project_path> --recorded-narration audio --narration
 
 # 2C. Only when page-local SRT exists
 uvx ppt-master narration-sync subtitles <project_path> --pptx <final_narrated_pptx> --force
+#     <final_narrated_pptx>: absolute, or an existing path as given, else relative to <project_path>
 
 # 2D. Optional native video through installed Windows PowerPoint
 uvx ppt-master powerpoint-video <final_narrated_pptx> -o <raw_powerpoint_video.mp4>

@@ -130,6 +130,17 @@ def _chart_data_labels(
             raise RuntimeError(
                 "Native PPTX chart data_labels.points color must be a color"
             )
+    if (
+        point_items
+        and not data_labels_show_unlisted(config)
+        and all(item.get("delete") is True for item in point_items)
+    ):
+        raise RuntimeError(
+            "Native PPTX chart data_labels.points lists the labels to show; "
+            "every listed point is delete: true, so no label remains. List the "
+            "points to label, or set show_value: true so unlisted points keep "
+            "their labels and delete entries hide single points"
+        )
     colors = _chart_list(
         _first_present(
             config.get("colors"),
@@ -167,6 +178,24 @@ def _chart_data_labels(
                 "Native PPTX chart data_labels.source_ooxml sha256 is invalid"
             )
     return config
+
+
+def data_labels_show_unlisted(config: dict[str, Any]) -> bool:
+    """Return whether points absent from ``points`` keep the series label.
+
+    An explicit truthy ``show_*`` flag makes ``points`` a list of overrides,
+    as in OOXML and the PPTX importer; without one ``points`` lists the only
+    labels shown.
+    """
+    return any(
+        _chart_bool(_first_present(*(config.get(key) for key in aliases)), False)
+        for aliases in (
+            ("show_value", "showValue", "value"),
+            ("show_category", "showCategory", "category"),
+            ("show_series", "showSeries", "series"),
+            ("show_percent", "showPercent", "percent"),
+        )
+    )
 
 
 def _data_label_point_items(
@@ -862,6 +891,14 @@ def _category_series(
     for idx, item in enumerate(raw_series, start=1):
         if not isinstance(item, dict):
             raise RuntimeError("Native PPTX chart series entries must be objects")
+        if (
+            _first_present(item.get("line_style"), item.get("lineStyle")) is not None
+            and not (item.get("type") or item.get("chart_type"))
+        ):
+            raise RuntimeError(
+                "Native PPTX chart series[].line_style is not a series option; "
+                "set line_style on the chart root (combo: on the plot or typed series)"
+            )
         values = [
             _chart_point_value(value)
             for value in _chart_list(item.get("values", []), "series[].values")
