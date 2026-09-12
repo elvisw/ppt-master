@@ -2,6 +2,7 @@ name: Check Upstream Ancestry
 
 on:
   pull_request_target:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
 
 permissions:
   contents: read
@@ -47,12 +48,11 @@ jobs:
       - name: Fetch PR head object into trusted store
         working-directory: trusted
         env:
-          GITHUB_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          git -c "http.extraheader=AUTHORIZATION: bearer ${GITHUB_TOKEN}" \
+          git -c credential.helper= -c core.hooksPath=/dev/null \
             fetch --no-tags origin "refs/pull/${PR_NUMBER}/head"
           FETCHED_HEAD=$(git rev-parse FETCH_HEAD)
           if [ "$FETCHED_HEAD" != "$HEAD_SHA" ]; then
@@ -72,6 +72,7 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MAINTENANCE_APPROVED: ${{ contains(github.event.pull_request.labels.*.name, 'ci-maintenance-approved') && 'true' || 'false' }}
         run: |
           set -euo pipefail
           if [ "$(git rev-parse HEAD)" != "$BASE_SHA" ]; then
@@ -79,8 +80,13 @@ jobs:
             exit 1
           fi
           git cat-file -e "${HEAD_SHA}^{commit}"
+          MAINTENANCE_ARGS=()
+          if [ "$MAINTENANCE_APPROVED" = "true" ]; then
+            MAINTENANCE_ARGS+=(--allow-protected-changes)
+          fi
           python3 .github/scripts/check_upstream_ancestry.py \
             --repo "$GITHUB_WORKSPACE/trusted" \
             --base-sha "$BASE_SHA" \
             --head-sha "$HEAD_SHA" \
-            --upstream-ref upstream/main
+            --upstream-ref upstream/main \
+            "${MAINTENANCE_ARGS[@]}"

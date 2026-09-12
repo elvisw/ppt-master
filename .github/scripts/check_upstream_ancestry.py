@@ -679,6 +679,7 @@ def verify_pull_request(
     *,
     expected_target_sha: str | None = None,
     require_version_bump: bool = False,
+    allow_protected_changes: bool = False,
 ) -> str:
     """Verify the marker transition and strict merge ancestry for a PR."""
     _require_commit(repo, base_sha, "base")
@@ -688,7 +689,8 @@ def verify_pull_request(
 
     sync_mode = expected_target_sha is not None or require_version_bump
     if base_entry is None and head_entry is None:
-        _assert_no_protected_changes(repo, base_sha, head_sha)
+        if not allow_protected_changes:
+            _assert_no_protected_changes(repo, base_sha, head_sha)
         if sync_mode:
             raise CheckError("The sync candidate marker is missing at both ends")
         return "Recorded upstream marker absent at both ends; ordinary PR skipped"
@@ -699,7 +701,8 @@ def verify_pull_request(
     _require_regular_blob(head_entry, "head")
 
     if base_entry is not None and base_entry.object_name == head_entry.object_name:
-        _assert_no_protected_changes(repo, base_sha, head_sha)
+        if not allow_protected_changes:
+            _assert_no_protected_changes(repo, base_sha, head_sha)
         if sync_mode:
             raise CheckError("The sync candidate marker is unchanged")
         return "Recorded upstream marker unchanged; ordinary PR skipped"
@@ -710,7 +713,8 @@ def verify_pull_request(
         if target != expected_target_sha:
             raise CheckError("The recorded upstream target differs from the immutable expected target")
     _verify_target_ancestry(repo, target, head_sha, upstream_ref)
-    _assert_no_protected_changes(repo, base_sha, head_sha, excluded_ancestors=(target,))
+    if not allow_protected_changes:
+        _assert_no_protected_changes(repo, base_sha, head_sha, excluded_ancestors=(target,))
     merge_commit = _verify_strict_merge(repo, base_sha, head_sha, target)
     if require_version_bump:
         _verify_version_bump(repo, base_sha, head_sha)
@@ -745,6 +749,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--require-version-bump",
         action="store_true",
         help="Require both fork package manifests to advance together",
+    )
+    parser.add_argument(
+        "--allow-protected-changes",
+        action="store_true",
+        help="Allow maintainer-approved CI gate changes while retaining ancestry/content checks",
     )
     return parser
 
@@ -785,6 +794,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.upstream_ref,
                 expected_target_sha=args.expected_target_sha,
                 require_version_bump=args.require_version_bump,
+                allow_protected_changes=args.allow_protected_changes,
             )
         else:
             message = verify_head_commit(

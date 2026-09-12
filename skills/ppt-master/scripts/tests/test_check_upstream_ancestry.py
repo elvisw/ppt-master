@@ -15,6 +15,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[4]
 HELPER = ROOT / ".github" / "scripts" / "check_upstream_ancestry.py"
+WORKFLOW = ROOT / ".github" / "workflows" / "check-upstream-ancestry.yml"
 MARKER = ".github/upstream-main.sha"
 OVERLAY_POLICY = ".github/upstream-overlay-paths.txt"
 OLD_TARGET = "1" * 40
@@ -122,6 +123,7 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
         cwd: Path | None = None,
         expected_target: str | None = None,
         require_version_bump: bool = False,
+        allow_protected_changes: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         args = [
             sys.executable,
@@ -139,6 +141,8 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
             args.extend(["--expected-target-sha", expected_target])
         if require_version_bump:
             args.append("--require-version-bump")
+        if allow_protected_changes:
+            args.append("--allow-protected-changes")
         return subprocess.run(args, cwd=cwd or repo, text=True, capture_output=True, check=False)
 
     def _set_index_mode(self, repo: Path, mode: str, content: bytes) -> None:
@@ -310,6 +314,38 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
                     result = self._run_check(repo, base=base, head=head)
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn("protected", result.stderr)
+
+    def test_maintainer_approval_allows_protected_change_without_skipping_other_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo, base = self._new_repo(
+                Path(temporary),
+                extra_files={".github/workflows/auto-tag.yml": b"trusted base\n"},
+            )
+            path = repo / ".github" / "workflows" / "auto-tag.yml"
+            path.write_text("approved maintenance\n", encoding="utf-8")
+            run_git(repo, "add", str(path.relative_to(repo)))
+            run_git(repo, "commit", "-m", "maintain trusted gate")
+            head = git_output(repo, "rev-parse", "HEAD")
+
+            rejected = self._run_check(repo, base=base, head=head)
+            self.assertNotEqual(rejected.returncode, 0)
+            approved = self._run_check(
+                repo,
+                base=base,
+                head=head,
+                allow_protected_changes=True,
+            )
+            self.assertEqual(approved.returncode, 0, approved.stderr)
+
+    def test_workflow_fetches_public_pr_object_without_bearer_header_and_audits_label(self) -> None:
+        text = WORKFLOW.read_text(encoding="utf-8")
+        self.assertNotIn("http.extraheader", text)
+        self.assertNotIn("GITHUB_TOKEN", text)
+        self.assertIn('fetch --no-tags origin "refs/pull/${PR_NUMBER}/head"', text)
+        self.assertIn("ci-maintenance-approved", text)
+        self.assertIn("--allow-protected-changes", text)
+        self.assertIn("labeled", text)
+        self.assertIn("unlabeled", text)
 
     def test_new_unlisted_workflow_is_protected_by_directory_policy(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
