@@ -198,6 +198,45 @@ class ReleaseGateHelperTests(unittest.TestCase):
     def test_current_privileged_workflow_policy_passes(self) -> None:
         self.module._check_workflow_policy(ROOT)
 
+    def test_release_tooling_lock_rejects_input_or_hash_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary)
+            for input_name, lock_name, _expected_input, _expected_digest in self.module.RELEASE_TOOLING_LOCKS:
+                for relative in (input_name, lock_name):
+                    destination = repo / relative
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(ROOT / relative, destination)
+            self.module._check_release_tooling_lock(repo)
+
+            lock = repo / self.module.RELEASE_TOOLING_LOCKS[0][1]
+            lock.write_bytes(lock.read_bytes() + b"# drift\n")
+            with self.assertRaises(self.module.ReleaseGateError):
+                self.module._check_release_tooling_lock(repo)
+
+            shutil.copyfile(ROOT / self.module.RELEASE_TOOLING_LOCKS[0][1], lock)
+            input_path = repo / self.module.RELEASE_TOOLING_LOCKS[0][0]
+            input_path.write_bytes(input_path.read_bytes() + b"# drift\n")
+            with self.assertRaises(self.module.ReleaseGateError):
+                self.module._check_release_tooling_lock(repo)
+
+    def test_fork_python_gate_resolves_ruff_beside_gate_interpreter(self) -> None:
+        fake_python = Path("C:/trusted-venv/Scripts/python.exe")
+        calls: list[list[str]] = []
+
+        def fake_run(args, **_kwargs):
+            calls.append(list(args))
+            return subprocess.CompletedProcess(args, 0, "", "")
+
+        with (
+            mock.patch.object(self.module.sys, "executable", str(fake_python)),
+            mock.patch.object(self.module.Path, "is_file", return_value=True),
+            mock.patch.object(self.module.subprocess, "run", side_effect=fake_run),
+        ):
+            self.module._run_fork_python_gates(ROOT)
+
+        expected = fake_python.with_name("ruff.exe" if self.module.os.name == "nt" else "ruff")
+        self.assertEqual(Path(calls[-1][0]), expected)
+
     def test_migration_workflow_policy_rejects_noop_and_bypass_shapes(self) -> None:
         mutations = (
             (

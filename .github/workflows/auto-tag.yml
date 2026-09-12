@@ -47,12 +47,29 @@ jobs:
             exit 1
           fi
 
+      - name: Setup uv for trusted gate tooling
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.13"
+          checksum: "745765a3b6e360ad76743599ae5c42e9278c7edf8bbff9fc76d05bf2623a04dd"
+          enable-cache: false
+
+      - name: Install pinned trusted gate tooling
+        env:
+          UV_PYTHON_DOWNLOADS: never
+        run: |
+          set -euo pipefail
+          uv venv --python 3.12 "$RUNNER_TEMP/ppt-master-gate-venv"
+          GATE_PYTHON="$RUNNER_TEMP/ppt-master-gate-venv/bin/python"
+          uv pip sync --python "$GATE_PYTHON" --require-hashes --only-binary :all: --no-progress ".github/release-gate-requirements.txt"
+          printf 'GATE_PYTHON=%s\n' "$GATE_PYTHON" >> "$GITHUB_ENV"
+
       - name: Parse and bind package version through environment
         env:
           RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          python -I .github/scripts/check_release_gates.py \
+          "$GATE_PYTHON" -I .github/scripts/check_release_gates.py \
             --repo "$GITHUB_WORKSPACE" \
             --release-sha "$RELEASE_SHA" \
             --emit-release-env \
@@ -70,25 +87,12 @@ jobs:
             > "$RUNS_FILE"
           printf 'RUNS_FILE=%s\n' "$RUNS_FILE" >> "$GITHUB_ENV"
 
-      - name: Setup uv for trusted gate tooling
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-        with:
-          version: "0.12.13"
-          checksum: "745765a3b6e360ad76743599ae5c42e9278c7edf8bbff9fc76d05bf2623a04dd"
-          enable-cache: false
-
-      - name: Install pinned trusted gate tooling
-        run: |
-          set -euo pipefail
-          GATE_PYTHON="$(python -c 'import sys; print(sys.executable)')"
-          uv pip install --system --break-system-packages --python "$GATE_PYTHON" --no-progress "PyYAML==6.0.2" "ruff==0.12.10"
-
       - name: Run complete release gates for exact SHA
         env:
           RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          python -I .github/scripts/check_release_gates.py \
+          "$GATE_PYTHON" -I .github/scripts/check_release_gates.py \
             --repo "$GITHUB_WORKSPACE" \
             --release-sha "$RELEASE_SHA" \
             --release-tag "$RELEASE_TAG" \

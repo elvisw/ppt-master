@@ -110,6 +110,21 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
                 self.assertEqual(step["with"]["version"], UV_VERSION)
                 self.assertEqual(step["with"]["checksum"], UV_CHECKSUM)
 
+    def test_gate_tooling_uses_runner_temp_venv_instead_of_system_python(self) -> None:
+        for path in (AUTO_TAG, PUBLISH):
+            text = path.read_text(encoding="utf-8")
+            self.assertIn('uv venv --python 3.12 "$RUNNER_TEMP/ppt-master-gate-venv"', text)
+            self.assertIn('GATE_PYTHON="$RUNNER_TEMP/ppt-master-gate-venv/bin/python"', text)
+            self.assertIn('printf \'GATE_PYTHON=%s\\n\' "$GATE_PYTHON" >> "$GITHUB_ENV"', text)
+            self.assertIn('UV_PYTHON_DOWNLOADS: never', text)
+            self.assertIn('uv pip sync --python "$GATE_PYTHON" --require-hashes --only-binary :all:', text)
+            self.assertIn('"$GATE_PYTHON" -I .github/scripts/check_release_gates.py', text)
+            self.assertNotIn("uv pip install", text)
+            self.assertNotIn("--system", text)
+            self.assertNotIn("--break-system-packages", text)
+        self.assertIn('".github/release-gate-requirements.txt"', AUTO_TAG.read_text(encoding="utf-8"))
+        self.assertIn('".github/release-build-requirements.txt"', PUBLISH.read_text(encoding="utf-8"))
+
     def test_migration_workflow_has_isolated_exact_read_only_steps(self) -> None:
         data = yaml.safe_load(MIGRATION.read_text(encoding="utf-8"))
         self.assertEqual(set(data["jobs"]), {"check"})
