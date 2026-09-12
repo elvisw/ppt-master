@@ -95,10 +95,13 @@ jobs:
           enable-cache: false
 
       - name: Install pinned trusted gate tooling
+        env:
+          UV_PYTHON_DOWNLOADS: never
         run: |
           set -euo pipefail
-          GATE_PYTHON="$(python -c 'import sys; print(sys.executable)')"
-          uv pip install --system --break-system-packages --python "$GATE_PYTHON" --no-progress "PyYAML==6.0.2" "ruff==0.12.10" "setuptools==80.9.0"
+          uv venv --python 3.12 "$RUNNER_TEMP/ppt-master-gate-venv"
+          GATE_PYTHON="$RUNNER_TEMP/ppt-master-gate-venv/bin/python"
+          uv pip sync --python "$GATE_PYTHON" --require-hashes --only-binary :all: --no-progress ".github/release-build-requirements.txt"
           printf 'GATE_PYTHON=%s\n' "$GATE_PYTHON" >> "$GITHUB_ENV"
 
       - name: Rerun complete release gates for exact tag and SHA
@@ -107,7 +110,7 @@ jobs:
           RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.release_tag }}
         run: |
           set -euo pipefail
-          python -I .github/scripts/check_release_gates.py \
+          "$GATE_PYTHON" -I .github/scripts/check_release_gates.py \
             --repo "$GITHUB_WORKSPACE" \
             --release-sha "$RELEASE_SHA" \
             --release-tag "$RELEASE_TAG" \

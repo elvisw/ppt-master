@@ -1,0 +1,4 @@
+/.github/release-gate-requirements.in text eol=lf
+/.github/release-gate-requirements.txt text eol=lf
+/.github/release-build-requirements.in text eol=lf
+/.github/release-build-requirements.txt text eol=lf

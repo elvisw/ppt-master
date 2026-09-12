@@ -49,9 +49,11 @@ schedule 和 workflow_dispatch 共用相同的两 job 路径：
    最终由 trusted `pull_request_target` strict first-parent/required checks 阻断错误 PR；绝不推送
    `main`，non-fast-forward 或任意 artifact mismatch 都 fail-closed。
 
-普通 PR 不得修改整个 `.github/workflows/**`、`.github/pull.yml`、protected helper/command/gate/test 文件；这些文件必须通过显式 trusted
-maintenance/bootstrap 流程维护。首次部署该 gate 的 PR 可能没有被 base 自身保护，必须依靠人工审查、
-独立测试和真实 Git/artifact 沙盘证明，不能声称新 gate 已保护它。
+普通 PR 不得修改整个 `.github/workflows/**`、`.github/pull.yml`、protected helper/command/gate/test 文件。
+维护者审阅这些文件的变更后，必须显式添加仓库标签 `ci-maintenance-approved`；trusted
+`pull_request_target` 只豁免 protected-path 拒绝，仍执行 marker、ancestry、content、version 等其余门禁。
+标签的新增和删除都会重新触发检查。首次部署或修复该 trusted gate 的 PR 无法由旧 base 自我证明，
+必须依靠人工审查、独立测试和真实 Git/artifact 沙盘证明，不能声称新 gate 已保护它。
 
 独立 `opencode.yml` 保持原有触发和授权者 guard，action 固定为
 `anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a`；只保留 checkout 所需

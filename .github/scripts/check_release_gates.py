@@ -132,7 +132,21 @@ PUBLISH_BUILD_PERMISSIONS = {"contents": "read", "actions": "read"}
 PUBLISH_PERMISSIONS = {"id-token": "write"}
 EXPECTED_UV_VERSION = "0.12.13"
 EXPECTED_UV_CHECKSUM = "745765a3b6e360ad76743599ae5c42e9278c7edf8bbff9fc76d05bf2623a04dd"
-EXPECTED_BUILD_BACKEND = "setuptools==80.9.0"
+RELEASE_TOOLING_LOCKS = (
+    (
+        ".github/release-gate-requirements.in",
+        ".github/release-gate-requirements.txt",
+        b"PyYAML==6.0.2\nruff==0.12.10\n",
+        "3b4263e1978921d15a10af95d9b422dc39556ce9bb2273c3fa99a370d3349d75",
+    ),
+    (
+        ".github/release-build-requirements.in",
+        ".github/release-build-requirements.txt",
+        b"PyYAML==6.0.2\nruff==0.12.10\nsetuptools==80.9.0\n",
+        "f31366cdcd90a773bfbf97182aa8e6d567f11f2134bd57c25f52157ee2dae357",
+    ),
+)
+TOOLING_ENV = {"UV_PYTHON_DOWNLOADS": "never"}
 TRUSTED_SCRIPT_DIRECTORY = ".github/scripts"
 TRUSTED_SCRIPT_MODULES = (
     "check_release_gates.py",
@@ -188,7 +202,7 @@ AUTO_TAG_FETCH_RUN = _template(
 AUTO_TAG_PARSE_RUN = _template(
     r"""
     set -euo pipefail
-    python -I .github/scripts/check_release_gates.py \
+    "$GATE_PYTHON" -I .github/scripts/check_release_gates.py \
       --repo "$GITHUB_WORKSPACE" \
       --release-sha "$RELEASE_SHA" \
       --emit-release-env \
@@ -208,14 +222,16 @@ AUTO_TAG_QUERY_RUN = _template(
 AUTO_TAG_TOOLING_RUN = _template(
     r"""
     set -euo pipefail
-    GATE_PYTHON="$(python -c 'import sys; print(sys.executable)')"
-    uv pip install --system --break-system-packages --python "$GATE_PYTHON" --no-progress "PyYAML==6.0.2" "ruff==0.12.10"
+    uv venv --python 3.12 "$RUNNER_TEMP/ppt-master-gate-venv"
+    GATE_PYTHON="$RUNNER_TEMP/ppt-master-gate-venv/bin/python"
+    uv pip sync --python "$GATE_PYTHON" --require-hashes --only-binary :all: --no-progress ".github/release-gate-requirements.txt"
+    printf 'GATE_PYTHON=%s\n' "$GATE_PYTHON" >> "$GITHUB_ENV"
     """
 )
 AUTO_TAG_GATE_RUN = _template(
     r"""
     set -euo pipefail
-    python -I .github/scripts/check_release_gates.py \
+    "$GATE_PYTHON" -I .github/scripts/check_release_gates.py \
       --repo "$GITHUB_WORKSPACE" \
       --release-sha "$RELEASE_SHA" \
       --release-tag "$RELEASE_TAG" \
@@ -441,15 +457,16 @@ PUBLISH_QUERY_RUN = _template(
 PUBLISH_TOOLING_RUN = _template(
     r"""
     set -euo pipefail
-    GATE_PYTHON="$(python -c 'import sys; print(sys.executable)')"
-    uv pip install --system --break-system-packages --python "$GATE_PYTHON" --no-progress "PyYAML==6.0.2" "ruff==0.12.10" "setuptools==80.9.0"
+    uv venv --python 3.12 "$RUNNER_TEMP/ppt-master-gate-venv"
+    GATE_PYTHON="$RUNNER_TEMP/ppt-master-gate-venv/bin/python"
+    uv pip sync --python "$GATE_PYTHON" --require-hashes --only-binary :all: --no-progress ".github/release-build-requirements.txt"
     printf 'GATE_PYTHON=%s\n' "$GATE_PYTHON" >> "$GITHUB_ENV"
     """
 )
 PUBLISH_GATE_RUN = _template(
     r"""
     set -euo pipefail
-    python -I .github/scripts/check_release_gates.py \
+    "$GATE_PYTHON" -I .github/scripts/check_release_gates.py \
       --repo "$GITHUB_WORKSPACE" \
       --release-sha "$RELEASE_SHA" \
       --release-tag "$RELEASE_TAG" \
@@ -534,7 +551,8 @@ PUBLISH_BUILD_STEP_CONTRACTS = (
     ),
     WorkflowStepContract(
         name="Install pinned trusted gate tooling",
-        keys=frozenset({"name", "run"}),
+        keys=frozenset({"name", "env", "run"}),
+        env=TOOLING_ENV,
         run_template=PUBLISH_TOOLING_RUN,
     ),
     WorkflowStepContract(
@@ -640,6 +658,22 @@ AUTO_TAG_STEP_CONTRACTS = (
         run_template=AUTO_TAG_FETCH_RUN,
     ),
     WorkflowStepContract(
+        name="Setup uv for trusted gate tooling",
+        keys=frozenset({"name", "uses", "with"}),
+        uses=USES_SETUP_UV,
+        with_values={
+            "version": EXPECTED_UV_VERSION,
+            "checksum": EXPECTED_UV_CHECKSUM,
+            "enable-cache": False,
+        },
+    ),
+    WorkflowStepContract(
+        name="Install pinned trusted gate tooling",
+        keys=frozenset({"name", "env", "run"}),
+        env=TOOLING_ENV,
+        run_template=AUTO_TAG_TOOLING_RUN,
+    ),
+    WorkflowStepContract(
         name="Parse and bind package version through environment",
         keys=frozenset({"name", "env", "run"}),
         env={"RELEASE_SHA": "${{ github.event.workflow_run.head_sha }}"},
@@ -653,21 +687,6 @@ AUTO_TAG_STEP_CONTRACTS = (
             "RELEASE_SHA": "${{ github.event.workflow_run.head_sha }}",
         },
         run_template=AUTO_TAG_QUERY_RUN,
-    ),
-    WorkflowStepContract(
-        name="Setup uv for trusted gate tooling",
-        keys=frozenset({"name", "uses", "with"}),
-        uses=USES_SETUP_UV,
-        with_values={
-            "version": EXPECTED_UV_VERSION,
-            "checksum": EXPECTED_UV_CHECKSUM,
-            "enable-cache": False,
-        },
-    ),
-    WorkflowStepContract(
-        name="Install pinned trusted gate tooling",
-        keys=frozenset({"name", "run"}),
-        run_template=AUTO_TAG_TOOLING_RUN,
     ),
     WorkflowStepContract(
         name="Run complete release gates for exact SHA",
@@ -1038,8 +1057,12 @@ def _run_fork_python_gates(repo: Path) -> None:
         )
         if compile_result.returncode != 0:
             raise ReleaseGateError("Fork Python py_compile gate failed")
+    ruff_name = "ruff.exe" if os.name == "nt" else "ruff"
+    ruff_executable = Path(sys.executable).with_name(ruff_name)
+    if not ruff_executable.is_file():
+        raise ReleaseGateError("Pinned Ruff executable is missing beside the gate interpreter")
     ruff_result = subprocess.run(
-        ["ruff", "check", "--isolated", "--no-cache", "--select", "F821", *absolute_files],
+        [str(ruff_executable), "check", "--isolated", "--no-cache", "--select", "F821", *absolute_files],
         cwd=repo,
         capture_output=True,
         text=True,
@@ -1167,8 +1190,12 @@ def _check_isolated_python_invocations(text: str, label: str) -> None:
     if "python3" in text:
         raise ReleaseGateError(f"{label} must not rely on the removed python3 alias")
     for line in text.splitlines():
-        if "check_release_gates.py" in line and "python -I " not in line:
-            raise ReleaseGateError(f"{label} must invoke the release gate with python -I")
+        if "check_release_gates.py" in line and not any(
+            marker in line for marker in ("python -I ", '"$GATE_PYTHON" -I ')
+        ):
+            raise ReleaseGateError(
+                f"{label} must invoke the release gate with an isolated Python interpreter"
+            )
 
 
 def _normalize_run(value: object, label: str) -> str:
@@ -1354,21 +1381,45 @@ def _check_tooling_install(run: object, label: str, *, require_build_backend: bo
     """Require exact-pinned tooling installed into the explicit gate interpreter."""
     if (
         not isinstance(run, str)
-        or "uv pip install" not in run
-        or "--system" not in run
-        or "--break-system-packages" not in run
+        or 'uv venv --python 3.12 "$RUNNER_TEMP/ppt-master-gate-venv"' not in run
+        or 'GATE_PYTHON="$RUNNER_TEMP/ppt-master-gate-venv/bin/python"' not in run
+        or "uv pip sync" not in run
+        or "--require-hashes" not in run
+        or "--only-binary :all:" not in run
+        or (
+            ".github/release-build-requirements.txt"
+            if require_build_backend
+            else ".github/release-gate-requirements.txt"
+        )
+        not in run
+        or "uv pip install" in run
+        or "--system" in run
+        or "--break-system-packages" in run
         or "--python" not in run
         or "GATE_PYTHON" not in run
-        or "PyYAML==" not in run
-        or "ruff==" not in run
         or ">=" in run
         or "~=" in run
-        or (require_build_backend and EXPECTED_BUILD_BACKEND not in run)
     ):
         raise ReleaseGateError(f"{label} must install only exact pinned gate and build tooling")
 
 
+def _check_release_tooling_lock(repo: Path) -> None:
+    """Require each release tooling input and generated hash lock to remain exact."""
+    for input_name, lock_name, expected_input, expected_digest in RELEASE_TOOLING_LOCKS:
+        input_path = repo / input_name
+        lock_path = repo / lock_name
+        for path, label in ((input_path, "input"), (lock_path, "lock")):
+            if path.is_symlink() or not path.is_file():
+                raise ReleaseGateError(f"Release tooling {label} is not a regular file: {path.name}")
+        if input_path.read_bytes() != expected_input:
+            raise ReleaseGateError("Release tooling input does not match the approved exact pins")
+        digest = hashlib.sha256(lock_path.read_bytes()).hexdigest()
+        if digest != expected_digest:
+            raise ReleaseGateError("Release tooling hash lock does not match the approved digest")
+
+
 def _check_workflow_policy(repo: Path) -> None:
+    _check_release_tooling_lock(repo)
     data: dict[str, dict[str, Any]] = {}
     for relative in PRIVILEGED_WORKFLOWS:
         path = repo / relative
