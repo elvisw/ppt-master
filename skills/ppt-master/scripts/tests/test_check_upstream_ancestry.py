@@ -12,6 +12,8 @@ from collections.abc import Callable
 from pathlib import Path
 from unittest import mock
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[4]
 HELPER = ROOT / ".github" / "scripts" / "check_upstream_ancestry.py"
@@ -346,6 +348,10 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
         self.assertIn("--allow-protected-changes", text)
         self.assertIn("labeled", text)
         self.assertIn("unlabeled", text)
+        import yaml
+
+        data = yaml.safe_load(text)
+        self.assertEqual(set(data["jobs"]), {"ancestry-gate"})
 
     def test_new_unlisted_workflow_is_protected_by_directory_policy(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
