@@ -36,8 +36,14 @@ from svg_to_pptx.drawingml.elements import estimate_single_line_text_frame_width
 from svg_to_pptx.drawingml.utils import split_project_text_clusters  # noqa: E402
 
 
-_CLOSING_PUNCTUATION = frozenset(',.;:!?)]}、，。；：！？）》」』】”’')
+_CLOSING_PUNCTUATION = frozenset(',.;:!?)]}、，。；：！？）》」』】”’،؛؟')
 _OPENING_PUNCTUATION = frozenset('([{（《「『【“‘')
+# Japanese line-start prohibitions beyond punctuation: small kana, the long
+# vowel mark, iteration marks, and the middle dot never open a line.
+_NO_LINE_START = _CLOSING_PUNCTUATION | frozenset(
+    'ぁぃぅぇぉっゃゅょゎゕゖァィゥェォッャュョヮヵヶㇰㇱㇲㇳㇴㇵㇶㇷㇸㇹㇺㇻㇼㇽㇾㇿ'
+    'ー々ゝゞヽヾ・'
+)
 _PREFERRED_BREAK_PUNCTUATION = frozenset('，。；：')
 # A CJK clause break is preferred over the greedy break only while it keeps
 # this share of the greedy line; below it the punctuation break would leave a
@@ -54,6 +60,44 @@ _CALIBRATION_DIGITS_SAMPLE = '0123456789'
 # A source line: dataset ids, years, brackets and caps mixed into prose.
 _CALIBRATION_CITATION_SAMPLE = 'NYC DOE, dataset sgsi-66kk (2018-19 to 2022-23), v2.1'
 _CORE_CALIBRATION_ROLES = ('body', 'title', 'subtitle', 'annotation')
+# Scripts the CJK/Latin columns do not describe; a rate column is added for
+# each one the planned outline (or --sample) actually uses.
+_SCRIPT_RATE_LABELS = {
+    'THAI': 'Thai', 'LAO': 'Lao', 'KHMER': 'Khmer', 'MYANMAR': 'Myanmar',
+    'TIBETAN': 'Tibetan', 'DEVANAGARI': 'Devanagari', 'BENGALI': 'Bengali',
+    'GURMUKHI': 'Gurmukhi', 'GUJARATI': 'Gujarati', 'TAMIL': 'Tamil',
+    'TELUGU': 'Telugu', 'KANNADA': 'Kannada', 'MALAYALAM': 'Malayalam',
+    'SINHALA': 'Sinhala', 'ARABIC': 'Arabic', 'HEBREW': 'Hebrew',
+    'CYRILLIC': 'Cyrillic', 'GREEK': 'Greek', 'ARMENIAN': 'Armenian',
+    'GEORGIAN': 'Georgian', 'ETHIOPIC': 'Ethiopic',
+}
+_SCRIPT_SAMPLE_MIN_CLUSTERS = 12
+_SCRIPT_SAMPLE_MAX_CLUSTERS = 40
+
+
+def _cluster_script(cluster: str) -> str | None:
+    """Return the rate label of a grapheme cluster's base letter, if any."""
+    for ch in cluster:
+        if unicodedata.category(ch)[0] not in {'L', 'N'}:
+            continue
+        prefix = unicodedata.name(ch, '').split(' ', 1)[0]
+        return _SCRIPT_RATE_LABELS.get(prefix)
+    return None
+
+
+def _script_rate_samples(texts: list[str]) -> dict[str, str]:
+    """Collect one measurement sample per script used by the planned text."""
+    clusters_by_script: dict[str, list[str]] = {}
+    for text in texts:
+        for cluster in split_project_text_clusters(text):
+            label = _cluster_script(cluster)
+            if label is not None:
+                clusters_by_script.setdefault(label, []).append(cluster)
+    return {
+        label: ''.join(clusters[:_SCRIPT_SAMPLE_MAX_CLUSTERS])
+        for label, clusters in clusters_by_script.items()
+        if len(clusters) >= _SCRIPT_SAMPLE_MIN_CLUSTERS
+    }
 _SLIDE_HEADING_RE = re.compile(
     r'^#{3,6}[ \t]+Slide[ \t]+([0-9]+|NN)\b.*$',
     flags=re.IGNORECASE | re.MULTILINE,
@@ -110,21 +154,40 @@ def measure_text(
     )
 
 
-def _is_latin_or_number_cluster(cluster: str) -> bool:
-    """Return whether a rendered cluster belongs to a Latin/number token."""
+# Scripts written without spaces between words; everything else that is a
+# letter or digit (Latin, Cyrillic, Greek, Arabic, Hebrew, Devanagari, ...)
+# forms words that only break at spaces.
+_UNSPACED_SCRIPT_PREFIXES = ('THAI ', 'LAO ', 'KHMER ', 'MYANMAR ', 'TIBETAN ')
+
+
+def _is_word_cluster(cluster: str) -> bool:
+    """Return whether a rendered cluster belongs to a space-delimited word."""
     bases = [
         ch
         for ch in cluster
         if unicodedata.category(ch) not in {'Mn', 'Mc', 'Me'}
     ]
     return bool(bases) and all(
-        ch.isdigit() or 'LATIN' in unicodedata.name(ch, '')
+        ch.isdigit()
+        or (
+            ch.isalpha()
+            and unicodedata.east_asian_width(ch) not in {'W', 'F'}
+            and not unicodedata.name(ch, '').startswith(_UNSPACED_SCRIPT_PREFIXES)
+        )
         for ch in bases
     )
 
 
+def _is_hangul_cluster(cluster: str) -> bool:
+    """Return whether a rendered cluster is a Hangul syllable or jamo."""
+    return any(
+        '\uac00' <= ch <= '\ud7a3' or '\u1100' <= ch <= '\u11ff' or '\u3130' <= ch <= '\u318f'
+        for ch in cluster
+    )
+
+
 def _lexical_units(text: str) -> list[str]:
-    """Split a paragraph while keeping Latin words and numbers atomic."""
+    """Split a paragraph while keeping space-delimited words, numbers, and Korean words atomic."""
     clusters = split_project_text_clusters(' '.join(text.split()))
     units: list[str] = []
     pending_space = False
@@ -137,10 +200,17 @@ def _lexical_units(text: str) -> list[str]:
             continue
 
         end = index + 1
-        if _is_latin_or_number_cluster(cluster):
+        word_end = index
+        while word_end < len(clusters) and not clusters[word_end].isspace():
+            word_end += 1
+        if any(_is_hangul_cluster(item) for item in clusters[index:word_end]):
+            # Korean breaks between space-separated words (eojeol), never
+            # inside one; an eojeol wider than the line is reported oversized.
+            end = word_end
+        elif _is_word_cluster(cluster):
             while end < len(clusters):
                 next_cluster = clusters[end]
-                if _is_latin_or_number_cluster(next_cluster):
+                if _is_word_cluster(next_cluster):
                     end += 1
                     continue
                 connector = (
@@ -153,7 +223,7 @@ def _lexical_units(text: str) -> list[str]:
                 if (
                     connector
                     and end + 1 < len(clusters)
-                    and _is_latin_or_number_cluster(clusters[end + 1])
+                    and _is_word_cluster(clusters[end + 1])
                 ):
                     end += 2
                     continue
@@ -175,7 +245,7 @@ def _protected_units(text: str) -> list[str]:
     for unit in units:
         content = unit.lstrip()
         if protected and (
-            content[0] in _CLOSING_PUNCTUATION
+            content[0] in _NO_LINE_START
             or protected[-1].rstrip()[-1] in _OPENING_PUNCTUATION
         ):
             protected[-1] += unit
@@ -365,7 +435,7 @@ def _clean_planned_line(raw: str) -> str:
     return ' '.join(text.split())
 
 
-_JOINED_BLOCK_SEPARATOR_RE = re.compile(r'\s+[·•|/]\s+|；|;\s')
+_JOINED_BLOCK_SEPARATOR_RE = re.compile(r'\s+[·•|/]\s+|；|;(?=\s|[^\x00-\x7f])')
 
 
 def _split_joined_blocks(text: str) -> list[str]:
@@ -498,6 +568,7 @@ def _calibration_payload(
     source: str,
     include_outline: bool,
     weights: dict[str, str] | None = None,
+    samples: list[str] | None = None,
 ) -> dict[str, object]:
     weights = weights or {}
     longest = (
@@ -505,6 +576,13 @@ def _calibration_payload(
         if include_outline
         else {name: None for name, _family, _size in roles}
     )
+    planned_texts = list(samples or [])
+    outline_candidates = _outline_candidates(
+        project_path / 'design_spec.md',
+        {name for name, _family, _size in roles},
+    )
+    planned_texts.extend(text for rows in outline_candidates.values() for _slide, text in rows)
+    script_samples = _script_rate_samples(planned_texts)
     cjk_length = len(split_project_text_clusters(_CALIBRATION_CJK_SAMPLE))
     latin_length = len(split_project_text_clusters(_CALIBRATION_LATIN_SAMPLE))
     digits_length = len(split_project_text_clusters(_CALIBRATION_DIGITS_SAMPLE))
@@ -527,10 +605,19 @@ def _calibration_payload(
             'caps_chars_per_100px': round(100.0 * latin_length / caps_width, 1),
             'digits_chars_per_100px': round(100.0 * digits_length / digits_width, 1),
             'citation_chars_per_100px': round(100.0 * citation_length / citation_width, 1),
+            'script_clusters_per_100px': {
+                label: round(
+                    100.0 * len(split_project_text_clusters(sample))
+                    / measure_text(sample, **style),
+                    1,
+                )
+                for label, sample in script_samples.items()
+            },
             'longest_planned_line': longest[name],
         }
     return {
         'roles': role_rows,
+        'script_samples': script_samples,
         'source': source,
         'generated_at': datetime.now(timezone.utc)
         .isoformat(timespec='seconds')
@@ -562,6 +649,8 @@ def _render_calibration_table(payload: dict[str, object], *, include_outline: bo
     role_rows = payload['roles']
     assert isinstance(role_rows, dict)
     headers = ['role', 'family', 'size', 'CJK ≈chars/100px', 'Latin ≈chars/100px', 'CAPS ≈chars/100px', 'DIGITS ≈chars/100px', 'CITE ≈chars/100px']
+    script_labels = sorted(payload.get('script_samples') or {})
+    headers.extend(f'{label} ≈clusters/100px' for label in script_labels)
     if include_outline:
         headers.append('longest planned line (px, slide, text)')
     lines = [
@@ -581,6 +670,8 @@ def _render_calibration_table(payload: dict[str, object], *, include_outline: bo
             f'{raw_row["digits_chars_per_100px"]:.1f}',
             f'{raw_row.get("citation_chars_per_100px", 0.0):.1f}',
         ]
+        script_rates = raw_row.get('script_clusters_per_100px') or {}
+        row.extend(f'{script_rates.get(label, 0.0):.1f}' for label in script_labels)
         if include_outline:
             planned = raw_row['longest_planned_line']
             row.append(
@@ -596,12 +687,24 @@ def _render_calibration_table(payload: dict[str, object], *, include_outline: bo
         'rate) × 100; spaces and punctuation count as Latin, digits use the '
         'DIGITS rate.'
     )
+    if script_labels:
+        lines.append(
+            '[NOTE] a script column (' + ', '.join(script_labels) + ') counts '
+            'grapheme clusters of that script measured from the planned text; '
+            'use it instead of the Latin rate for runs in that script.'
+        )
     if include_outline:
         lines.append(
             '[NOTE] the longest planned line is the §IX wording; a line rewritten '
             'while authoring (an expanded title, a longer label) is re-estimated '
             'with the rates — the outline column does not cover it.'
         )
+    lines.append(
+        '[NOTE] rates ignore letter-spacing and average a mixed-case sample: '
+        'a tracked role (a kicker with letter-spacing) or a display-size line '
+        '(a cover title) is sized per string with measure --letter-spacing, '
+        'not from the table.'
+    )
     lines.append(
         '[NOTE] measure and wrap take one --weight for the whole string: a line '
         'with a bold run (an inline emphasis lead) is measured piecewise per '
@@ -656,15 +759,22 @@ def _run_calibrate(args: argparse.Namespace) -> int:
             source=source,
             include_outline=args.outline,
             weights=weights,
+            samples=list(args.sample or []),
         )
         payload['notes'] = _fallback_notes(roles, fallbacks)
+        if args.outline and not (project_path / 'design_spec.md').is_file():
+            payload['notes'].append(
+                'no design_spec.md in this project (Quick writes none), so the '
+                '--outline column has no §IX source and stays empty'
+            )
         bold_roles = sorted(name for name, weight in weights.items() if weight == 'bold')
         payload['notes'].append(
             'rates for ' + ', '.join(bold_roles) + ' are measured at bold weight'
             if bold_roles else
             'every role is measured at normal weight; recalibrate a role '
-            'realized as bold deck-wide with --role NAME:FAMILY:SIZE:bold, '
-            'since bold runs about 7% wider'
+            'realized as bold deck-wide with --role NAME:FAMILY:SIZE:bold: '
+            'bold widens Latin and digits about 7%, while the bundled advance '
+            'table gives CJK one width for both weights'
         )
         output_path = project_path / 'validation' / 'text_calibration.json'
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -737,13 +847,23 @@ def build_parser() -> argparse.ArgumentParser:
     calibrate.add_argument('project_path', type=Path)
     calibrate.add_argument('--outline', action='store_true')
     calibrate.add_argument(
+        '--sample',
+        action='append',
+        default=[],
+        metavar='TEXT',
+        help='Planned text in a non-Latin, non-CJK script (Thai, Devanagari, '
+             'Arabic, ...) measured as its own rate column; repeatable. The '
+             'design_spec.md outline is scanned for such scripts automatically.',
+    )
+    calibrate.add_argument(
         '--role',
         action='append',
         type=_role_argument,
         default=[],
         metavar='NAME:FAMILY:SIZE[:bold]',
-        help='Typography role to calibrate when spec_lock.md is absent, e.g. '
-             'body:"Microsoft YaHei":20; repeatable.',
+        help='Typography role to calibrate, e.g. body:"Microsoft YaHei":20; '
+             'repeatable. Adds or overrides that role whether or not '
+             'spec_lock.md exists (FAMILY replaces the role\'s font stack).',
     )
     calibrate.add_argument('--json', action='store_true')
     for command in (measure, wrap, box):

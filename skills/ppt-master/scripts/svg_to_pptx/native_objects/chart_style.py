@@ -347,10 +347,10 @@ def _major_gridlines_xml(color: str | None) -> str:
     return f'<c:majorGridlines>{_chart_line_sp_pr_xml(color, width=6350)}</c:majorGridlines>'
 
 
-def _font_face_xml(font_face: str | None) -> str:
+def _font_face_xml(font_face: str | None, language: str | None = None) -> str:
     if not font_face:
         return ""
-    fonts = parse_font_family(font_face)
+    fonts = parse_font_family(font_face, language)
     latin_font = _xml_escape(fonts["latin"])
     ea_font = _xml_escape(fonts["ea"])
     return (
@@ -378,7 +378,7 @@ def _chart_tx_pr_xml(
     return (
         f"<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr{rtl_attr}>"
         f'<a:defRPr lang="{resolved_language}" sz="{font_size}"{bold_attr}>'
-        f'{fill_xml}{_font_face_xml(font_face)}</a:defRPr>'
+        f'{fill_xml}{_font_face_xml(font_face, language)}</a:defRPr>'
         f'</a:pPr><a:endParaRPr lang="{resolved_language}"/></a:p></c:txPr>'
     )
 
@@ -472,7 +472,7 @@ def _axis_title_xml(
         "<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/>"
         f'<a:p><a:pPr{rtl_attr}/><a:r><a:rPr lang="{lang}" '
         f'sz="{_chart_text_entry_font_size(item, font_size)}">'
-        f"{fill_xml}{_font_face_xml(_chart_text_entry_font_face(item, font_face))}"
+        f"{fill_xml}{_font_face_xml(_chart_text_entry_font_face(item, font_face), primary_language)}"
         f"{run_rtl}</a:rPr>"
         f"<a:t>{_xml_escape(text)}</a:t></a:r></a:p>"
         "</c:rich></c:tx><c:layout/><c:overlay val=\"0\"/></c:title>"
@@ -843,8 +843,9 @@ def _native_chart_line_marker_warnings(
     if not has_markers:
         warnings.append(
             f"Native PPTX line chart fallback draws {len(dots)} point marker(s) "
-            "but the payload has none; set line_style \"lineMarker\" (marker_size in px) "
-            "for every point, or series point_colors with a colour per marked point "
+            "but the payload has none; set chart-root line_style \"lineMarker\" "
+            "(combo: per plot; marker_size in px) for every point, or series "
+            "point_colors with a colour per marked point "
             "and null elsewhere"
         )
     series_count = (
@@ -1424,7 +1425,7 @@ def _text_box_xml(
     lang = detect_text_lang(text, ctx.primary_language)
     run_rtl = '<a:rtl val="1"/>' if text_has_rtl_characters(text) else ''
     run_properties_xml = (
-        f'{fill_xml}{_font_face_xml(font_face)}'
+        f'{fill_xml}{_font_face_xml(font_face, ctx.primary_language)}'
         f'{run_rtl}'
     )
     rtl_attr = (
