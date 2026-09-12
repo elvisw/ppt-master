@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 jobs:
-  check:
+  ancestry-gate:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout trusted base
