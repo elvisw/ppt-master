@@ -107,17 +107,23 @@ def _is_project_tree(source_path: Path) -> bool:
     A sibling directory such as ``projects/<slug>_web_sources/`` (topic-research
     output) is scratch material, not another project's tree.
     """
+    projects_root_path = projects_root().resolve()
+    source_path = source_path.resolve()
     try:
-        relative = source_path.resolve().relative_to(projects_root().resolve())
+        relative = source_path.relative_to(projects_root_path)
     except ValueError:
         return False
     if not relative.parts:
         return False
-    root = projects_root().resolve() / relative.parts[0]
-    return any(
-        (root / marker).exists()
-        for marker in ("svg_output", "design_spec.md", "spec_lock.md", "README.md")
-    )
+    for root in source_path.parents:
+        if root == projects_root_path:
+            break
+        if any(
+            (root / marker).exists()
+            for marker in ("svg_output", "design_spec.md", "spec_lock.md", "README.md")
+        ):
+            return True
+    return False
 
 
 def _validate_image_manifest(
