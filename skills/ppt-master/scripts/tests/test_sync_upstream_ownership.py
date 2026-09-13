@@ -290,18 +290,20 @@ class SyncUpstreamOwnershipTests(unittest.TestCase):
 
     @unittest.skipUnless(BASH_AVAILABLE, "Git Bash is required for the ownership sandbox")
     def test_unresolved_conflict_is_rejected_before_commit(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            repo, _ = self._new_repo(Path(temporary))
-            _, target = self._add_conflicting_target(repo)
-            self._run_step1(repo, target)
+        for step_name, step in (("Step 4e", self.step4e), ("Step 6", self.step6)):
+            with self.subTest(step=step_name):
+                with tempfile.TemporaryDirectory() as temporary:
+                    repo, _ = self._new_repo(Path(temporary))
+                    _, target = self._add_conflicting_target(repo)
+                    self._run_step1(repo, target)
 
-            result = self._run_step2(repo)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertNotEqual(run_git(repo, "ls-files", "-u").stdout, b"")
+                    result = self._run_step2(repo)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertNotEqual(run_git(repo, "ls-files", "-u").stdout, b"")
 
-            result = run_bash(self.step4e, repo, {"GITHUB_ACTIONS": "false"})
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("Unresolved merge entries", result.stderr)
+                    result = run_bash(step, repo, {"GITHUB_ACTIONS": "false"})
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("Unresolved merge entries", result.stderr)
 
     @unittest.skipUnless(BASH_AVAILABLE, "Git Bash is required for the ownership sandbox")
     def test_non_conflict_merge_error_fails_and_cleans_owned_state(self) -> None:
