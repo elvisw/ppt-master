@@ -463,11 +463,49 @@ if ! printf '%s\n' started > "$SYNC_MERGE_STARTED_STATE"; then
 fi
 
 if git merge --no-ff --no-commit "$EXPECTED_UPSTREAM_SHA"; then
-  :
+  MERGE_CONFLICT=0
 else
   MERGE_EXIT=$?
-  echo "Merge failed; aborting this sync-owned merge." >&2
-  fail_sync "$MERGE_EXIT"
+  if [ "$MERGE_EXIT" -ne 1 ]; then
+    echo "Merge failed without a conflict state; aborting this sync-owned merge." >&2
+    fail_sync "$MERGE_EXIT"
+  fi
+  if [ ! -e "$SYNC_MERGE_HEAD_PATH" ]; then
+    echo "Merge reported a conflict without MERGE_HEAD; aborting this sync-owned merge." >&2
+    fail_sync 1
+  fi
+  if ! CONFLICT_MERGE_HEAD_SHA=$(tr -d '\r\n' < "$SYNC_MERGE_HEAD_PATH"); then
+    echo "Unable to read MERGE_HEAD ownership for the reported conflict" >&2
+    fail_sync 1
+  fi
+  if [ "$CONFLICT_MERGE_HEAD_SHA" != "$EXPECTED_UPSTREAM_SHA" ]; then
+    echo "Refusing to resolve a merge with a foreign MERGE_HEAD target" >&2
+    fail_without_abort 1
+  fi
+  if ! CONFLICT_HEAD_SHA=$(git rev-parse --verify HEAD); then
+    echo "Unable to verify HEAD ownership for the reported conflict" >&2
+    fail_without_abort 1
+  fi
+  if [ "$CONFLICT_HEAD_SHA" != "$ORIGINAL_HEAD_SHA" ]; then
+    echo "Refusing to resolve a merge after HEAD changed" >&2
+    fail_without_abort 1
+  fi
+  if CONFLICT_ORIG_HEAD_SHA=$(git rev-parse --verify ORIG_HEAD 2>/dev/null); then
+    if [ "$CONFLICT_ORIG_HEAD_SHA" != "$ORIGINAL_HEAD_SHA" ]; then
+      echo "Refusing to resolve a merge with a foreign ORIG_HEAD" >&2
+      fail_without_abort 1
+    fi
+  fi
+  if ! UNMERGED_ENTRIES=$(git ls-files -u); then
+    echo "Unable to inspect unresolved entries for the reported conflict" >&2
+    fail_sync 1
+  fi
+  if [ -z "$UNMERGED_ENTRIES" ]; then
+    echo "Merge reported a conflict without unresolved entries; aborting this sync-owned merge." >&2
+    fail_sync 1
+  fi
+  echo "Owned upstream conflict remains open for AI resolution" >&2
+  MERGE_CONFLICT=1
 fi
 
 if [ ! -e "$SYNC_MERGE_HEAD_PATH" ]; then
@@ -484,18 +522,34 @@ if [ "$MERGE_HEAD_LINE_COUNT" -ne 1 ]; then
 fi
 if ! MERGE_HEAD_SHA=$(tr -d '\r\n' < "$SYNC_MERGE_HEAD_PATH"); then
   echo "Unable to read MERGE_HEAD" >&2
+  if [ "${MERGE_CONFLICT:-0}" = "1" ]; then
+    echo "An owned conflict left an unreadable MERGE_HEAD" >&2
+    fail_without_abort 1
+  fi
   fail_sync 1
 fi
 if [ "$MERGE_HEAD_SHA" != "$EXPECTED_UPSTREAM_SHA" ]; then
   echo "MERGE_HEAD does not equal the fixed expected upstream SHA" >&2
+  if [ "${MERGE_CONFLICT:-0}" = "1" ]; then
+    echo "An owned conflict left a foreign MERGE_HEAD target" >&2
+    fail_without_abort 1
+  fi
   fail_sync 1
 fi
 if ! ORIG_HEAD_SHA=$(git rev-parse --verify ORIG_HEAD); then
-  echo "Successful merge did not set ORIG_HEAD" >&2
+  echo "Merge did not set ORIG_HEAD" >&2
+  if [ "${MERGE_CONFLICT:-0}" = "1" ]; then
+    echo "An owned conflict left a missing ORIG_HEAD" >&2
+    fail_without_abort 1
+  fi
   fail_sync 1
 fi
 if [ "$ORIG_HEAD_SHA" != "$ORIGINAL_HEAD_SHA" ]; then
   echo "ORIG_HEAD does not equal the recorded pre-merge HEAD" >&2
+  if [ "${MERGE_CONFLICT:-0}" = "1" ]; then
+    echo "An owned conflict left a foreign ORIG_HEAD" >&2
+    fail_without_abort 1
+  fi
   fail_sync 1
 fi
 
@@ -514,20 +568,22 @@ fi
 ```
 
 **历史改写禁令（不可绕过）**：从 merge 开始到 merge commit 创建完成，禁止
-reset、rebase、squash、cherry-pick、切换分支和清除 `MERGE_HEAD`。失败时唯一允许的
+reset、rebase、squash、cherry-pick、切换分支和清除 `MERGE_HEAD`。非冲突失败唯一允许的
 中止路径是 `git merge --abort`，中止后立即停止整个流程。
 
-**如果合并失败（包括冲突）**，上面的程序会先执行 `git merge --abort`，然后立即
-停止；不得继续适配、提交或修改 marker。向用户报告失败原因和具体冲突范围，由用户
-决定下一步。merge 未提交前
+**如果合并报告冲突（exit 1 且 merge 属于本次运行）**，上面的程序会保留 merge 现场，
+继续用同一 tail 校验 `MERGE_HEAD`/`ORIG_HEAD` 并写入/暂存 marker，再进入 Step 3，由 AI
+按 Step 3 的冲突策略解冲突。**其他合并失败**先执行 `git merge --abort`，然后立即
+停止；不得继续适配、提交或修改 marker。外来 `MERGE_HEAD`/`ORIG_HEAD` 保留现场并停止，
+不得 abort。merge 未提交前
 `MERGE_HEAD` 必须始终等于 `"$EXPECTED_UPSTREAM_SHA"`。
 
 ---
 
 ### Step 3: 适配与检查
 
-Step 2 成功才允许进入本步；失败（包括冲突）已经 abort 并停止，禁止手动解冲突后
-继续本次运行。成功后，核心原则是保留 fork 的 uvx 适配，合入上游的新功能。
+Step 2 成功或进入已拥有的冲突解决状态才允许进入本步；非冲突失败已经 abort 并
+停止，外来 merge 状态已经保留现场并停止，禁止手动解冲突后继续这些失败运行。成功后，核心原则是保留 fork 的 uvx 适配，合入上游的新功能。
 Python 文件按 hunk 和契约审查，不按整文件 allowlist 审查。保留下方清单中的 fork
 标记和必要 import，并合入其他上游功能与安全修复；用对应的聚焦测试验证行为。
 

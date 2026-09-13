@@ -355,8 +355,8 @@ def _tree_snapshot(repo: Path, commit_sha: str, label: str) -> dict[str, TreeEnt
     return snapshot
 
 
-def _changed_paths(repo: Path, base_sha: str, target: str) -> list[str]:
-    """Enumerate every upstream-changed path, with renames expanded to add/delete."""
+def _changed_paths(repo: Path, old_sha: str, new_sha: str, *, label: str) -> list[str]:
+    """Enumerate every changed path between two immutable commits."""
     result = _run_git(
         repo,
         "diff",
@@ -364,15 +364,15 @@ def _changed_paths(repo: Path, base_sha: str, target: str) -> list[str]:
         "-z",
         "--no-renames",
         "--no-ext-diff",
-        base_sha,
-        target,
+        old_sha,
+        new_sha,
     )
     if result.returncode != 0:
-        raise CheckError("Unable to enumerate upstream paths for content verification")
+        raise CheckError(f"Unable to enumerate {label} paths for content verification")
     try:
         return [path.decode("utf-8") for path in result.stdout.split(b"\0") if path]
     except UnicodeDecodeError as exc:
-        raise CheckError("The upstream diff contains a non-UTF-8 path") from exc
+        raise CheckError(f"The {label} diff contains a non-UTF-8 path") from exc
 
 
 def _merge_base(repo: Path, first_parent: str, target: str) -> str:
@@ -389,10 +389,10 @@ def _upstream_changed_paths(
     merge_commit: str,
     first_parent: str,
     target: str,
-) -> list[str]:
-    """Return every path the upstream target changed relative to the strict merge base."""
+) -> tuple[list[str], str]:
+    """Return upstream changes plus the immutable base shared with the fork."""
     upstream_base = _merge_base(repo, first_parent, target)
-    return _changed_paths(repo, upstream_base, target)
+    return _changed_paths(repo, upstream_base, target, label="upstream"), upstream_base
 
 
 def _verify_content_boundary(
@@ -403,9 +403,11 @@ def _verify_content_boundary(
     policy: dict[str, str],
 ) -> str:
     """Prove the sync merge carries upstream content or a reviewed overlay resolution."""
-    changed = _upstream_changed_paths(repo, merge_commit, first_parent, target)
+    changed, upstream_base = _upstream_changed_paths(repo, merge_commit, first_parent, target)
     if not changed:
         return f"Verified upstream content boundary {merge_commit} (no upstream changes)"
+    fork_changed = set(_changed_paths(repo, upstream_base, first_parent, label="fork"))
+    diverged = set(changed) & fork_changed
     merge_tree = _tree_snapshot(repo, merge_commit, "sync merge")
     target_tree = _tree_snapshot(repo, target, "upstream target")
     first_tree = _tree_snapshot(repo, first_parent, "fork base")
@@ -415,6 +417,12 @@ def _verify_content_boundary(
         first_entry = first_tree.get(path)
         mode = policy.get(path)
         if mode is None:
+            if path in diverged:
+                if merge_entry == first_entry:
+                    raise CheckError(
+                        f"The diverged path {path} silently kept fork content instead of a reviewed resolution"
+                    )
+                continue
             if merge_entry != target_entry:
                 raise CheckError(
                     f"The sync merge does not carry the upstream content for the non-overlay path {path}"
@@ -720,7 +728,7 @@ def verify_pull_request(
         _verify_version_bump(repo, base_sha, head_sha)
     policy = _policy_from_first_parent(repo, merge_commit, base_sha, target, head_sha)
     boundary = _verify_content_boundary(repo, merge_commit, base_sha, target, policy)
-    changed = _upstream_changed_paths(repo, merge_commit, base_sha, target)
+    changed, upstream_base = _upstream_changed_paths(repo, merge_commit, base_sha, target)
     drift = _verify_post_merge_drift(repo, merge_commit, head_sha, changed)
     return f"Verified two-parent merge commit {merge_commit}; {boundary}; {drift}"
 

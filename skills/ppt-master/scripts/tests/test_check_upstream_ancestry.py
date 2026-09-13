@@ -97,9 +97,18 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
         if strategy_ours:
             merge_args.extend(["-s", "ours"])
         merge_args.append(target)
-        run_git(repo, *merge_args)
-        if resolve is not None:
-            resolve()
+        result = run_git(repo, *merge_args, check=False)
+        if resolve is None:
+            if result.returncode != 0:
+                raise AssertionError(f"git {' '.join(merge_args)} failed: {result.stderr}")
+        elif result.returncode not in (0, 1):
+            raise AssertionError(f"git {' '.join(merge_args)} failed: {result.stderr}")
+        else:
+            if resolve is not None:
+                resolve()
+            unresolved = run_git(repo, "ls-files", "-u").stdout.strip()
+            if unresolved:
+                raise AssertionError(f"sync merge resolution left unresolved entries: {unresolved}")
         (repo / MARKER).write_text(f"{target}\n", encoding="ascii")
         run_git(repo, "add", MARKER)
         run_git(repo, "commit", "-m", message)
@@ -610,6 +619,38 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
             result = self._run_check(repo, base=base, head=head)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("non-overlay", result.stderr)
+
+    def test_diverged_path_accepts_merge_without_static_policy_but_not_fork_rollback(self) -> None:
+        for resolution, accepted in (("merged\n", True), ("fork\n", False)):
+            with self.subTest(resolution=resolution):
+                with tempfile.TemporaryDirectory() as temporary:
+                    repo, common = self._new_repo(
+                        Path(temporary),
+                        marker=f"{OLD_TARGET}\n".encode(),
+                        extra_files={"shared.txt": b"common\n"},
+                    )
+                    run_git(repo, "checkout", "-b", "upstream-branch")
+                    target = self._commit_file(repo, "shared.txt", "upstream\n", "upstream")
+                    run_git(repo, "checkout", "-b", "fork-branch", common)
+                    first_parent = self._commit_file(repo, "shared.txt", "fork\n", "fork")
+
+                    def resolve() -> None:
+                        (repo / "shared.txt").write_text(resolution, encoding="utf-8")
+                        run_git(repo, "add", "shared.txt")
+
+                    self._set_upstream(repo, target)
+                    head = self._build_sync_merge(
+                        repo,
+                        first_parent,
+                        target,
+                        resolve=resolve,
+                    )
+                    result = self._run_check(repo, base=first_parent, head=head)
+                    if accepted:
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                    else:
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn("diverged path", result.stderr)
 
     def test_retain_base_overlay_requires_the_explicit_mode(self) -> None:
         def keep_base(repo: Path) -> None:
