@@ -370,19 +370,29 @@ jobs:
             exit 1
           fi
 
+      - name: Setup uv for trusted gate tooling
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.13"
+          checksum: "745765a3b6e360ad76743599ae5c42e9278c7edf8bbff9fc76d05bf2623a04dd"
+          enable-cache: false
+
       - name: Install trusted candidate gate tools
         env:
           PIP_CONFIG_FILE: /dev/null
           PIP_DISABLE_PIP_VERSION_CHECK: "1"
           PIP_NO_INPUT: "1"
           PYTHONPATH: ""
+          UV_PYTHON_DOWNLOADS: never
         run: |
-          if ! python -m pip install --user --disable-pip-version-check --no-input \
-            "PyYAML==6.0.2" "ruff==0.11.13"; then
+          uv venv --python 3.12 "$RUNNER_TEMP/ppt-master-gate-venv"
+          GATE_PYTHON="$RUNNER_TEMP/ppt-master-gate-venv/bin/python"
+          if ! uv pip sync --python "$GATE_PYTHON" --require-hashes --only-binary :all: \
+            --no-progress ".github/release-gate-requirements.txt"; then
             echo "::error::Unable to install the pinned trusted candidate gate tools"
             exit 1
           fi
-          printf '%s\n' "$HOME/.local/bin" >> "$GITHUB_PATH"
+          printf 'GATE_PYTHON=%s\n' "$GATE_PYTHON" >> "$GITHUB_ENV"
 
       - name: Run trusted candidate structure gates
         env:
@@ -390,7 +400,7 @@ jobs:
           VERIFIED_SHA: ${{ needs.prepare-candidate.outputs.verified_sha }}
         run: |
           CANDIDATE_REF=refs/ppt-master/untrusted-candidate
-          if ! python "$GITHUB_WORKSPACE/.github/scripts/check_sync_candidate.py" \
+          if ! "$GATE_PYTHON" "$GITHUB_WORKSPACE/.github/scripts/check_sync_candidate.py" \
             --repo "$GITHUB_WORKSPACE" \
             --candidate-root "$RUNNER_TEMP/trusted-candidate" \
             --base-sha "${{ needs.prepare-candidate.outputs.base_sha }}" \
@@ -421,11 +431,11 @@ jobs:
               exit 1
             fi
           done
-          if ! PYTHONPATH= python -I -m py_compile "${PY_FILES[@]}"; then
+          if ! PYTHONPATH= "$GATE_PYTHON" -I -m py_compile "${PY_FILES[@]}"; then
             echo "::error::Trusted Python syntax gate rejected the candidate"
             exit 1
           fi
-          if ! PYTHONPATH= ruff check --isolated --select F821 \
+          if ! PYTHONPATH= "$RUNNER_TEMP/ppt-master-gate-venv/bin/ruff" check --isolated --select F821 \
             --output-format concise "${PY_FILES[@]}"; then
             echo "::error::Trusted Ruff F821 gate rejected the candidate"
             exit 1
@@ -468,7 +478,7 @@ jobs:
             echo "::error::Candidate bundle is missing a required commit object"
             exit 1
           fi
-          if ! python .github/scripts/check_upstream_ancestry.py \
+          if ! "$GATE_PYTHON" .github/scripts/check_upstream_ancestry.py \
             --repo . \
             --base-sha "$BASE_SHA" \
             --head-sha "$VERIFIED_SHA" \
