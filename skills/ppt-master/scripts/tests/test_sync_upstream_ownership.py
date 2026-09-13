@@ -289,6 +289,21 @@ class SyncUpstreamOwnershipTests(unittest.TestCase):
             self._assert_clean(repo)
 
     @unittest.skipUnless(BASH_AVAILABLE, "Git Bash is required for the ownership sandbox")
+    def test_unresolved_conflict_is_rejected_before_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo, _ = self._new_repo(Path(temporary))
+            _, target = self._add_conflicting_target(repo)
+            self._run_step1(repo, target)
+
+            result = self._run_step2(repo)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotEqual(run_git(repo, "ls-files", "-u").stdout, b"")
+
+            result = run_bash(self.step4e, repo, {"GITHUB_ACTIONS": "false"})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Unresolved merge entries", result.stderr)
+
+    @unittest.skipUnless(BASH_AVAILABLE, "Git Bash is required for the ownership sandbox")
     def test_non_conflict_merge_error_fails_and_cleans_owned_state(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repo, base = self._new_repo(Path(temporary))

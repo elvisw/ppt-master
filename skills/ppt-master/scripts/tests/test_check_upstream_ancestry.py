@@ -652,6 +652,22 @@ class UpstreamAncestryHelperTests(unittest.TestCase):
                         self.assertNotEqual(result.returncode, 0)
                         self.assertIn("diverged path", result.stderr)
 
+    def test_diverged_path_accepts_an_identical_upstream_and_fork_resolution(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo, common = self._new_repo(
+                Path(temporary),
+                marker=f"{OLD_TARGET}\n".encode(),
+                extra_files={"shared.txt": b"common\n"},
+            )
+            run_git(repo, "checkout", "-b", "upstream-branch")
+            target = self._commit_file(repo, "shared.txt", "converged\n", "upstream")
+            run_git(repo, "checkout", "-b", "fork-branch", common)
+            first_parent = self._commit_file(repo, "shared.txt", "converged\n", "fork")
+            self._set_upstream(repo, target)
+            head = self._build_sync_merge(repo, first_parent, target)
+            result = self._run_check(repo, base=first_parent, head=head)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_retain_base_overlay_requires_the_explicit_mode(self) -> None:
         def keep_base(repo: Path) -> None:
             (repo / "upstream.txt").write_text("base\n", encoding="utf-8")

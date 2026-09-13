@@ -104,9 +104,9 @@ opencode
 ```
 
 本地执行不会触发 GitHub Actions 的 main-ref/PAT 推送路径。命令会用独占 `.git/ppt-master-sync/`
-状态目录跨 shell 持久化 target、merge 前 HEAD 和 marker 原始状态；merge 成功后先确认
-`MERGE_HEAD` 恰好为固定 target，再用本次 merge 设置的 `ORIG_HEAD` 校验原始第一父，最后
-才写入/暂存 marker。already-up-to-date、冲突、marker 写入或 `git add` 失败只有在当前
+状态目录跨 shell 持久化 target、merge 前 HEAD 和 marker 原始状态；merge 成功或报告已拥有的
+冲突后先确认 `MERGE_HEAD` 恰好为固定 target，再用本次 merge 设置的 `ORIG_HEAD` 校验原始第一父，最后
+才写入/暂存 marker。already-up-to-date、非冲突失败、marker 写入或 `git add` 失败只有在当前
 HEAD/ORIG_HEAD/MERGE_HEAD ownership 全部成立时才会 abort 并恢复 marker；foreign merge、
 foreign HEAD 或 ignored/untracked marker 会保留现场并停止。
 
@@ -169,20 +169,23 @@ wheel/sdist 的 Core Metadata 使用 header parser：`Name`/`Version` 按 ASCII 
 
 同步 PR 的内容边界由 `check_upstream_ancestry.py` 单一 owner 验证：它定位严格双父 merge
 commit `M`（不把 version-bump HEAD 当身份），计算 `upstream_base = merge-base(M^1, target)`，
-枚举 `upstream_base..target` 的全部 changed path（add/delete/mode/symlink 均展开）；非 overlay
-路径的 `M` tree entry 必须与 target 完全一致，overlay 路径默认必须与 first parent 不同
+枚举 `upstream_base..target` 的全部 upstream changed path `U`（add/delete/mode/symlink 均展开），
+再计算同一 base 下的 fork changed set `F`，得到 `D = U ∩ F`；`U - D` 的 `M` tree entry 必须与
+target 完全一致，`D` 允许 AI 合并但禁止静默等于 first parent（双方收敛到同一内容时 `M` 必须
+等于该收敛内容），overlay 路径默认必须与 first parent 不同
 （拒绝 `-s ours` 或事后整文件回滚），只有 `.github/upstream-overlay-paths.txt` 中以
 `retain-base` 逐路径标注并给出理由时才能保留 fork 内容。该清单是受保护文件，只允许精确路径，
-禁止目录/glob/重复；当前清单为 24 个路径（21 个 `merge`、3 个 `retain-base`）。trusted PR
-helper、两个 sync job、main gate 与 release chain 共用该 owner。只要 marker 变化且找到 strict
+禁止目录/glob/重复；当前清单为 32 个路径（31 个 `merge`、1 个 `retain-base`）。trusted PR
+helper、两个 sync job、main gate 与 release chain 共用该 owner（checker 侧同时校验清单本身
+不含目录/glob/重复；`docs/zh/upstream-sync.md` 这里只记录当前数量，不重复校验规则）。只要 marker 变化且找到 strict
 merge，就无条件追加 M..HEAD 漂移门禁：除版本文件外，upstream changed path 在 strict merge
 与 candidate HEAD 之间必须完全一致；版本文件若也被 upstream 改动，则只允许 project version
 （pyproject）或 root package version（uv.lock）变化。内容评估的 policy 始终来自 strict merge
 的 trusted first parent（PR 为 base，head/main 为 `M^1`），且 `M` 的 policy entry 必须与
 first parent 完全相等；candidate 不能控制规则。仅 `1fcf7154` + `09ad58f0` 精确配对允许一次性
 回退到当前 trusted HEAD 并输出 bootstrap 提示。protected 文件按 commit 逐提交扫描其
-first-parent 差异，中间篡改即使恢复也失败。21 个 `merge` 条目需人工审阅第三方 resolution，
-3 个 `retain-base` 条目在上游再次触及时由 protected policy 变更强制复审。
+first-parent 差异，中间篡改即使恢复也失败。31 个 `merge` 条目需人工审阅第三方 resolution，
+1 个 `retain-base` 条目在上游再次触及时由 protected policy 变更强制复审。
 
 `sync-upstream.yml` 的 upload/download artifact、`check-upstream-ancestry.yml` 与
 `opencode.yml` 的 checkout、`opencode.yml` 的 `anomalyco/opencode/github` 也已固定到

@@ -1088,6 +1088,14 @@ python skills/ppt-master/scripts/check_cli_sync.py
       echo "ORIG_HEAD does not equal the saved original HEAD" >&2
       fail_sync 1
     fi
+    if ! UNMERGED_ENTRIES=$(git ls-files -u); then
+      echo "Unable to inspect unresolved merge entries" >&2
+      fail_sync 1
+    fi
+    if [ -n "$UNMERGED_ENTRIES" ]; then
+      echo "Unresolved merge entries remain; refusing to proceed" >&2
+      fail_sync 1
+    fi
     if [ -L .github/upstream-main.sha ] || [ ! -e .github/upstream-main.sha ]; then
       echo "The upstream marker is missing or is a symbolic link" >&2
       fail_sync 1
@@ -1401,6 +1409,14 @@ if ! ORIG_HEAD_SHA=$(git rev-parse --verify ORIG_HEAD); then
 fi
 if [ "$ORIG_HEAD_SHA" != "$ORIGINAL_HEAD_SHA" ]; then
   echo "ORIG_HEAD does not equal the saved original HEAD" >&2
+  fail_before_commit 1
+fi
+if ! UNMERGED_ENTRIES=$(git ls-files -u); then
+  echo "Unable to inspect unresolved merge entries before commit" >&2
+  fail_before_commit 1
+fi
+if [ -n "$UNMERGED_ENTRIES" ]; then
+  echo "Unresolved merge entries remain before commit" >&2
   fail_before_commit 1
 fi
 if [ -L .github/upstream-main.sha ] || [ ! -e .github/upstream-main.sha ]; then

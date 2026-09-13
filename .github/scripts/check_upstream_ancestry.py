@@ -418,6 +418,12 @@ def _verify_content_boundary(
         mode = policy.get(path)
         if mode is None:
             if path in diverged:
+                if first_entry == target_entry:
+                    if merge_entry != target_entry:
+                        raise CheckError(
+                            f"The diverged path {path} does not carry the converged upstream content"
+                        )
+                    continue
                 if merge_entry == first_entry:
                     raise CheckError(
                         f"The diverged path {path} silently kept fork content instead of a reviewed resolution"
