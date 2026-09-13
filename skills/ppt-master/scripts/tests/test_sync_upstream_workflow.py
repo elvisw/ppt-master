@@ -119,11 +119,40 @@ class SyncUpstreamWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("candidate_root/.github/scripts", checker["run"])
 
         tools = self._step(trusted, "Install trusted candidate gate tools")
-        self.assertIn("PyYAML==", tools["run"])
-        self.assertIn("ruff==", tools["run"])
+        self.assertIn('uv venv --python 3.12 "$RUNNER_TEMP/ppt-master-gate-venv"', tools["run"])
+        self.assertIn('GATE_PYTHON="$RUNNER_TEMP/ppt-master-gate-venv/bin/python"', tools["run"])
+        self.assertIn(
+            'uv pip sync --python "$GATE_PYTHON" --require-hashes --only-binary :all:',
+            tools["run"],
+        )
+        self.assertIn('".github/release-gate-requirements.txt"', tools["run"])
+        self.assertIn(
+            'printf \'GATE_PYTHON=%s\\n\' "$GATE_PYTHON" >> "$GITHUB_ENV"', tools["run"]
+        )
+        self.assertNotIn("pip install --user", tools["run"])
+        self.assertNotIn("--break-system-packages", tools["run"])
+        self.assertNotIn("--system", tools["run"])
+        setup_steps = [
+            step
+            for step in trusted["steps"]
+            if isinstance(step, dict)
+            and str(step.get("uses", "")).startswith("astral-sh/setup-uv@")
+        ]
+        self.assertTrue(setup_steps)
+        for step in setup_steps:
+            self.assertEqual(step["with"]["version"], "0.12.13")
+            self.assertEqual(
+                step["with"]["checksum"],
+                "745765a3b6e360ad76743599ae5c42e9278c7edf8bbff9fc76d05bf2623a04dd",
+            )
+        checker = self._step(trusted, "Run trusted candidate structure gates")
+        self.assertIn('"$GATE_PYTHON" "$GITHUB_WORKSPACE/.github/scripts/check_sync_candidate.py"', checker["run"])
+        verify = self._step(trusted, "Verify untrusted candidate with trusted helper")
+        self.assertIn('"$GATE_PYTHON" .github/scripts/check_upstream_ancestry.py', verify["run"])
         syntax = self._step(trusted, "Run trusted syntax and F821 gates")
-        self.assertIn("python -I -m py_compile", syntax["run"])
-        self.assertIn("ruff check --isolated --select F821", syntax["run"])
+        self.assertIn('"$GATE_PYTHON" -I -m py_compile', syntax["run"])
+        self.assertIn("check --isolated --select F821", syntax["run"])
+        self.assertIn("$RUNNER_TEMP/ppt-master-gate-venv/bin/ruff", syntax["run"])
         self.assertIn("PYTHONPATH=", syntax["run"])
         self.assertIn("confirm_ui/server.py", syntax["run"])
 
