@@ -36,13 +36,14 @@ Before editing `animations.json`, read every semantic file that exists — `desi
 | Explicit adjustment / tuning / repair | Validate first; preserve valid semantic units; migrate affected references after regrouping |
 | Stage activated with a sidecar and new §IX suggestions, no replacement request | Validate first; preserve valid choreography, adjust only affected units |
 | Sidecar with no new instruction | Validate and preserve unchanged; repair an invalid sidecar/group reference before export |
+| Roster changed (page inserted, dropped, or renumbered) | Rename keys with the pages, re-point each Morph `from` to the new preceding page, and move a preview group's endpoint with its page; then validate |
 | Ambiguous request | Default asks regenerate-or-modify; Quick decides from the request, SVG, and sidecar |
 
 Unless an all-motion disable bypasses it, validate an existing sidecar first: `uvx ppt-master animation-config validate <project_path>`.
 
 **Hard rule**: semantic files determine motion intent and unit boundaries; the current `svg_output/*.svg` supplies visible content and implementation structure, and its existing `<g>` hierarchy is never accepted as the plan merely because it exists.
 
-**Decision ownership — understand, then design**: a §IX `Motion suggestion` states the communication job and relationship; it neither activates this stage nor locks implementation. Understand it, then develop the motion brief from the final SVG's semantic units, visible states, composition, and speaker flow — never a mechanical mapping to groups, effects, order, or timing. Executor may preserve, adapt, simplify, decline, or choose `none`; explicit user requirements bind; never change page content to justify animation.
+**Decision ownership — understand, then design**: a §IX `Motion suggestion` states the communication job and relationship; it neither activates this stage nor locks implementation. Understand it, bind the Morph candidates it recorded (their endpoint groups already exist) first, then develop the motion brief from the final SVG's semantic units, visible states, composition, and speaker flow — never a mechanical mapping to groups, effects, order, or timing. Executor may preserve, adapt, simplify, decline, or choose `none`; explicit user requirements bind; never change page content to justify animation.
 
 **Hard rule — existing visible-layer boundary**: regroup only under §2 visual equivalence; never create or modify a crop, comparison layer, scrim, lens, hotspot, annotation, or other visible image state for motion. When a required state is missing and ordinary Slide-local authoring can supply it, return to Generate Step 6, rerun the final gate (and notes when enabled), then resume; when a structural boundary prevents that, simplify a non-binding suggestion to legal units, a page transition, or `none`, and let an explicit requirement follow failure recovery.
 

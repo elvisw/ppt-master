@@ -11,7 +11,7 @@ from xml.etree import ElementTree as ET
 
 from language_tags import language_base, language_uses_rtl
 
-from .utils import font_px_to_hpt, parse_font_family
+from .utils import _explicit_language_script, font_px_to_hpt, parse_font_family
 
 
 DML_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
@@ -206,6 +206,51 @@ def load_theme_font_spec(
     )
 
 
+def load_theme_font_spec_from_pages(
+    project_path: Path,
+    language: str | None = None,
+) -> ThemeFontSpec | None:
+    """Derive major/minor theme fonts from the first svg_output page.
+
+    The page root's ``font-family`` is the minor (body) face; the family of
+    the largest text on the page is the major (title) face.
+    """
+    pages = sorted((project_path / "svg_output").glob("*.svg"))
+    if not pages:
+        return None
+    try:
+        root = ET.parse(str(pages[0])).getroot()
+    except ET.ParseError:
+        return None
+    minor_family = root.get("font-family") or _inline_style_property(
+        root.get("style", ""), "font-family"
+    )
+    major_family = None
+    largest = -1.0
+    for element in root.iter():
+        if not isinstance(element.tag, str) or element.tag.split("}")[-1] != "text":
+            continue
+        size = _svg_font_size_px(element)
+        family = element.get("font-family") or _inline_style_property(
+            element.get("style", ""), "font-family"
+        )
+        if not minor_family and family:
+            minor_family = family
+        if size is not None and size > largest and family:
+            largest, major_family = size, family
+    minor_family = minor_family or major_family
+    major_family = major_family or minor_family
+    if not major_family or not minor_family:
+        return None
+    return ThemeFontSpec(
+        major=_font_face(major_family, language),
+        minor=_font_face(minor_family, language),
+        major_family=major_family,
+        minor_family=minor_family,
+        cs_scripts=_complex_theme_scripts(language),
+    )
+
+
 def _font_size_hpt(raw: str, field: str) -> int:
     try:
         px = float(raw)
@@ -284,6 +329,9 @@ def _complex_theme_scripts(language: str | None) -> tuple[str, ...]:
     """Return the theme supplemental script(s) the primary language writes in."""
     if not language:
         return ()
+    script = _explicit_language_script(language)
+    if script:
+        return (script,)
     base = language_base(language)
     if base in _COMPLEX_SCRIPT_BY_LANGUAGE:
         return (_COMPLEX_SCRIPT_BY_LANGUAGE[base],)

@@ -829,7 +829,10 @@ def _point_color(color: Any, chart_type: str) -> str | None:
     if chart_type == "line" and (color is None or _compact_key(color) == "none"):
         return None
     if color is None:
-        raise RuntimeError("Native PPTX chart series point_colors entries must be colours")
+        raise RuntimeError(
+            f"Native PPTX {chart_type} chart series point_colors entries must be "
+            "colours (only a line series may leave a point null)"
+        )
     return _clean_hex(color, "#4472C4")
 
 
@@ -876,6 +879,7 @@ def _category_series(
     *,
     chart_type: str,
     grouping: str | None,
+    typed_combo: bool = False,
 ) -> list[dict[str, Any]]:
     raw_series = payload.get("series", [])
     if not categories or not isinstance(raw_series, list) or not raw_series:
@@ -893,7 +897,7 @@ def _category_series(
             raise RuntimeError("Native PPTX chart series entries must be objects")
         if (
             _first_present(item.get("line_style"), item.get("lineStyle")) is not None
-            and not (item.get("type") or item.get("chart_type"))
+            and not typed_combo
         ):
             raise RuntimeError(
                 "Native PPTX chart series[].line_style is not a series option; "
@@ -1264,6 +1268,7 @@ def _combo_chart_data(payload: dict[str, Any]) -> dict[str, Any]:
                 categories,
                 chart_type=typed_chart_type,
                 grouping=typed_grouping,
+                typed_combo=True,
             )
             plot = _combo_plot_entry(
                 item,
