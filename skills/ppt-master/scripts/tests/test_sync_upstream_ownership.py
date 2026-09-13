@@ -166,6 +166,26 @@ class SyncUpstreamOwnershipTests(unittest.TestCase):
         run_git(repo, "update-ref", "refs/remotes/upstream/main", target)
         return target
 
+    def _add_conflicting_target(self, repo: Path) -> tuple[str, str]:
+        (repo / "shared.txt").write_text("common\n", encoding="utf-8")
+        run_git(repo, "add", "shared.txt")
+        run_git(repo, "commit", "-m", "common content")
+        common = run_git(repo, "rev-parse", "HEAD").stdout.decode().strip()
+
+        run_git(repo, "checkout", "-b", "upstream-branch")
+        (repo / "shared.txt").write_text("upstream\n", encoding="utf-8")
+        run_git(repo, "add", "shared.txt")
+        run_git(repo, "commit", "-m", "upstream conflict")
+        target = run_git(repo, "rev-parse", "HEAD").stdout.decode().strip()
+
+        run_git(repo, "checkout", "-b", "fork-branch", common)
+        (repo / "shared.txt").write_text("fork\n", encoding="utf-8")
+        run_git(repo, "add", "shared.txt")
+        run_git(repo, "commit", "-m", "fork conflict")
+        first_parent = run_git(repo, "rev-parse", "HEAD").stdout.decode().strip()
+        run_git(repo, "update-ref", "refs/remotes/upstream/main", target)
+        return first_parent, target
+
     def _state_paths(self, repo: Path) -> dict[str, Path]:
         names = {
             "dir": "ppt-master-sync",
@@ -242,6 +262,69 @@ class SyncUpstreamOwnershipTests(unittest.TestCase):
             self._assert_state_absent(repo)
             self._assert_clean(repo)
             self.assertEqual(self._marker_bytes(repo), f"{target}\n".encode())
+
+    @unittest.skipUnless(BASH_AVAILABLE, "Git Bash is required for the ownership sandbox")
+    def test_owned_conflict_can_be_resolved_into_a_two_parent_merge(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo, _ = self._new_repo(Path(temporary))
+            first_parent, target = self._add_conflicting_target(repo)
+            self._run_step1(repo, target)
+
+            result = self._run_step2(repo)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(self._state_paths(repo)["merge_head"].exists())
+            self.assertNotEqual(run_git(repo, "ls-files", "-u").stdout, b"")
+            self.assertEqual(self._marker_bytes(repo), f"{target}\n".encode())
+
+            (repo / "shared.txt").write_text("merged\n", encoding="utf-8")
+            run_git(repo, "add", "shared.txt")
+            result = run_bash(self.step4e, repo, {"GITHUB_ACTIONS": "false"})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            result = run_bash(self.step6, repo, {"GITHUB_ACTIONS": "false"})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            parents = run_git(repo, "show", "-s", "--format=%P", "HEAD").stdout.decode().split()
+            self.assertEqual(parents, [first_parent, target])
+            self._assert_no_merge(repo)
+            self._assert_state_absent(repo)
+            self._assert_clean(repo)
+
+    @unittest.skipUnless(BASH_AVAILABLE, "Git Bash is required for the ownership sandbox")
+    def test_unresolved_conflict_is_rejected_before_commit(self) -> None:
+        for step_name, step in (("Step 4e", self.step4e), ("Step 6", self.step6)):
+            with self.subTest(step=step_name):
+                with tempfile.TemporaryDirectory() as temporary:
+                    repo, _ = self._new_repo(Path(temporary))
+                    _, target = self._add_conflicting_target(repo)
+                    self._run_step1(repo, target)
+
+                    result = self._run_step2(repo)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertNotEqual(run_git(repo, "ls-files", "-u").stdout, b"")
+
+                    result = run_bash(step, repo, {"GITHUB_ACTIONS": "false"})
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("Unresolved merge entries", result.stderr)
+
+    @unittest.skipUnless(BASH_AVAILABLE, "Git Bash is required for the ownership sandbox")
+    def test_non_conflict_merge_error_fails_and_cleans_owned_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo, base = self._new_repo(Path(temporary))
+            target = self._add_target(repo, base=base)
+            self._run_step1(repo, target)
+            wrapper = """
+git() {
+  if [ "$1" = "merge" ] && [ "$2" = "--no-ff" ]; then
+    return 2
+  fi
+  command git "$@"
+}
+"""
+            result = self._run_step2(repo, wrapper=wrapper)
+            self.assertNotEqual(result.returncode, 0)
+            self._assert_no_merge(repo)
+            self._assert_state_absent(repo)
+            self.assertEqual(self._marker_bytes(repo), OLD_MARKER)
+            self._assert_clean(repo)
 
     @unittest.skipUnless(BASH_AVAILABLE, "Git Bash is required for the ownership sandbox")
     def test_already_up_to_date_fails_and_cleans_without_marker_change(self) -> None:
