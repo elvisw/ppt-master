@@ -75,7 +75,7 @@ From the flat list, pick **3–6 candidates**: cover both genders when the local
 
 ```bash
 # 1. Generate audio (one provider form; flags in narration.md)
-uvx ppt-master notes-to-audio <project_path> --voice <ShortName> --rate <rate>
+uvx ppt-master notes-to-audio <project_path> --voice <ShortName> --rate=<rate>
 uvx ppt-master notes-to-audio <project_path> --provider <elevenlabs|minimax|qwen|cosyvoice> --voice-id <id> [provider model flag]
 
 # 2A. Only when narration-cue sync is selected and page SRT + animations.json exist

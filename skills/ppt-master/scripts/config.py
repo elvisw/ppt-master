@@ -194,7 +194,7 @@ CANVAS_FORMATS = {
         'use_case': 'WeChat article cover images'
     },
     'xiaohongshu': {
-        'name': '小红书',
+        'name': 'Xiaohongshu (RED)',
         'dimensions': '1242×1660',
         'viewbox': '0 0 1242 1660',
         'width': 1242,
@@ -203,7 +203,7 @@ CANVAS_FORMATS = {
         'use_case': 'Knowledge sharing, product reviews'
     },
     'moments': {
-        'name': 'Moments/Instagram',
+        'name': 'WeChat Moments / IG',
         'dimensions': '1080×1080',
         'viewbox': '0 0 1080 1080',
         'width': 1080,
@@ -212,7 +212,7 @@ CANVAS_FORMATS = {
         'use_case': 'Social media square images'
     },
     'story': {
-        'name': 'Story/Vertical',
+        'name': 'Story / TikTok',
         'dimensions': '1080×1920',
         'viewbox': '0 0 1080 1920',
         'width': 1080,
@@ -221,7 +221,7 @@ CANVAS_FORMATS = {
         'use_case': 'Short video covers, stories'
     },
     'banner': {
-        'name': 'Horizontal Banner',
+        'name': 'Landscape Banner',
         'dimensions': '1920×1080',
         'viewbox': '0 0 1920 1080',
         'width': 1920,
