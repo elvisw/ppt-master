@@ -1171,8 +1171,12 @@ def _native_geometry(raw: Any, context: str) -> tuple[float, float, float, float
         values = tuple(float(raw[key]) for key in ("x", "y", "width", "height"))
     except (KeyError, TypeError, ValueError) as exc:
         raise TemplateStructureError(f"{context} geometry is invalid") from exc
-    if not all(math.isfinite(value) for value in values) or values[2] <= 0 or values[3] <= 0:
-        raise TemplateStructureError(f"{context} geometry must be finite and positive")
+    if not all(math.isfinite(value) for value in values) or values[2] < 0 or values[3] < 0:
+        raise TemplateStructureError(f"{context} geometry must be finite and non-negative")
+    if values[2] == 0 or values[3] == 0:
+        # PowerPoint writes <a:ext cx="0" cy="0"/> for a collapsed placeholder
+        # (built-in vertical-text layouts do this); it carries no usable box.
+        return None
     return values
 
 
@@ -1236,7 +1240,7 @@ def load_native_structure_contract(
     layouts: list[NativeLayoutSpec] = []
     seen_keys: set[str] = set()
     seen_parts: set[str] = set()
-    for index, item in enumerate(raw_layouts, start=1):
+    for index, item in enumerate(raw_layouts):
         context = f"{contract_path.name} layouts[{index}]"
         if not isinstance(item, dict):
             raise TemplateStructureError(f"{context} must be an object")
@@ -1269,7 +1273,7 @@ def load_native_structure_contract(
         if not isinstance(raw_placeholders, list):
             raise TemplateStructureError(f"{context} placeholders must be a list")
         placeholders: list[NativePlaceholderSpec] = []
-        for ph_index, placeholder in enumerate(raw_placeholders, start=1):
+        for ph_index, placeholder in enumerate(raw_placeholders):
             ph_context = f"{context} placeholders[{ph_index}]"
             if not isinstance(placeholder, dict):
                 raise TemplateStructureError(f"{ph_context} must be an object")
@@ -3021,7 +3025,9 @@ def _layout_contract_difference(
         details.append("generated Layout element order differs")
     if not details:
         details.append(
-            "shared Layout element metadata, geometry, topology, or content differs"
+            "shared Layout element metadata (data-pptx-* attributes), geometry, "
+            "topology, or content differs; fills, strokes, and gradients may be "
+            "repainted"
         )
     return "; ".join(details)
 
@@ -3319,8 +3325,13 @@ def template_prototype_errors(
             errors.append(
                 f"{spec.svg_path.name}: template Master structure differs "
                 f"from prototype {reference.svg_path.name}; strict and adaptive "
-                "routes must retain its ids, topology, geometry, and content"
-                + (" including mirror visual styling" if literal_visual else "")
+                "routes must retain its ids, topology, geometry, data-pptx-* "
+                "metadata, and content"
+                + (
+                    " including mirror visual styling"
+                    if literal_visual
+                    else "; fills, strokes, and gradients may be repainted"
+                )
                 + (
                     f"; first difference: {master_difference}"
                     if master_difference else ""
