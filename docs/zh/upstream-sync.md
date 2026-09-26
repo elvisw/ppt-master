@@ -30,7 +30,7 @@ schedule 和 workflow_dispatch 共用相同的两 job 路径：
    的 `actions/checkout` 重新引入 authenticated checkout。
 2. 该 job 明确 fetch canonical `upstream/main`；fetch 失败不使用 stale ref。无变化时模型、artifact、
    trusted job、分支和 PR 全部跳过。
-3. 有变化时先在无 secret step 固定安装一次 `opencode-ai@1.18.30`，再执行唯一的 `opencode run`。
+3. 有变化时先在无 secret step 固定安装一次 `opencode-ai@1.18.32`，再执行唯一的 `opencode run`。
    只有后者获得 API key、模型名、immutable target 和普通 Actions 元数据；不获得 `github.token`、
    `GITHUB_TOKEN`、`GH_TOKEN`、`PUSH_PAT` 或 `id-token: write`，也不能 push 或创建 PR。
 4. 模型提交后只上传 `candidate.bundle` 与严格三字段 `manifest.json`；不上传 worktree 或 `.git/config`。
@@ -57,7 +57,7 @@ schedule 和 workflow_dispatch 共用相同的两 job 路径：
 修复上线后应新建一个普通 PR 作为验证 PR，确认新的 trusted workflow 实际通过后再启用 required checks。
 
 独立 `opencode.yml` 保持原有触发和授权者 guard，action 固定为
-`anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a`；只保留 checkout 所需
+`anomalyco/opencode/github@a3b97d9090ccf4aa9ac32268486283e3131e36b4`；只保留 checkout 所需
 `contents: read` 与 OIDC 所需 `id-token: write`，不把它混入同步模型 job。
 
 ---
