@@ -1,6 +1,6 @@
 [project]
 name = "ppt-master"
-version = "0.1.128"
+version = "0.1.129"
 description = "AI-driven multi-format SVG content generation system"
 readme = "PYPI_README.md"
 license = { text = "MIT" }
