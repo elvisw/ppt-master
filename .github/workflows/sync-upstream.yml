@@ -129,7 +129,7 @@ jobs:
       - name: Install pinned OpenCode CLI
         if: steps.upstream.outputs.has_changes == 'true'
         run: |
-          if ! npm install -g opencode-ai@1.18.30; then
+          if ! npm install -g opencode-ai@1.18.32; then
             echo "::error::Unable to install the pinned OpenCode CLI"
             exit 1
           fi
@@ -138,7 +138,7 @@ jobs:
         if: steps.upstream.outputs.has_changes == 'true'
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          OPENCODE_MODEL: ${{ vars.OPENCODE_MODEL || 'deepseek/deepseek-v4-flash' }}
+          OPENCODE_MODEL: ${{ vars.OPENCODE_MODEL || 'deepseek/deepseek-flash' }}
           EXPECTED_UPSTREAM_SHA: ${{ steps.upstream.outputs.upstream_sha }}
         run: |
           if ! opencode run --dangerously-skip-permissions -m "$OPENCODE_MODEL" \

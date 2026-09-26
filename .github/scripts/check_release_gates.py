@@ -124,7 +124,7 @@ EXPECTED_ACTION_PINS = {
     "astral-sh/setup-uv": ("c771a70e6277c0a99b617c7a806ffedaca235ff9", "v9.0.0"),
     "actions/upload-artifact": ("043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", "v7.0.1"),
     "actions/download-artifact": ("3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", "v8.0.1"),
-    "anomalyco/opencode/github": ("77fc88c8ade8e5a620ebbe1197f3a572d29ae91a", "github-v1.2.19"),
+    "anomalyco/opencode/github": ("a3b97d9090ccf4aa9ac32268486283e3131e36b4", "github-v1.2.25"),
 }
 AUTO_TAG_PERMISSIONS = {"contents": "read", "actions": "read"}
 MIGRATION_PERMISSIONS = {"contents": "read"}

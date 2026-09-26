@@ -32,8 +32,8 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep
 
       - name: Run opencode
-        uses: anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a # github-v1.2.19
+        uses: anomalyco/opencode/github@a3b97d9090ccf4aa9ac32268486283e3131e36b4 # github-v1.2.25
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         with:
-          model: ${{ vars.OPENCODE_MODEL || 'deepseek/deepseek-v4-flash' }}
+          model: ${{ vars.OPENCODE_MODEL || 'deepseek/deepseek-flash' }}
