@@ -1,0 +1,50 @@
+{
+  "id": 22998489,
+  "name": "main-protection",
+  "target": "branch",
+  "source_type": "Repository",
+  "source": "elvisw/ppt-master",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "exclude": [],
+      "include": [
+        "refs/heads/main"
+      ]
+    }
+  },
+  "rules": [
+    {
+      "type": "deletion"
+    },
+    {
+      "type": "non_fast_forward"
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": false,
+        "do_not_enforce_on_create": false,
+        "required_status_checks": [
+          {
+            "context": "ancestry-gate",
+            "integration_id": 15368
+          }
+        ]
+      }
+    }
+  ],
+  "node_id": "RRS_lACqUmVwb3NpdG9yec5KCWKvzgFe7dk",
+  "created_at": "2026-09-12T10:36:43.001+08:00",
+  "updated_at": "2026-09-12T10:40:26.103+08:00",
+  "bypass_actors": [],
+  "current_user_can_bypass": "never",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/elvisw/ppt-master/rulesets/22998489"
+    },
+    "html": {
+      "href": "https://github.com/elvisw/ppt-master/rules/22998489"
+    }
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "id": 21758827813,
+  "node_id": "EN_kwDOSglir88AAAAFEO1dJQ",
+  "name": "pypi",
+  "url": "https://api.github.com/repos/elvisw/ppt-master/environments/pypi",
+  "html_url": "https://github.com/elvisw/ppt-master/deployments/activity_log?environments_filter=pypi",
+  "created_at": "2026-09-11T20:17:24Z",
+  "updated_at": "2026-09-11T20:17:24Z",
+  "can_admins_bypass": true,
+  "protection_rules": [
+    {
+      "id": 65306328,
+      "node_id": "GA_kwDOSglir84D5H7Y",
+      "type": "required_reviewers",
+      "prevent_self_review": false,
+      "reviewers": [
+        {
+          "type": "User",
+          "reviewer": {
+            "login": "elvisw",
+            "id": 493124,
+            "node_id": "MDQ6VXNlcjQ5MzEyNA==",
+            "avatar_url": "https://avatars.githubusercontent.com/u/493124?v=4",
+            "gravatar_id": "",
+            "url": "https://api.github.com/users/elvisw",
+            "html_url": "https://github.com/elvisw",
+            "followers_url": "https://api.github.com/users/elvisw/followers",
+            "following_url": "https://api.github.com/users/elvisw/following{/other_user}",
+            "gists_url": "https://api.github.com/users/elvisw/gists{/gist_id}",
+            "starred_url": "https://api.github.com/users/elvisw/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/elvisw/subscriptions",
+            "organizations_url": "https://api.github.com/users/elvisw/orgs",
+            "repos_url": "https://api.github.com/users/elvisw/repos",
+            "events_url": "https://api.github.com/users/elvisw/events{/privacy}",
+            "received_events_url": "https://api.github.com/users/elvisw/received_events",
+            "type": "User",
+            "user_view_type": "public",
+            "site_admin": false
+          }
+        }
+      ]
+    },
+    {
+      "id": 65306329,
+      "node_id": "GA_kwDOSglir84D5H7Z",
+      "type": "branch_policy"
+    }
+  ],
+  "deployment_branch_policy": {
+    "protected_branches": false,
+    "custom_branch_policies": true
+  }
+}
