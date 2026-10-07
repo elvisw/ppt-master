@@ -178,13 +178,15 @@ uvx ppt-master excel-to-md report.xlsx budget.xlsm
 uvx ppt-master excel-to-md ./workbooks
 uvx ppt-master excel-to-md ./workbooks -o ./markdown  # explicit separate output directory
 uvx ppt-master excel-to-md report.xlsm --max-rows 200 --max-cols 40
+uvx ppt-master excel-to-md report.xlsx --include-hidden  # also export hidden sheets
 ```
 
 Behavior:
 - preserves workbook and sheet structure in Markdown
-- exports visible sheets only
+- exports visible sheets by default; skipped hidden sheets are named in a warning, and `--include-hidden` exports them with a `(hidden)` heading
 - trims empty outer rows and columns
-- propagates merged-cell labels for readable Markdown tables
+- propagates merged-cell values for readable Markdown tables; merged numeric regions are noted below the table (`> Merged cells: A2:A3 (shared value)`) so a shared amount is not counted twice
+- shows percent formats as percentages and keeps leading zeros of zero-padded identifiers; other number formats keep the stored value at Excel's 15-digit precision
 - exports formula cells as cached values; it does not recalculate formulas
 - uses the shared best-effort conversion-profile contract after success
 
