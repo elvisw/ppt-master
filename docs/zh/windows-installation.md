@@ -2,7 +2,7 @@
 
 [English](../windows-installation.md) | [Chinese](./windows-installation.md)
 
-> **Fork 用户**：本指南描述的是上游安装路径（Python + `pip install -r requirements.txt`）。fork 的 `uvx` 路径无需安装 Python、无需 `pip` 步骤——安装 [uv](https://docs.astral.sh/uv/) 后直接运行 `uvx ppt-master <command>`。以下步骤仍然完全可用。
+> **Fork 用户**：本指南描述的是上游安装路径（Python + `pip install -r requirements.txt`）。fork 用户不需要这些步骤——安装 skill（`npx skills add https://github.com/elvisw/ppt-master`）后，AI agent 会自动从 PyPI 运行 `uvx ppt-master <command>` 工具；无需安装 Python、无需 `pip`、无需手动执行任何命令。以下步骤仍然完全可用。
 
 ---
 

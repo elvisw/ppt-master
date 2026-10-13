@@ -2,7 +2,7 @@
 
 [English](./windows-installation.md) | [Chinese](./zh/windows-installation.md)
 
-> **Fork users**: this guide describes the upstream install path (Python + `pip install -r requirements.txt`). The fork's `uvx` path needs no Python install and no `pip` step — install [uv](https://docs.astral.sh/uv/) and run `uvx ppt-master <command>` directly. The steps below remain fully supported.
+> **Fork users**: this guide describes the upstream install path (Python + `pip install -r requirements.txt`). Fork users don't need any of it — install the skill (`npx skills add https://github.com/elvisw/ppt-master`) and your AI agent runs the `uvx ppt-master <command>` tool from PyPI automatically; no Python install, no `pip` step, no manual commands. The steps below remain fully supported.
 
 ---
 

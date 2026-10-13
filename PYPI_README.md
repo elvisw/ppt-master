@@ -11,7 +11,14 @@ AI-driven PPT generation CLI — convert documents to editable PowerPoint via SV
 ```bash
 # Install the skill (AI agents use it to invoke the uvx tool automatically)
 npx skills add https://github.com/elvisw/ppt-master
+```
 
+End users don't need to run any command: install the skill once, then chat with
+your AI agent in natural language — it invokes `uvx ppt-master <command>` for
+you. The commands below are what the agent runs, and are also available for
+direct CLI use:
+
+```bash
 # No install needed for the tool itself — run directly
 uvx ppt-master <command>
 ```
