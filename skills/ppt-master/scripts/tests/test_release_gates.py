@@ -934,7 +934,7 @@ class ReleaseGateHelperTests(unittest.TestCase):
             ),
             ".github/workflows/opencode.yml": (
                 "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
-                "uses: anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a # github-v1.2.19",
+                "uses: anomalyco/opencode/github@a3b97d9090ccf4aa9ac32268486283e3131e36b4 # github-v1.2.25",
             ),
         }
         for relative, lines in expected_lines.items():
