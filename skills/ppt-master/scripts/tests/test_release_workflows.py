@@ -47,6 +47,31 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("--require-origin-main-tip", text)
         self.assertNotIn("main advanced before the immutable release tag was created", text)
 
+    def test_auto_tag_push_step_skips_existing_tag_on_ancestor_but_keeps_race_error(self) -> None:
+        text = AUTO_TAG.read_text(encoding="utf-8")
+        push_step = text.split("- name: Push exact release tag", 1)[1]
+        # Docs-only merges keep the version unchanged: the exact tag already
+        # exists and points to an ancestor of the release SHA, so the step must
+        # fetch it, resolve its commit, and skip the push instead of failing.
+        self.assertIn(
+            'ls-remote --exit-code --refs origin "refs/tags/$RELEASE_TAG"',
+            push_step,
+        )
+        self.assertIn(
+            'fetch --no-tags origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"',
+            push_step,
+        )
+        self.assertIn('EXISTING_TAG_COMMIT=$(git rev-parse', push_step)
+        self.assertIn(
+            'git merge-base --is-ancestor "$EXISTING_TAG_COMMIT" "$RELEASE_SHA"',
+            push_step,
+        )
+        self.assertIn("::notice::Release tag $RELEASE_TAG already exists", push_step)
+        self.assertIn("skipping the tag push", push_step)
+        # The race guard stays: a pre-existing tag that is not an ancestor of
+        # the release SHA must still be a hard failure.
+        self.assertIn("::error::Exact release tag already exists on origin", push_step)
+
     def test_publish_splits_non_oidc_build_and_fresh_pypi_publish_with_static_artifact_check(self) -> None:
         text = PUBLISH.read_text(encoding="utf-8")
         data = yaml.safe_load(text)

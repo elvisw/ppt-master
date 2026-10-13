@@ -132,6 +132,14 @@ jobs:
             exit 1
           fi
           if git -c credential.helper= -c core.hooksPath=/dev/null ls-remote --exit-code --refs origin "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            # The exact tag already exists. When it points to an ancestor of the
+            # release SHA, the merge kept the version unchanged (no functional
+            # release needed, e.g. a docs-only merge): record the skip and succeed.
+            git -c credential.helper= -c core.hooksPath=/dev/null fetch --no-tags origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+            if EXISTING_TAG_COMMIT=$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}" 2>/dev/null) && git merge-base --is-ancestor "$EXISTING_TAG_COMMIT" "$RELEASE_SHA"; then
+              echo "::notice::Release tag $RELEASE_TAG already exists on origin and points to an ancestor of $RELEASE_SHA - no functional change since the last release; skipping the tag push"
+              exit 0
+            fi
             echo "::error::Exact release tag already exists on origin"
             exit 1
           fi
