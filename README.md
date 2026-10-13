@@ -13,23 +13,19 @@
 
 English | [中文](./README_CN.md)
 
-> **Fork notice**: This repository is a fork of [hugohe3/ppt-master](https://github.com/hugohe3/ppt-master), maintained by [elvisw](https://github.com/elvisw). This fork fully ports the upstream direct-script invocation style (`python3` + script path) to a unified `uvx ppt-master <command>` CLI (70+ subcommands) published on PyPI, and adapts every command call in the skill workflow docs to the `uvx` form — once the fork's skill is installed, AI agents invoke the `uvx` tool automatically, with no clone and no `pip install`. The sponsor and donation information below belongs to the original author (Hugo He) and benefits the original project, not this fork.
+> **Fork notice**: This repository is a fork of [hugohe3/ppt-master](https://github.com/hugohe3/ppt-master), maintained by [elvisw](https://github.com/elvisw). The fork replaces the upstream clone + `pip install` + `python3` script-call setup with a unified `uvx ppt-master <command>` CLI (70+ subcommands) published on PyPI — your AI agent runs it for you. Apart from installation, using the tool is the same as the original project: describe what you want in natural language, and follow the Quick Start below. The sponsor and donation information below belongs to the original author (Hugo He) and benefits the original project, not this fork.
 >
-> **Fork install path (recommended for this fork)**: no clone and no `pip install` needed.
+> **Fork install path (recommended for this fork)**: the only part that differs from upstream is installation — no clone, no `pip install`, no manual commands.
 >
-> 1. Install the skill (AI agents use it to invoke the `uvx` tool automatically):
+> 1. Install the skill. It points your AI agent at the `uvx ppt-master <command>` tool, fetched from PyPI on demand:
 >
 >    ```bash
 >    npx skills add https://github.com/elvisw/ppt-master
 >    ```
 >
-> 2. Install [uv](https://docs.astral.sh/uv/) and run the tool directly from PyPI:
+> 2. Done — no further setup. Open any agent-capable AI tool (see "Pick an Agent" below) and describe what you want in plain language. The agent handles every command, dependency, and template; you never type `uvx` yourself.
 >
->    ```bash
->    uvx ppt-master <command>          # e.g. uvx ppt-master project init my-deck --format ppt169
->    ```
->
-> The `uvx` wheel bundles the skill, scripts, and templates (including the icon library); dependencies resolve automatically. The Git-clone / ZIP / marketplace paths below are the upstream install paths and remain fully supported.
+> The `uvx` wheel bundles the skill, scripts, and templates (including the icon library); dependencies resolve automatically. The `uvx` runner needs [uv](https://docs.astral.sh/uv/) on your machine — if your agent reports it's missing, just ask it to install uv. The Git-clone / ZIP / marketplace paths below are the upstream install paths and remain fully supported.
 
 ## ❤️ Sponsors
 
@@ -243,7 +239,7 @@ Never used one of these? Don't worry — in this project they play exactly one r
 
 ### 3. Set Up
 
-> **Fork users**: skip this section — the `uvx ppt-master` install path above needs no clone and no `pip install`. The options below are the upstream install paths.
+> **Fork users**: skip this section — the fork install path above needs no clone and no `pip install`. After installing the skill, go straight to Step 4 — Create; everything else works exactly like upstream. The options below are the upstream install paths.
 
 **Option A — Git clone** (recommended; requires [Git](https://git-scm.com/downloads) installed): the preferred path, since a clone can pull the latest version at any time.
 

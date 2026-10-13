@@ -13,23 +13,19 @@
 
 [English](./README.md) | 中文
 
-> **Fork 声明**：本仓库是 [hugohe3/ppt-master](https://github.com/hugohe3/ppt-master) 的 fork，由 [elvisw](https://github.com/elvisw) 维护。本 fork 将上游直接调用脚本的方式（`python3` + 脚本路径）完整移植为统一的 `uvx ppt-master <command>` CLI（70+ 子命令）并发布到 PyPI，同时把 skill 工作流文档中的全部命令调用适配为 `uvx` 形式——安装本 fork 的 skill 后，AI agent 会自动调用 `uvx` 工具，无需 clone 仓库、无需 `pip install`。下方赞助商与捐赠信息属于原作者（Hugo He），收益归原项目所有，与本 fork 无关。
+> **Fork 声明**：本仓库是 [hugohe3/ppt-master](https://github.com/hugohe3/ppt-master) 的 fork，由 [elvisw](https://github.com/elvisw) 维护。本 fork 把上游「clone 仓库 + `pip install` + `python3` 调用脚本」的安装方式替换为发布到 PyPI 的统一 `uvx ppt-master <command>` CLI（70+ 子命令），由你的 AI agent 代为运行。除安装方式外，使用方法与原项目相同：用自然语言描述需求，按下方「快速开始」操作即可。下方赞助商与捐赠信息属于原作者（Hugo He），收益归原项目所有，与本 fork 无关。
 >
-> **Fork 安装方式（本 fork 推荐）**：无需 clone、无需 `pip install`。
+> **Fork 安装方式（本 fork 推荐）**：与原版唯一的区别就是安装这一步——无需 clone、无需 `pip install`、无需手动执行命令。
 >
-> 1. 安装 skill（AI agent 通过它自动调用 `uvx` 工具）：
+> 1. 安装 skill。它会引导你的 AI agent 自动调用 `uvx ppt-master <command>` 工具（按需从 PyPI 获取）：
 >
 >    ```bash
 >    npx skills add https://github.com/elvisw/ppt-master
 >    ```
 >
-> 2. 安装 [uv](https://docs.astral.sh/uv/) 后直接从 PyPI 运行工具：
+> 2. 装完即可使用，无需其他配置。打开任意具备 agent 能力的 AI 工具（见下方「选择一个 Agent」），用自然语言描述你的需求——命令、依赖、模板都由 agent 自动处理，你无需亲手敲任何 `uvx` 命令。
 >
->    ```bash
->    uvx ppt-master <command>          # 例如 uvx ppt-master project init my-deck --format ppt169
->    ```
->
-> `uvx` wheel 已内置 skill、脚本与模板（含图标库），依赖自动解析。下方的 Git clone / ZIP / marketplace 安装路径为上游安装方式，仍然完全可用。
+> `uvx` wheel 已内置 skill、脚本与模板（含图标库），依赖自动解析。`uvx` 运行器需要你机器上装有 [uv](https://docs.astral.sh/uv/)——若 agent 提示缺少 uv，让它帮你安装即可。下方的 Git clone / ZIP / marketplace 安装路径为上游安装方式，仍然完全可用。
 
 ## ❤️ 赞助
 
@@ -243,7 +239,7 @@ PPT Master 在**任何具备 agent 能力**（可读写文件、执行命令、�
 
 ### 3. 配置项目
 
-> **Fork 用户**：可跳过本节——上面的 `uvx ppt-master` 安装方式无需 clone、无需 `pip install`。以下选项为上游安装路径。
+> **Fork 用户**：可跳过本节——上面的 fork 安装方式无需 clone、无需 `pip install`。装好 skill 后直接进入「4. 开始创作」，其余操作与原版完全一致。以下选项为上游安装路径。
 
 **方式 A — Git clone**（推荐；需先安装 [Git](https://git-scm.com/downloads)）：首选这种方式，因为 clone 可以随时拉取最新版本。
 
