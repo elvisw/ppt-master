@@ -36,3 +36,7 @@ uv publish --token <your-pypi-token>
 uv build
 uv publish --publish-url https://test.pypi.org/legacy/ --token <your-testpypi-token>
 ```
+
+## 维护：PyPI 版本清理
+
+发布之后的历史版本清理（只读报告与本机删除确认）见 [PyPI 版本清理](./zh/pypi-cleanup.md)。这是维护者操作，不影响最终用户安装并使用本 skill 的方式。
