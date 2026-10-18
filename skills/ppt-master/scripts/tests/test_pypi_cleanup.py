@@ -385,10 +385,21 @@ class PyPICleanupApplyTests(unittest.TestCase):
                 self.assertIn("Confirmation did not match", outcome["stderr"])
 
     def test_apply_shows_candidates_and_capacity_before_confirming(self):
-        outcome = self.invoke_apply([metadata()], answer="wrong")
-        self.assertIn("1.1", outcome["stdout"])
-        self.assertIn("1.2", outcome["stdout"])
-        self.assertIn("Reclaimable: 3 bytes of 78 total nonempty-version bytes.", outcome["stdout"])
+        prompts = []
+        stdout, stderr = io.StringIO(), io.StringIO()
+        run = Mock(return_value=subprocess.CompletedProcess(args=[], returncode=0))
+        with patch.object(self.cleanup.sys, "stdin", _FakeStdin(True)), \
+                patch.object(self.cleanup, "fetch_metadata", return_value=metadata()), \
+                patch.object(self.cleanup.subprocess, "run", run), \
+                patch("builtins.input", side_effect=lambda prompt="": prompts.append(prompt) or "wrong"), \
+                redirect_stdout(stdout), redirect_stderr(stderr):
+            result = self.cleanup.main(["apply", "--username", "alice"])
+        self.assertNotEqual(result, 0)
+        run.assert_not_called()
+        self.assertEqual(prompts, ["Type 'DELETE ppt-master' to delete these 2 versions: "])
+        self.assertIn("1.1", stdout.getvalue())
+        self.assertIn("1.2", stdout.getvalue())
+        self.assertIn("Reclaimable: 3 bytes of 78 total nonempty-version bytes.", stdout.getvalue())
 
     def test_apply_runs_the_fixed_command_and_verifies_success(self):
         outcome = self.invoke_apply(

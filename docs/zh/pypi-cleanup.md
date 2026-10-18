@@ -37,7 +37,7 @@ uvx --python 3.12 --from packaging==25.0 python -I .github/maintenance/pypi_clea
 `<name>` 是你的 PyPI 用户名。流程如下：
 
 1. 脚本重新拉取公开元数据，打印完整候选清单（版本、字节数、最新上传时间）与可回收容量；
-2. 交互提示 `Type DELETE ppt-master to delete these <n> versions:`，只有逐字符输入 `DELETE ppt-master` 才会继续，其他输入不会触发任何删除；
+2. 交互提示 `Type 'DELETE ppt-master' to delete these <n> versions:`，只有逐字符输入 `DELETE ppt-master` 才会继续，其他输入不会触发任何删除；
 3. 删除前再次查询，确认候选仍然可删；若候选已被新的上传或保留规则保护，脚本中止且不删除任何内容；
 4. 删除由子工具 `uvx --from pypi-cleanup==0.1.12 pypi-cleanup` 执行。该子工具在终端中交互询问 PyPI 密码；本脚本不读取、不传递、不存储密码，并会把 `PYPI_CLEANUP_PASSWORD` 从子进程环境中移除。若账号启用了两步验证，需按提示输入 TOTP 验证码；子工具也可能要求完成邮件验证；
 5. 删除后以 5 秒为间隔最多复核 6 次，确认候选已消失且保留的版本仍然存在。

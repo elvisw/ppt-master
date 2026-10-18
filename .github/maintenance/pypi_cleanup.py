@@ -244,7 +244,7 @@ def apply_cleanup(username: str) -> int:
             )
             return 1
         print(_render_candidates(before, candidates))
-        answer = input(f"Type {CONFIRMATION_PHRASE} to delete these {len(candidates)} versions: ")
+        answer = input(f"Type '{CONFIRMATION_PHRASE}' to delete these {len(candidates)} versions: ")
         if answer != CONFIRMATION_PHRASE:
             print(
                 f"Confirmation did not match {CONFIRMATION_PHRASE!r}; no deletion was attempted.",
