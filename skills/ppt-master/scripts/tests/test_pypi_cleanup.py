@@ -250,6 +250,22 @@ def metadata_without(count, *removed):
     return data
 
 
+def metadata_with_new_candidate():
+    """Return the standard fixture plus a new, old-upload candidate (1.0)."""
+    data = metadata()
+    data["releases"]["1.0"] = [{"size": 1, "upload_time_iso_8601": OLD}]
+    return data
+
+
+def protected_metadata():
+    """Return a fixture where candidate 1.1 gains a fresh upload and 1.0 appears."""
+    data = metadata_with_new_candidate()
+    data["releases"]["1.1"].append(
+        {"size": 1, "upload_time_iso_8601": datetime.now(timezone.utc).isoformat()}
+    )
+    return data
+
+
 class _FakeStdin:
     """Minimal stdin stand-in whose isatty() is controlled by the test."""
 
@@ -361,7 +377,7 @@ class PyPICleanupApplyTests(unittest.TestCase):
 
     def test_apply_runs_the_fixed_command_and_verifies_success(self):
         outcome = self.invoke_apply(
-            [metadata(), metadata_without(12, "1.1", "1.2")],
+            [metadata(), metadata(), metadata_without(12, "1.1", "1.2")],
             environ={"PYPI_CLEANUP_PASSWORD": "secret"},
         )
         self.assertEqual(outcome["result"], 0)
@@ -378,45 +394,76 @@ class PyPICleanupApplyTests(unittest.TestCase):
         self.assertNotIn("shell", call.kwargs)
         self.assertNotIn("capture_output", call.kwargs)
         self.assertNotIn("stdout", call.kwargs)
-        self.assertEqual(outcome["fetch"].call_count, 2)
+        self.assertEqual(outcome["fetch"].call_count, 3)
         self.assertEqual(outcome["sleep"].call_count, 1)
         outcome["sleep"].assert_called_with(self.cleanup.VERIFY_INTERVAL_SECONDS)
         self.assertIn("Verified deletion", outcome["stdout"])
 
     def test_apply_retries_only_get_until_candidates_disappear(self):
         outcome = self.invoke_apply([
-            metadata(), metadata_without(12, "1.1"), metadata_without(12, "1.1", "1.2"),
+            metadata(), metadata(),
+            metadata_without(12, "1.1"), metadata_without(12, "1.1", "1.2"),
         ])
         self.assertEqual(outcome["result"], 0)
         outcome["run"].assert_called_once()
-        self.assertEqual(outcome["fetch"].call_count, 3)
+        self.assertEqual(outcome["fetch"].call_count, 4)
         self.assertEqual(outcome["sleep"].call_count, 2)
 
     def test_apply_reports_candidates_not_fully_deleted(self):
-        outcome = self.invoke_apply([metadata()] + [metadata_without(12, "1.1")] * 6)
+        outcome = self.invoke_apply(
+            [metadata(), metadata()] + [metadata_without(12, "1.1")] * 6
+        )
         self.assertNotEqual(outcome["result"], 0)
         outcome["run"].assert_called_once()
         self.assertEqual(outcome["sleep"].call_count, self.cleanup.VERIFY_ATTEMPTS)
         self.assertIn("not fully deleted", outcome["stderr"])
         self.assertIn("1.2", outcome["stderr"])
 
-    def test_apply_stops_when_candidate_becomes_protected_and_ignores_new_candidates(self):
-        data = metadata()
-        data["releases"]["1.1"].append(
-            {"size": 1, "upload_time_iso_8601": datetime.now(timezone.utc).isoformat()}
-        )
-        data["releases"]["1.0"] = [{"size": 1, "upload_time_iso_8601": OLD}]
-        outcome = self.invoke_apply([metadata(), data])
+    def test_apply_stops_when_candidate_becomes_protected_after_deletion(self):
+        outcome = self.invoke_apply([metadata(), metadata(), protected_metadata()])
         self.assertNotEqual(outcome["result"], 0)
         outcome["run"].assert_called_once()
-        self.assertEqual(outcome["fetch"].call_count, 2)
+        self.assertEqual(outcome["fetch"].call_count, 3)
         self.assertEqual(outcome["sleep"].call_count, 1)
         self.assertIn("protected", outcome["stderr"])
         self.assertIn("1.1", outcome["stderr"])
         self.assertNotIn("1.0", outcome["stderr"])
 
+    def test_apply_aborts_before_subprocess_when_candidate_becomes_protected(self):
+        outcome = self.invoke_apply([metadata(), protected_metadata()])
+        self.assertNotEqual(outcome["result"], 0)
+        self.assertEqual(outcome["run"].call_count, 0)
+        self.assertEqual(outcome["fetch"].call_count, 2)
+        outcome["sleep"].assert_not_called()
+        self.assertIn("no longer deletable", outcome["stderr"])
+        self.assertIn("1.1", outcome["stderr"])
+        self.assertNotIn("1.0", outcome["stderr"])
+
+    def test_apply_aborts_before_subprocess_when_recheck_fails_or_is_invalid(self):
+        for label, second in [("network", URLError("offline")), ("invalid", {})]:
+            with self.subTest(label=label):
+                outcome = self.invoke_apply([metadata(), second])
+                self.assertNotEqual(outcome["result"], 0)
+                self.assertEqual(outcome["run"].call_count, 0)
+                self.assertEqual(outcome["fetch"].call_count, 2)
+                outcome["sleep"].assert_not_called()
+                self.assertIn("Pre-deletion re-check failed", outcome["stderr"])
+                self.assertIn("No deletion was attempted", outcome["stderr"])
+
+    def test_apply_never_adopts_a_new_candidate_before_deletion(self):
+        after = metadata_with_new_candidate()
+        del after["releases"]["1.1"]
+        del after["releases"]["1.2"]
+        outcome = self.invoke_apply([metadata(), metadata_with_new_candidate(), after])
+        self.assertEqual(outcome["result"], 0)
+        outcome["run"].assert_called_once()
+        command = outcome["run"].call_args.args[0]
+        self.assertNotIn("1.0", command)
+        self.assertEqual(command[command.index("--version-regex") + 1], r"^(?:1\.1|1\.2)$")
+        self.assertEqual(outcome["fetch"].call_count, 3)
+
     def test_apply_reports_verification_query_failure(self):
-        outcome = self.invoke_apply([metadata(), URLError("offline")])
+        outcome = self.invoke_apply([metadata(), metadata(), URLError("offline")])
         self.assertNotEqual(outcome["result"], 0)
         outcome["run"].assert_called_once()
         self.assertEqual(outcome["sleep"].call_count, 1)
@@ -425,10 +472,10 @@ class PyPICleanupApplyTests(unittest.TestCase):
         self.assertIn("1.2", outcome["stderr"])
 
     def test_apply_reports_tool_nonzero_exit_without_verification(self):
-        outcome = self.invoke_apply([metadata()], returncode=1)
+        outcome = self.invoke_apply([metadata(), metadata()], returncode=1)
         self.assertNotEqual(outcome["result"], 0)
         outcome["run"].assert_called_once()
-        self.assertEqual(outcome["fetch"].call_count, 1)
+        self.assertEqual(outcome["fetch"].call_count, 2)
         outcome["sleep"].assert_not_called()
         self.assertIn("exited with 1", outcome["stderr"])
         self.assertIn("1.1", outcome["stderr"])

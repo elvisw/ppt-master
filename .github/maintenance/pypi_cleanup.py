@@ -251,6 +251,25 @@ def apply_cleanup(username: str) -> int:
                 file=sys.stderr,
             )
             return 1
+        try:
+            fresh = build_report(fetch_metadata(), now=datetime.now(timezone.utc))
+        except (OSError, URLError, ValueError) as exc:
+            print(
+                f"Pre-deletion re-check failed: {exc}. No deletion was attempted; "
+                "run the report subcommand and retry from a fresh preview.",
+                file=sys.stderr,
+            )
+            return 1
+        deletable = {entry["version"] for entry in fresh["delete"]}
+        changed = [version for version in candidates if version not in deletable]
+        if changed:
+            print(
+                "These confirmed candidates are no longer deletable and will not be sent to "
+                f"the tool: {', '.join(changed)}. No deletion was attempted; run apply again "
+                "to preview the current candidates.",
+                file=sys.stderr,
+            )
+            return 1
         completed = subprocess.run(
             build_cleanup_command(candidates, username),
             env=_subprocess_environment(),
