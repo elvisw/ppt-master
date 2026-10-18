@@ -278,8 +278,10 @@ def apply_cleanup(username: str) -> int:
         if completed.returncode != 0:
             print(
                 f"pypi-cleanup exited with {completed.returncode}; no deletion is confirmed. "
-                f"Unfinished candidates: {', '.join(candidates)}. "
-                "Inspect the project and retry from a fresh preview.",
+                "These candidates are NOT CONFIRMED deleted and were not individually "
+                f"verified: {', '.join(candidates)}. Run the report subcommand for a fresh "
+                "list before retrying; do not treat any of them as known remaining or known "
+                "deleted.",
                 file=sys.stderr,
             )
             return 1
@@ -308,17 +310,24 @@ def _verify_deletion(before: dict, candidates: list[str]) -> int:
         except (OSError, URLError, ValueError) as exc:
             print(
                 f"Post-deletion verification query failed: {exc}. "
-                f"Unfinished candidates: {', '.join(candidates)}. "
-                "Run the report subcommand to inspect the project, then retry from a fresh preview.",
+                "Deletion of these candidates is NOT CONFIRMED and was not individually "
+                f"verified: {', '.join(candidates)}. Run the report subcommand to inspect the "
+                "project, then retry from a fresh preview.",
                 file=sys.stderr,
             )
             return 1
         protected = sorted(set(candidates) & {entry["version"] for entry in after["keep"]})
         if protected:
+            unverified = [version for version in candidates if version not in set(protected)]
             print(
                 "These confirmed candidates are now protected by a new file upload or the "
                 f"retention rules: {', '.join(protected)}. No deletion was retried; "
-                "run apply again to preview the current candidates.",
+                "run apply again to preview the current candidates."
+                + (
+                    f" Deletion of the other confirmed candidate(s) is NOT CONFIRMED and was "
+                    f"not individually verified: {', '.join(unverified)}."
+                    if unverified else ""
+                ),
                 file=sys.stderr,
             )
             return 1

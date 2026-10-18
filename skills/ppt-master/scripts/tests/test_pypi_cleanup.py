@@ -290,12 +290,15 @@ class PyPICleanupApplyTests(unittest.TestCase):
         """Run the apply CLI with mocked network, subprocess, clock and confirmation."""
         stdout, stderr = io.StringIO(), io.StringIO()
         run = Mock(return_value=subprocess.CompletedProcess(args=[], returncode=returncode))
+        simulated = {key: value for key, value in os.environ.items()
+                     if key != self.cleanup.ACTION_ENV}
+        simulated.update(environ or {})
         with patch.object(self.cleanup.sys, "stdin", _FakeStdin(interactive)), \
                 patch.object(self.cleanup, "fetch_metadata", side_effect=fetch) as fetch_mock, \
                 patch.object(self.cleanup.subprocess, "run", run), \
                 patch.object(self.cleanup.time, "sleep") as sleep, \
                 patch("builtins.input", return_value=answer), \
-                patch.dict(os.environ, environ or {}, clear=False), \
+                patch.dict(os.environ, simulated, clear=True), \
                 redirect_stdout(stdout), redirect_stderr(stderr):
             result = self.cleanup.main(argv or ["apply", "--username", "alice"])
         return {
@@ -353,6 +356,18 @@ class PyPICleanupApplyTests(unittest.TestCase):
                 outcome["run"].assert_not_called()
                 outcome["sleep"].assert_not_called()
                 self.assertTrue(outcome["stderr"])
+
+    def test_outer_ci_environment_does_not_contaminate_a_simulated_human_apply(self):
+        """An inherited GITHUB_ACTIONS must not turn a simulated local run into a refusal."""
+        with patch.dict(os.environ, {self.cleanup.ACTION_ENV: "true"}, clear=False):
+            self.assertTrue(os.environ.get(self.cleanup.ACTION_ENV))
+            outcome = self.invoke_apply(
+                [metadata(), metadata(), metadata_without(12, "1.1", "1.2")]
+            )
+        self.assertEqual(outcome["result"], 0)
+        outcome["run"].assert_called_once()
+        self.assertNotIn(self.cleanup.ACTION_ENV, outcome["run"].call_args.kwargs["env"])
+        self.assertIn("Verified deletion", outcome["stdout"])
 
     def test_apply_refuses_empty_candidate_list_without_subprocess(self):
         outcome = self.invoke_apply([metadata(3)])
@@ -427,6 +442,8 @@ class PyPICleanupApplyTests(unittest.TestCase):
         self.assertEqual(outcome["sleep"].call_count, 1)
         self.assertIn("protected", outcome["stderr"])
         self.assertIn("1.1", outcome["stderr"])
+        self.assertIn("NOT CONFIRMED", outcome["stderr"])
+        self.assertIn("not individually verified", outcome["stderr"])
         self.assertNotIn("1.0", outcome["stderr"])
 
     def test_apply_aborts_before_subprocess_when_candidate_becomes_protected(self):
@@ -468,6 +485,8 @@ class PyPICleanupApplyTests(unittest.TestCase):
         outcome["run"].assert_called_once()
         self.assertEqual(outcome["sleep"].call_count, 1)
         self.assertIn("verification query failed", outcome["stderr"])
+        self.assertIn("NOT CONFIRMED", outcome["stderr"])
+        self.assertNotIn("Unfinished candidates", outcome["stderr"])
         self.assertIn("1.1", outcome["stderr"])
         self.assertIn("1.2", outcome["stderr"])
 
@@ -478,6 +497,9 @@ class PyPICleanupApplyTests(unittest.TestCase):
         self.assertEqual(outcome["fetch"].call_count, 2)
         outcome["sleep"].assert_not_called()
         self.assertIn("exited with 1", outcome["stderr"])
+        self.assertIn("NOT CONFIRMED", outcome["stderr"])
+        self.assertIn("not individually verified", outcome["stderr"])
+        self.assertNotIn("Unfinished candidates", outcome["stderr"])
         self.assertIn("1.1", outcome["stderr"])
         self.assertIn("1.2", outcome["stderr"])
 
