@@ -7,12 +7,15 @@ import copy
 import importlib.util
 import io
 import json
+import os
+import re
+import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from urllib.error import HTTPError, URLError
 
 
@@ -232,6 +235,215 @@ class PyPICleanupTests(unittest.TestCase):
 
     def test_invalid_arguments_do_not_fetch(self):
         for argv in [[], ["apply"], ["report", "--unknown"], ["report", "--json"]]:
+            with self.subTest(argv=argv), \
+                    patch.object(self.cleanup, "urlopen", side_effect=AssertionError("network")), \
+                    redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
+                self.cleanup.main(argv)
+            self.assertNotEqual(raised.exception.code, 0)
+
+
+def metadata_without(count, *removed):
+    """Return the standard fixture with the named releases removed."""
+    data = metadata(count)
+    for version in removed:
+        del data["releases"][version]
+    return data
+
+
+class _FakeStdin:
+    """Minimal stdin stand-in whose isatty() is controlled by the test."""
+
+    def __init__(self, interactive):
+        self._interactive = interactive
+
+    def isatty(self):
+        return self._interactive
+
+
+class PyPICleanupApplyTests(unittest.TestCase):
+    """Cover the local interactive apply entry; every destructive step is mocked."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location("pypi_cleanup", SCRIPT)
+        cls.cleanup = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.cleanup)
+
+    def invoke_apply(self, fetch, *, answer="DELETE ppt-master", returncode=0,
+                     interactive=True, environ=None, argv=None):
+        """Run the apply CLI with mocked network, subprocess, clock and confirmation."""
+        stdout, stderr = io.StringIO(), io.StringIO()
+        run = Mock(return_value=subprocess.CompletedProcess(args=[], returncode=returncode))
+        with patch.object(self.cleanup.sys, "stdin", _FakeStdin(interactive)), \
+                patch.object(self.cleanup, "fetch_metadata", side_effect=fetch) as fetch_mock, \
+                patch.object(self.cleanup.subprocess, "run", run), \
+                patch.object(self.cleanup.time, "sleep") as sleep, \
+                patch("builtins.input", return_value=answer), \
+                patch.dict(os.environ, environ or {}, clear=False), \
+                redirect_stdout(stdout), redirect_stderr(stderr):
+            result = self.cleanup.main(argv or ["apply", "--username", "alice"])
+        return {
+            "result": result, "fetch": fetch_mock, "run": run, "sleep": sleep,
+            "stdout": stdout.getvalue(), "stderr": stderr.getvalue(),
+        }
+
+    def test_build_cleanup_command_is_exact_anchored_and_escaped(self):
+        command = self.cleanup.build_cleanup_command(["1.2", "1.0rc1", "1.0+local"], "alice")
+        self.assertEqual(command, [
+            "uvx", "--from", "pypi-cleanup==0.1.12", "pypi-cleanup",
+            "--package", "ppt-master",
+            "--username", "alice",
+            "--version-regex", r"^(?:1\.0\+local|1\.0rc1|1\.2)$",
+            "--days", "30",
+            "--yes",
+            "--do-it",
+        ])
+        self.assertNotIn("--delete-project", command)
+        self.assertNotIn("--debug", command)
+        pattern = command[command.index("--version-regex") + 1]
+        self.assertNotIn(".*", pattern)
+        for version in ["1.2", "1.0rc1", "1.0+local"]:
+            with self.subTest(version=version):
+                match = re.match(pattern, version)
+                self.assertIsNotNone(match)
+                self.assertEqual(match.end(), len(version))
+        for other in ["1.20", "1.2.0", "1.0rc10", "21.2", "1.0+locality"]:
+            with self.subTest(other=other):
+                match = re.match(pattern, other)
+                self.assertTrue(match is None or match.end() != len(other))
+
+    def test_build_cleanup_command_rejects_empty_or_blank_inputs(self):
+        for versions, username in [([], "alice"), (["1.2"], ""), (["1.2"], "   "), ([""], "alice")]:
+            with self.subTest(versions=versions, username=username), self.assertRaises(ValueError):
+                self.cleanup.build_cleanup_command(versions, username)
+
+    def test_verify_cleanup_reports_deleted_remaining_and_missing_kept(self):
+        before = self.cleanup.build_report(metadata(), now=NOW)
+        same = self.cleanup.verify_cleanup(before, before)
+        self.assertEqual(same, {"deleted": [], "remaining": ["1.2", "1.1"], "missing_kept": []})
+        after = self.cleanup.build_report(metadata_without(12, "1.1", "1.12"), now=NOW)
+        result = self.cleanup.verify_cleanup(before, after)
+        self.assertEqual(result["deleted"], ["1.1"])
+        self.assertEqual(result["remaining"], ["1.2"])
+        self.assertEqual(result["missing_kept"], ["1.12"])
+
+    def test_apply_refuses_in_action_or_non_interactive_terminal(self):
+        for label, kwargs in [("non-interactive", {"interactive": False}),
+                              ("action", {"environ": {"GITHUB_ACTIONS": "true"}})]:
+            with self.subTest(label=label):
+                outcome = self.invoke_apply([metadata()], **kwargs)
+                self.assertNotEqual(outcome["result"], 0)
+                outcome["fetch"].assert_not_called()
+                outcome["run"].assert_not_called()
+                outcome["sleep"].assert_not_called()
+                self.assertTrue(outcome["stderr"])
+
+    def test_apply_refuses_empty_candidate_list_without_subprocess(self):
+        outcome = self.invoke_apply([metadata(3)])
+        self.assertNotEqual(outcome["result"], 0)
+        self.assertEqual(outcome["fetch"].call_count, 1)
+        outcome["run"].assert_not_called()
+        self.assertIn("No delete candidates", outcome["stderr"])
+
+    def test_apply_stops_on_wrong_confirmation_without_subprocess(self):
+        for answer in ["delete ppt-master", "DELETE ppt-master ", "DELETE  ppt-master", ""]:
+            with self.subTest(answer=answer):
+                outcome = self.invoke_apply([metadata()], answer=answer)
+                self.assertNotEqual(outcome["result"], 0)
+                outcome["run"].assert_not_called()
+                self.assertIn("Confirmation did not match", outcome["stderr"])
+
+    def test_apply_shows_candidates_and_capacity_before_confirming(self):
+        outcome = self.invoke_apply([metadata()], answer="wrong")
+        self.assertIn("1.1", outcome["stdout"])
+        self.assertIn("1.2", outcome["stdout"])
+        self.assertIn("Reclaimable: 3 bytes of 78 total nonempty-version bytes.", outcome["stdout"])
+
+    def test_apply_runs_the_fixed_command_and_verifies_success(self):
+        outcome = self.invoke_apply(
+            [metadata(), metadata_without(12, "1.1", "1.2")],
+            environ={"PYPI_CLEANUP_PASSWORD": "secret"},
+        )
+        self.assertEqual(outcome["result"], 0)
+        outcome["run"].assert_called_once()
+        call = outcome["run"].call_args
+        self.assertEqual(call.args[0], [
+            "uvx", "--from", "pypi-cleanup==0.1.12", "pypi-cleanup",
+            "--package", "ppt-master",
+            "--username", "alice",
+            "--version-regex", r"^(?:1\.1|1\.2)$",
+            "--days", "30", "--yes", "--do-it",
+        ])
+        self.assertNotIn("PYPI_CLEANUP_PASSWORD", call.kwargs["env"])
+        self.assertNotIn("shell", call.kwargs)
+        self.assertNotIn("capture_output", call.kwargs)
+        self.assertNotIn("stdout", call.kwargs)
+        self.assertEqual(outcome["fetch"].call_count, 2)
+        self.assertEqual(outcome["sleep"].call_count, 1)
+        outcome["sleep"].assert_called_with(self.cleanup.VERIFY_INTERVAL_SECONDS)
+        self.assertIn("Verified deletion", outcome["stdout"])
+
+    def test_apply_retries_only_get_until_candidates_disappear(self):
+        outcome = self.invoke_apply([
+            metadata(), metadata_without(12, "1.1"), metadata_without(12, "1.1", "1.2"),
+        ])
+        self.assertEqual(outcome["result"], 0)
+        outcome["run"].assert_called_once()
+        self.assertEqual(outcome["fetch"].call_count, 3)
+        self.assertEqual(outcome["sleep"].call_count, 2)
+
+    def test_apply_reports_candidates_not_fully_deleted(self):
+        outcome = self.invoke_apply([metadata()] + [metadata_without(12, "1.1")] * 6)
+        self.assertNotEqual(outcome["result"], 0)
+        outcome["run"].assert_called_once()
+        self.assertEqual(outcome["sleep"].call_count, self.cleanup.VERIFY_ATTEMPTS)
+        self.assertIn("not fully deleted", outcome["stderr"])
+        self.assertIn("1.2", outcome["stderr"])
+
+    def test_apply_stops_when_candidate_becomes_protected_and_ignores_new_candidates(self):
+        data = metadata()
+        data["releases"]["1.1"].append(
+            {"size": 1, "upload_time_iso_8601": datetime.now(timezone.utc).isoformat()}
+        )
+        data["releases"]["1.0"] = [{"size": 1, "upload_time_iso_8601": OLD}]
+        outcome = self.invoke_apply([metadata(), data])
+        self.assertNotEqual(outcome["result"], 0)
+        outcome["run"].assert_called_once()
+        self.assertEqual(outcome["fetch"].call_count, 2)
+        self.assertEqual(outcome["sleep"].call_count, 1)
+        self.assertIn("protected", outcome["stderr"])
+        self.assertIn("1.1", outcome["stderr"])
+        self.assertNotIn("1.0", outcome["stderr"])
+
+    def test_apply_reports_verification_query_failure(self):
+        outcome = self.invoke_apply([metadata(), URLError("offline")])
+        self.assertNotEqual(outcome["result"], 0)
+        outcome["run"].assert_called_once()
+        self.assertEqual(outcome["sleep"].call_count, 1)
+        self.assertIn("verification query failed", outcome["stderr"])
+        self.assertIn("1.1", outcome["stderr"])
+        self.assertIn("1.2", outcome["stderr"])
+
+    def test_apply_reports_tool_nonzero_exit_without_verification(self):
+        outcome = self.invoke_apply([metadata()], returncode=1)
+        self.assertNotEqual(outcome["result"], 0)
+        outcome["run"].assert_called_once()
+        self.assertEqual(outcome["fetch"].call_count, 1)
+        outcome["sleep"].assert_not_called()
+        self.assertIn("exited with 1", outcome["stderr"])
+        self.assertIn("1.1", outcome["stderr"])
+        self.assertIn("1.2", outcome["stderr"])
+
+    def test_apply_help_is_offline_and_write_free(self):
+        with patch.object(self.cleanup, "urlopen", side_effect=AssertionError("network")), \
+                patch.object(self.cleanup.subprocess, "run", side_effect=AssertionError("run")), \
+                patch.object(Path, "write_text", side_effect=AssertionError("write")), \
+                redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as raised:
+            self.cleanup.main(["apply", "--help"])
+        self.assertEqual(raised.exception.code, 0)
+
+    def test_apply_rejects_password_flag_and_missing_username(self):
+        for argv in [["apply"], ["apply", "--username"], ["apply", "--username", "u", "--password", "x"]]:
             with self.subTest(argv=argv), \
                     patch.object(self.cleanup, "urlopen", side_effect=AssertionError("network")), \
                     redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
