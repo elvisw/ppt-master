@@ -4,10 +4,10 @@
 Report retention decisions from public metadata without authentication or deletion.
 
 Usage:
-    uvx --from packaging==25.0 python .github/scripts/pypi_cleanup.py report [options]
+    uvx --from packaging==25.0 python .github/maintenance/pypi_cleanup.py report [options]
 
 Examples:
-    uvx --from packaging==25.0 python .github/scripts/pypi_cleanup.py report --json report.json
+    uvx --from packaging==25.0 python .github/maintenance/pypi_cleanup.py report --json report.json
 
 Dependencies:
     packaging==25.0

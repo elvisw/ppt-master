@@ -29,7 +29,7 @@
 
 ## 文件布局
 
-- 新增 `.github/scripts/pypi_cleanup.py`：查询、规则、报告、本机执行及核验。
+- 新增 `.github/maintenance/pypi_cleanup.py`：查询、规则、报告、本机执行及核验。
 - 新增 `.github/workflows/pypi-cleanup-report.yml`：月度与手动只读报告。
 - 新增 `skills/ppt-master/scripts/tests/test_pypi_cleanup.py`：脚本回归测试。
 - 新增 `docs/zh/pypi-cleanup.md`：维护者操作、认证限制及失败恢复。
@@ -44,7 +44,7 @@
 
 ## 任务 1：共享规则与报告入口
 
-**文件：** `.github/scripts/pypi_cleanup.py`、`skills/ppt-master/scripts/tests/test_pypi_cleanup.py`。
+**文件：** `.github/maintenance/pypi_cleanup.py`、`skills/ppt-master/scripts/tests/test_pypi_cleanup.py`。
 
 **接口：** `fetch_metadata() -> dict` 固定查询公开项目 JSON；`build_report(metadata: dict, *, now: datetime) -> dict` 为纯函数；`main(argv: list[str] | None = None) -> int` 提供 `report` 子命令。
 
@@ -79,11 +79,11 @@
 
 - [ ] 新建 `PyPI Cleanup Report` workflow：`schedule` 为 `17 3 1 * *`，即每月 1 日 03:17 UTC；另有无输入参数的 `workflow_dispatch`。只设 `contents: read`，单 job `report`，`ubuntu-latest`，10 分钟超时。
 - [ ] checkout 设置 `persist-credentials: false`；checkout、setup-uv、upload-artifact 复用当前 `check_release_gates.py::EXPECTED_ACTION_PINS` 的精确 SHA 与 release 注释，uv 版本及 checksum 复用同文件的已批准常量。不改此 owner 或现有门禁。
-- [ ] 调用 `uvx --python 3.12 --from packaging==25.0 python -I <absolute_repo>/.github/scripts/pypi_cleanup.py report --json <absolute_output>/report.json --markdown <absolute_output>/report.md`。将 Markdown 追加到 `GITHUB_STEP_SUMMARY`；artifact 名为 `pypi-cleanup-report`，保留 35 天。候选为空也是成功报告；查询失败则 job 失败。
+- [ ] 调用 `uvx --python 3.12 --from packaging==25.0 python -I <absolute_repo>/.github/maintenance/pypi_cleanup.py report --json <absolute_output>/report.json --markdown <absolute_output>/report.md`。将 Markdown 追加到 `GITHUB_STEP_SUMMARY`；artifact 名为 `pypi-cleanup-report`，保留 35 天。候选为空也是成功报告；查询失败则 job 失败。
 - [ ] 不设置 Secrets、`id-token: write` 或仓库写权限，不调用 `apply`，不新增 PR、push 或发布触发器；`workflow_dispatch` 也不能接受用户提供的项目名、脚本或删除参数。
 - [ ] 维护说明记录相同报告命令与本机 `apply --username <name>` 命令；解释密码及 TOTP 交互、可能的邮件验证、精确确认文本、不可恢复性、部分失败与重新预览流程。命令是维护者操作，不改变最终用户的 skill 使用方式。
 - [ ] 通过 YAML 解析与结构检查核实 cron、权限、action SHA、报告参数；不为 workflow 文本新增回归测试。对新增 Python 运行 `py_compile` 与 `uvx ruff check --select F821`，重跑单模块测试。
-- [ ] 提交：`ci: add monthly PyPI cleanup report`。实现 PR 因新增 `.github/scripts/**` 与 `.github/workflows/**` 需要 `ci-maintenance-approved`；该标签仅豁免 protected-path 拒绝，不豁免其他门禁。
+- [ ] 提交：`ci: add monthly PyPI cleanup report`。实现 PR 因新增 `.github/workflows/**` 需要 `ci-maintenance-approved`（脚本已改置非受保护的 `.github/maintenance/**`，不再触发 `.github/scripts/**` 保护路径）；该标签仅豁免 protected-path 拒绝，不豁免其他门禁。
 - [ ] PR 中列出单模块测试、真实在线报告输出、静态检查，以及明确的未执行项：真实登录、真实删除、最终释放容量。检查通过不等于可以合并，等待用户确认。
 - [ ] workflow 在默认分支获准落地后手动触发一次只读运行，逐项核对 job summary、artifact 和实际在线候选。记录 run URL，由用户确认此里程碑。
 - [ ] 最后才由维护者在本机重新获取清单并确认首次真实删除；若该步未执行，交付状态必须写明“报告已验证，实际清理未执行”。
@@ -95,3 +95,7 @@
 - 单一规则 owner 是新维护脚本；没有修改运行时 skill，也没有引入第二条发布或删除自动化链。
 - 实施按任务顺序推进。建议主代理内联实现，最后做一次独立只读评审；三个任务共享同一脚本，不适合并行改写。此建议尚待用户选择。
 - 设计已由独立子代理只读检查，结果为 `nothing important left`；该检查不代表代码、认证或实际清理已经验证。
+
+## 路径修正记录（集成纠正）
+
+任务 1 完成后发现：`.github/scripts` 是发布门禁的精确三文件受信任目录，`check_release_gates.py::_validate_trusted_script_directory` 会无条件拒绝该目录内除三个受信模块外的任何条目，原定的 `.github/scripts/pypi_cleanup.py` 因此必然使发布门禁失败。控制器裁定将该脚本移至其同级维护目录 `.github/maintenance/pypi_cleanup.py`，并通过只读复现证明移动后 `_validate_trusted_script_directory` 通过；本计划的执行路径引用随之更新。规则、报告接口与执行范围均不变，未修改门禁、白名单、发布/同步工作流或包版本。

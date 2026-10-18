@@ -16,7 +16,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
 
-SCRIPT = Path(__file__).resolve().parents[4] / ".github/scripts/pypi_cleanup.py"
+SCRIPT = Path(__file__).resolve().parents[4] / ".github/maintenance/pypi_cleanup.py"
 NOW = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
 OLD = "2026-01-01T00:00:00Z"
 
