@@ -50,6 +50,7 @@ skills/ppt-master/scripts/svg_quality/cli.py merge upstream script update merged
 skills/ppt-master/scripts/tts_backends/backend_edge.py merge upstream backend update merged with fork adaptations (8900e87c sync)
 skills/ppt-master/workflows/generate-pptx.md merge upstream workflow update merged with fork uvx command adaptations
 skills/ppt-master/workflows/profiles/beautify-pptx.md merge upstream workflow update merged with fork uvx command adaptations (8900e87c sync)
+skills/ppt-master/workflows/profiles/image-to-pptx.md merge upstream image reconstruction workflow update merged with fork uvx command adaptations (4a68cdda sync)
 skills/ppt-master/workflows/stages/apply-template-workspace.md retain-base upstream change only reverts uvx commands to python3; fork keeps the uvx mappings
 skills/ppt-master/workflows/stages/customize-animations.md merge upstream workflow update merged with fork uvx command adaptations (8900e87c sync)
 skills/ppt-master/workflows/stages/generate-audio.md merge upstream workflow update merged with fork uvx command adaptations (8900e87c sync)
