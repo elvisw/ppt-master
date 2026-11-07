@@ -9,6 +9,7 @@ candidate-controlled Python module, configuration file, hook, or action.
 from __future__ import annotations
 
 import argparse
+import ast
 import importlib.util
 import os
 import stat
@@ -35,7 +36,6 @@ FORK_CONTRACTS = {
     "skills/ppt-master/scripts/visual_review.py": ("normalized_project_key",),
     "skills/ppt-master/scripts/server_common.py": ("def normalized_project_key",),
     "skills/ppt-master/scripts/config.py": (
-        "from project_management.paths import projects_root",
         "PROJECTS_DIR = projects_root()",
     ),
     "skills/ppt-master/scripts/project_management/paths.py": (
@@ -43,13 +43,17 @@ FORK_CONTRACTS = {
         "PPT_MASTER_PROJECTS",
     ),
     "skills/ppt-master/scripts/project_manager.py": (
-        "from project_management.paths import projects_root",
         "projects_root()",
     ),
     "skills/ppt-master/scripts/register_template.py": (
         "PPT_MASTER_TEMPLATES_DIR",
         "_TEMPLATES_DIR_SOURCE",
     ),
+}
+
+PROJECTS_ROOT_IMPORT_FILES = {
+    "skills/ppt-master/scripts/config.py",
+    "skills/ppt-master/scripts/project_manager.py",
 }
 
 REQUIRED_REGULAR_FILES = {
@@ -309,6 +313,27 @@ def _check_fork_contract(candidate: Path) -> None:
         missing = [marker for marker in markers if marker not in text]
         if missing:
             raise CandidateGateError(f"fork contract markers missing from {relative}: {missing}")
+        if relative in PROJECTS_ROOT_IMPORT_FILES:
+            # Inspect syntax only; candidate modules must never be executed.
+            try:
+                tree = ast.parse(text, filename=relative)
+            except SyntaxError as exc:
+                raise CandidateGateError(f"invalid fork contract Python in {relative}: {exc}") from exc
+            has_import = any(
+                isinstance(node, ast.ImportFrom)
+                and node.level == 0
+                and node.module == "project_management.paths"
+                and any(
+                    alias.name == "projects_root" and alias.asname in (None, "projects_root")
+                    for alias in node.names
+                )
+                for node in tree.body
+            )
+            if not has_import:
+                raise CandidateGateError(
+                    f"fork contract import missing from {relative}: "
+                    "from project_management.paths import projects_root"
+                )
 
 
 def _check_yaml_contract(candidate: Path) -> None:

@@ -124,6 +124,69 @@ class TrustedCandidateCheckerTests(unittest.TestCase):
             finally:
                 run_git(ROOT, "worktree", "remove", "--force", str(candidate_root), check=False)
 
+    def test_projects_root_import_accepts_grouped_and_multiline_forms(self) -> None:
+        imports = (
+            "from project_management.paths import (projects_root)",
+            "from project_management.paths import REPO_ROOT, projects_root",
+            "from project_management.paths import (  # noqa: E402\n"
+            "    REPO_ROOT,\n    projects_root,\n)",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            candidate_root = Path(temporary) / "candidate"
+            self._materialize_candidate(ROOT, candidate_root)
+            try:
+                paths = [
+                    candidate_root / "skills/ppt-master/scripts/config.py",
+                    candidate_root / "skills/ppt-master/scripts/project_manager.py",
+                ]
+                originals = [path.read_text(encoding="utf-8") for path in paths]
+                marker = "from project_management.paths import projects_root"
+                for original in originals:
+                    self.assertEqual(original.count(marker), 1)
+                for statement in imports:
+                    with self.subTest(statement=statement):
+                        for path, original in zip(paths, originals):
+                            path.write_text(original.replace(marker, statement), encoding="utf-8")
+                        result = self._run_checker(candidate_root)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+            finally:
+                run_git(ROOT, "worktree", "remove", "--force", str(candidate_root), check=False)
+
+    def test_projects_root_import_rejects_missing_or_invalid_bindings(self) -> None:
+        marker = "from project_management.paths import projects_root"
+        invalid_imports = (
+            "# " + marker,
+            repr(marker),
+            "from other.paths import projects_root",
+            "from .project_management.paths import projects_root",
+            marker + " as unused_projects_root",
+            "def unused():\n    " + marker,
+            "from project_management.paths import (",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            candidate_root = Path(temporary) / "candidate"
+            self._materialize_candidate(ROOT, candidate_root)
+            try:
+                for relative in (
+                    "skills/ppt-master/scripts/config.py",
+                    "skills/ppt-master/scripts/project_manager.py",
+                ):
+                    path = candidate_root / relative
+                    original = path.read_text(encoding="utf-8")
+                    self.assertEqual(original.count(marker), 1)
+                    for statement in invalid_imports:
+                        with self.subTest(path=relative, statement=statement):
+                            path.write_text(original.replace(marker, statement), encoding="utf-8")
+                            result = self._run_checker(candidate_root)
+                            self.assertNotEqual(result.returncode, 0)
+                            if statement == "from project_management.paths import (":
+                                self.assertTrue(result.stderr)
+                            else:
+                                self.assertIn(relative, result.stderr)
+                    path.write_text(original, encoding="utf-8")
+            finally:
+                run_git(ROOT, "worktree", "remove", "--force", str(candidate_root), check=False)
+
 
 if __name__ == "__main__":
     unittest.main()
