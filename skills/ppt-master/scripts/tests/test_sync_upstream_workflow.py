@@ -47,7 +47,7 @@ class SyncUpstreamWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("pull-requests: write", self.workflow_text)
         self.assertNotIn("anomalyco/opencode", self.workflow_text)
         self.assertNotIn("@latest", self.workflow_text)
-        self.assertEqual(self.workflow_text.count("opencode-ai@1.18.30"), 1)
+        self.assertEqual(self.workflow_text.count("opencode-ai@1.18.32"), 1)
 
         model_steps = [step for step in prepare["steps"] if "opencode run" in step.get("run", "")]
         self.assertEqual(len(model_steps), 1)
@@ -64,7 +64,7 @@ class SyncUpstreamWorkflowContractTests(unittest.TestCase):
         install = self._step(prepare, "Install pinned OpenCode CLI")
         self.assertNotIn("DEEPSEEK_API_KEY", install.get("env", {}))
         self.assertNotIn("PUSH_PAT", install.get("env", {}))
-        self.assertIn("npm install -g opencode-ai@1.18.30", install["run"])
+        self.assertIn("npm install -g opencode-ai@1.18.32", install["run"])
         self.assertNotIn("opencode run", install["run"])
         self.assertNotIn("npm install", model["run"])
 
@@ -119,7 +119,7 @@ class SyncUpstreamWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("candidate_root/.github/scripts", checker["run"])
 
         tools = self._step(trusted, "Install trusted candidate gate tools")
-        self.assertIn('uv venv --python 3.12 "$RUNNER_TEMP/ppt-master-gate-venv"', tools["run"])
+        self.assertIn('uv venv --python /usr/bin/python3 "$RUNNER_TEMP/ppt-master-gate-venv"', tools["run"])
         self.assertIn('GATE_PYTHON="$RUNNER_TEMP/ppt-master-gate-venv/bin/python"', tools["run"])
         self.assertIn(
             'uv pip sync --python "$GATE_PYTHON" --require-hashes --only-binary :all:',
@@ -165,7 +165,7 @@ class SyncUpstreamWorkflowContractTests(unittest.TestCase):
 
     def test_opencode_workflow_is_pinned_without_business_trigger_changes(self) -> None:
         text = OPENCODE_WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn("anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a", text)
+        self.assertIn("anomalyco/opencode/github@a3b97d9090ccf4aa9ac32268486283e3131e36b4", text)
         self.assertNotIn("anomalyco/opencode/github@latest", text)
         self.assertIn("issue_comment:", text)
         self.assertIn("pull_request_review_comment:", text)
