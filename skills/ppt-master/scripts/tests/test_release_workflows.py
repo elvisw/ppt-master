@@ -138,7 +138,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
     def test_gate_tooling_uses_runner_temp_venv_instead_of_system_python(self) -> None:
         for path in (AUTO_TAG, PUBLISH):
             text = path.read_text(encoding="utf-8")
-            self.assertIn('uv venv --python 3.12 "$RUNNER_TEMP/ppt-master-gate-venv"', text)
+            self.assertIn('uv venv --python /usr/bin/python3 "$RUNNER_TEMP/ppt-master-gate-venv"', text)
             self.assertIn('GATE_PYTHON="$RUNNER_TEMP/ppt-master-gate-venv/bin/python"', text)
             self.assertIn('printf \'GATE_PYTHON=%s\\n\' "$GATE_PYTHON" >> "$GITHUB_ENV"', text)
             self.assertIn('UV_PYTHON_DOWNLOADS: never', text)

@@ -11,11 +11,8 @@ on:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
       - name: Run cli sync check
         run: python3 skills/ppt-master/scripts/check_cli_sync.py

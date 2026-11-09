@@ -136,14 +136,14 @@ RELEASE_TOOLING_LOCKS = (
     (
         ".github/release-gate-requirements.in",
         ".github/release-gate-requirements.txt",
-        b"PyYAML==6.0.2\nruff==0.12.10\n",
-        "3b4263e1978921d15a10af95d9b422dc39556ce9bb2273c3fa99a370d3349d75",
+        b"PyYAML==6.0.3\nruff==0.12.10\n",
+        "f32dbebce8c3003d235dbe5ba24f411130f794ca37b75944003cb961f918c680",
     ),
     (
         ".github/release-build-requirements.in",
         ".github/release-build-requirements.txt",
-        b"PyYAML==6.0.2\nruff==0.12.10\nsetuptools==80.9.0\n",
-        "f31366cdcd90a773bfbf97182aa8e6d567f11f2134bd57c25f52157ee2dae357",
+        b"PyYAML==6.0.3\nruff==0.12.10\nsetuptools==80.9.0\n",
+        "988cbcf36a362a84dec055fbea72cebe9fd367675f9d26a8e5954c62c7632c7a",
     ),
 )
 TOOLING_ENV = {"UV_PYTHON_DOWNLOADS": "never"}
@@ -222,7 +222,7 @@ AUTO_TAG_QUERY_RUN = _template(
 AUTO_TAG_TOOLING_RUN = _template(
     r"""
     set -euo pipefail
-    uv venv --python 3.12 "$RUNNER_TEMP/ppt-master-gate-venv"
+    uv venv --python /usr/bin/python3 "$RUNNER_TEMP/ppt-master-gate-venv"
     GATE_PYTHON="$RUNNER_TEMP/ppt-master-gate-venv/bin/python"
     uv pip sync --python "$GATE_PYTHON" --require-hashes --only-binary :all: --no-progress ".github/release-gate-requirements.txt"
     printf 'GATE_PYTHON=%s\n' "$GATE_PYTHON" >> "$GITHUB_ENV"
@@ -465,7 +465,7 @@ PUBLISH_QUERY_RUN = _template(
 PUBLISH_TOOLING_RUN = _template(
     r"""
     set -euo pipefail
-    uv venv --python 3.12 "$RUNNER_TEMP/ppt-master-gate-venv"
+    uv venv --python /usr/bin/python3 "$RUNNER_TEMP/ppt-master-gate-venv"
     GATE_PYTHON="$RUNNER_TEMP/ppt-master-gate-venv/bin/python"
     uv pip sync --python "$GATE_PYTHON" --require-hashes --only-binary :all: --no-progress ".github/release-build-requirements.txt"
     printf 'GATE_PYTHON=%s\n' "$GATE_PYTHON" >> "$GITHUB_ENV"
@@ -1195,9 +1195,11 @@ def _check_isolated_python_invocations(text: str, label: str) -> None:
     """Reject bare or non-isolated Python invocations of trusted scripts."""
     if re.search(r"(?m)^\s*(?:python3?|uv run)\s+(?:\.github|skills)/", text):
         raise ReleaseGateError(f"{label} must invoke trusted Python scripts with python -I")
-    if "python3" in text:
-        raise ReleaseGateError(f"{label} must not rely on the removed python3 alias")
     for line in text.splitlines():
+        if "python3" in line and line.strip() != (
+            'uv venv --python /usr/bin/python3 "$RUNNER_TEMP/ppt-master-gate-venv"'
+        ):
+            raise ReleaseGateError(f"{label} may use system python3 only to create the isolated gate environment")
         if "check_release_gates.py" in line and not any(
             marker in line for marker in ("python -I ", '"$GATE_PYTHON" -I ')
         ):
@@ -1389,7 +1391,7 @@ def _check_tooling_install(run: object, label: str, *, require_build_backend: bo
     """Require exact-pinned tooling installed into the explicit gate interpreter."""
     if (
         not isinstance(run, str)
-        or 'uv venv --python 3.12 "$RUNNER_TEMP/ppt-master-gate-venv"' not in run
+        or 'uv venv --python /usr/bin/python3 "$RUNNER_TEMP/ppt-master-gate-venv"' not in run
         or 'GATE_PYTHON="$RUNNER_TEMP/ppt-master-gate-venv/bin/python"' not in run
         or "uv pip sync" not in run
         or "--require-hashes" not in run
@@ -1480,7 +1482,7 @@ def _check_workflow_policy(repo: Path) -> None:
         allowed_keys=AUTO_TAG_JOB_ALLOWED_KEYS,
         if_value=AUTO_TAG_JOB_CONDITION,
     )
-    if auto_job.get("runs-on") != "ubuntu-latest" or auto_job.get("timeout-minutes") != 30:
+    if auto_job.get("runs-on") != "ubuntu-26.04" or auto_job.get("timeout-minutes") != 30:
         raise ReleaseGateError("auto-tag job must keep its approved runner and timeout")
     _require_permissions(auto_job.get("permissions"), AUTO_TAG_PERMISSIONS, "auto-tag verify-and-tag job")
     if any(
@@ -1635,15 +1637,15 @@ def _check_workflow_policy(repo: Path) -> None:
         "publish",
     }:
         raise ReleaseGateError("publish must contain exactly build-and-gate, verify-artifact, and publish jobs")
-    for name, allowed_keys, timeout in (
-        ("build-and-gate", PUBLISH_BUILD_JOB_ALLOWED_KEYS, 45),
-        ("verify-artifact", PUBLISH_VERIFY_JOB_ALLOWED_KEYS, 15),
+    for name, allowed_keys, timeout, runner in (
+        ("build-and-gate", PUBLISH_BUILD_JOB_ALLOWED_KEYS, 45, "ubuntu-26.04"),
+        ("verify-artifact", PUBLISH_VERIFY_JOB_ALLOWED_KEYS, 15, "ubuntu-latest"),
     ):
         job = publish_jobs[name]
         if not isinstance(job, dict):
             raise ReleaseGateError(f"publish {name} job is malformed")
         _require_job_envelope(job, f"publish {name} job", allowed_keys=allowed_keys)
-        if job.get("runs-on") != "ubuntu-latest" or job.get("timeout-minutes") != timeout:
+        if job.get("runs-on") != runner or job.get("timeout-minutes") != timeout:
             raise ReleaseGateError(f"publish {name} job must keep its approved runner and timeout")
         _require_permissions(job.get("permissions"), PUBLISH_BUILD_PERMISSIONS, f"publish {name} job")
         if "secrets." in json.dumps(job):

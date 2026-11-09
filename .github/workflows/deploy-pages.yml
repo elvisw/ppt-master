@@ -29,6 +29,8 @@ concurrency:
 jobs:
   # 构建任务
   build:
+    # 本 fork 不发布示例站点；保留上游的 Pages 工作流。
+    if: github.repository == 'hugohe3/ppt-master'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

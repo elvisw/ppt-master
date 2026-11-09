@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   report:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - name: Checkout repository
@@ -30,7 +30,7 @@ jobs:
           set -euo pipefail
           REPORT_DIR="$RUNNER_TEMP/pypi-cleanup-report"
           mkdir -p "$REPORT_DIR"
-          uvx --python 3.12 --from packaging==25.0 python -I \
+          uvx --python /usr/bin/python3 --from packaging==25.0 python -I \
             "$GITHUB_WORKSPACE/.github/maintenance/pypi_cleanup.py" report \
             --json "$REPORT_DIR/report.json" \
             --markdown "$REPORT_DIR/report.md"

@@ -146,7 +146,8 @@ release gate、scanner 和 migration checker 均由 `python -I` 调用；gate �
 `console_encoding.py`、`workflow_transcript.py`、两份 `cli.py` 纳入 protected set。
 
 privileged workflow 的 `setup-uv` 固定精确 uv version 与 Ubuntu x86_64 可执行文件 SHA-256
-checksum；build job 以 exact pin 安装 gate/Ruff/build backend，并用
+checksum；auto-tag、publish build 与同步校验使用 Ubuntu 26.04 的系统 Python 3.14，
+在 runner.temp 中创建独立 venv，禁止下载托管解释器。build job 以 exact pin 安装 gate/Ruff/build backend，并用
 `uv build --no-build-isolation` 构建，不解析 latest/range。release policy 对 auto-tag、
 `check-uvx-migration.yml` 与 publish OIDC job 执行完整 step inventory：step 数量、名称、顺序、
 key 集合、`uses`/`with`/`env` 和 run block 都必须逐字匹配 approved 模板；任何额外 step、no-op、
@@ -189,7 +190,8 @@ first-parent 差异，中间篡改即使恢复也失败。31 个 `merge` 条目�
 
 `sync-upstream.yml` 的 upload/download artifact、`check-upstream-ancestry.yml` 与
 `opencode.yml` 的 checkout、`opencode.yml` 的 `anomalyco/opencode/github` 也已固定到
-immutable SHA 并由 release policy 校验；GitHub Pages 部署仍为 out-of-scope residual。
+immutable SHA 并由 release policy 校验；GitHub Pages 部署只在原上游仓库执行，fork 自动跳过，
+不影响同步和 PyPI 发布。
 
 ---
 
