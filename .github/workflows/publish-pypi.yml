@@ -25,7 +25,8 @@ concurrency:
 
 jobs:
   build-and-gate:
-    runs-on: ubuntu-latest
+    # Match the gate's system Python 3.12 requirement without downloading Python.
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
       contents: read

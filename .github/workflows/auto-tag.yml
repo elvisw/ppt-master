@@ -11,7 +11,8 @@ permissions:
 
 jobs:
   verify-and-tag:
-    runs-on: ubuntu-latest
+    # Python 3.12 is preinstalled; managed interpreter downloads stay disabled.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     if: >-
       github.event_name == 'workflow_run' &&

@@ -198,6 +198,18 @@ class ReleaseGateHelperTests(unittest.TestCase):
     def test_current_privileged_workflow_policy_passes(self) -> None:
         self.module._check_workflow_policy(ROOT)
 
+    def test_release_policy_rejects_unpinned_python_runner(self) -> None:
+        for relative in (
+            ".github/workflows/auto-tag.yml",
+            ".github/workflows/publish-pypi.yml",
+        ):
+            for runner in ("ubuntu-latest", "ubuntu-26.04"):
+                with self.subTest(workflow=relative, runner=runner):
+                    self._mutated_workflow_policy(
+                        relative,
+                        lambda text: text.replace("runs-on: ubuntu-24.04", f"runs-on: {runner}", 1),
+                    )
+
     def test_release_tooling_lock_rejects_input_or_hash_drift(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repo = Path(temporary)

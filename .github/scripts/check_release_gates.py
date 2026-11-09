@@ -1480,7 +1480,7 @@ def _check_workflow_policy(repo: Path) -> None:
         allowed_keys=AUTO_TAG_JOB_ALLOWED_KEYS,
         if_value=AUTO_TAG_JOB_CONDITION,
     )
-    if auto_job.get("runs-on") != "ubuntu-latest" or auto_job.get("timeout-minutes") != 30:
+    if auto_job.get("runs-on") != "ubuntu-24.04" or auto_job.get("timeout-minutes") != 30:
         raise ReleaseGateError("auto-tag job must keep its approved runner and timeout")
     _require_permissions(auto_job.get("permissions"), AUTO_TAG_PERMISSIONS, "auto-tag verify-and-tag job")
     if any(
@@ -1635,15 +1635,15 @@ def _check_workflow_policy(repo: Path) -> None:
         "publish",
     }:
         raise ReleaseGateError("publish must contain exactly build-and-gate, verify-artifact, and publish jobs")
-    for name, allowed_keys, timeout in (
-        ("build-and-gate", PUBLISH_BUILD_JOB_ALLOWED_KEYS, 45),
-        ("verify-artifact", PUBLISH_VERIFY_JOB_ALLOWED_KEYS, 15),
+    for name, allowed_keys, timeout, runner in (
+        ("build-and-gate", PUBLISH_BUILD_JOB_ALLOWED_KEYS, 45, "ubuntu-24.04"),
+        ("verify-artifact", PUBLISH_VERIFY_JOB_ALLOWED_KEYS, 15, "ubuntu-latest"),
     ):
         job = publish_jobs[name]
         if not isinstance(job, dict):
             raise ReleaseGateError(f"publish {name} job is malformed")
         _require_job_envelope(job, f"publish {name} job", allowed_keys=allowed_keys)
-        if job.get("runs-on") != "ubuntu-latest" or job.get("timeout-minutes") != timeout:
+        if job.get("runs-on") != runner or job.get("timeout-minutes") != timeout:
             raise ReleaseGateError(f"publish {name} job must keep its approved runner and timeout")
         _require_permissions(job.get("permissions"), PUBLISH_BUILD_PERMISSIONS, f"publish {name} job")
         if "secrets." in json.dumps(job):
