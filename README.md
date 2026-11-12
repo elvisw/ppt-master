@@ -13,10 +13,6 @@
 
 English | [中文](./README_CN.md)
 
-> 💼 **I'm open to new opportunities.** Investment background (CPA · CPV · Consulting Engineer), also building AI tools and open source. Happy to talk about any opportunity: [heyug3@gmail.com](mailto:heyug3@gmail.com) · [hehugo.com](https://www.hehugo.com/).
-
-> 🆕 **I built a construction project economic evaluation site: [cs.hehugo.com](https://cs.hehugo.com/)** (in Chinese) — the wind, solar and storage templates are now open to everyone; just register and use them (a comparable module in one commercial package sells for ¥100,000).
-
 > **Fork notice**: This repository is a fork of [hugohe3/ppt-master](https://github.com/hugohe3/ppt-master), maintained by [elvisw](https://github.com/elvisw). The fork replaces the upstream clone + `pip install` + `python3` script-call setup with a unified `uvx ppt-master <command>` CLI (70+ subcommands) published on PyPI — your AI agent runs it for you. Apart from installation, using the tool is the same as the original project: describe what you want in natural language, and follow the Quick Start below. The sponsor and donation information below belongs to the original author (Hugo He) and benefits the original project, not this fork.
 >
 > **Fork install path (recommended for this fork)**: the only part that differs from upstream is installation — no clone, no `pip install`, no manual commands.
@@ -30,6 +26,12 @@ English | [中文](./README_CN.md)
 > 2. Done — no further setup. Open any agent-capable AI tool (see "Pick an Agent" below) and describe what you want in plain language. The agent handles every command, dependency, and template; you never type `uvx` yourself.
 >
 > The `uvx` wheel bundles the skill, scripts, and templates (including the icon library); dependencies resolve automatically. The `uvx` runner needs [uv](https://docs.astral.sh/uv/) on your machine — if your agent reports it's missing, just ask it to install uv. The Git-clone / ZIP / marketplace paths below are the upstream install paths and remain fully supported.
+
+**Updates from the original author (Hugo He)**
+
+> 💼 **I'm open to new opportunities.** Investment background (CPA · CPV · Consulting Engineer), also building AI tools and open source. Happy to talk about any opportunity: [heyug3@gmail.com](mailto:heyug3@gmail.com) · [hehugo.com](https://www.hehugo.com/).
+
+> 🆕 **I built a construction project economic evaluation site: [cs.hehugo.com](https://cs.hehugo.com/)** (in Chinese) — the wind, solar and storage templates are now open to everyone; just register and use them (a comparable module in one commercial package sells for ¥100,000).
 
 ## ❤️ Sponsors
 
