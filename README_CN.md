@@ -13,10 +13,6 @@
 
 [English](./README.md) | 中文
 
-> 💼 **我正在寻找新的发展机会。** 投融资背景（CPA · CPV · 咨询工程师），也做 AI 工具与开源产品，各类机会都欢迎交流：[heyug3@gmail.com](mailto:heyug3@gmail.com)，更多见 [hehugo.com](https://www.hehugo.com/)。
-
-> 🆕 **我做了一个建设项目经济评价网站：[cs.hehugo.com](https://cs.hehugo.com/)**——风光储模板现已向所有用户开放，注册即可使用（某商业软件同类模块售价 10 万元）。
-
 > **Fork 声明**：本仓库是 [hugohe3/ppt-master](https://github.com/hugohe3/ppt-master) 的 fork，由 [elvisw](https://github.com/elvisw) 维护。本 fork 把上游「clone 仓库 + `pip install` + `python3` 调用脚本」的安装方式替换为发布到 PyPI 的统一 `uvx ppt-master <command>` CLI（70+ 子命令），由你的 AI agent 代为运行。除安装方式外，使用方法与原项目相同：用自然语言描述需求，按下方「快速开始」操作即可。下方赞助商与捐赠信息属于原作者（Hugo He），收益归原项目所有，与本 fork 无关。
 >
 > **Fork 安装方式（本 fork 推荐）**：与原版唯一的区别就是安装这一步——无需 clone、无需 `pip install`、无需手动执行命令。
@@ -30,6 +26,12 @@
 > 2. 装完即可使用，无需其他配置。打开任意具备 agent 能力的 AI 工具（见下方「选择一个 Agent」），用自然语言描述你的需求——命令、依赖、模板都由 agent 自动处理，你无需亲手敲任何 `uvx` 命令。
 >
 > `uvx` wheel 已内置 skill、脚本与模板（含图标库），依赖自动解析。`uvx` 运行器需要你机器上装有 [uv](https://docs.astral.sh/uv/)——若 agent 提示缺少 uv，让它帮你安装即可。下方的 Git clone / ZIP / marketplace 安装路径为上游安装方式，仍然完全可用。
+
+**原作者动态（Hugo He）**
+
+> 💼 **我正在寻找新的发展机会。** 投融资背景（CPA · CPV · 咨询工程师），也做 AI 工具与开源产品，各类机会都欢迎交流：[heyug3@gmail.com](mailto:heyug3@gmail.com)，更多见 [hehugo.com](https://www.hehugo.com/)。
+
+> 🆕 **我做了一个建设项目经济评价网站：[cs.hehugo.com](https://cs.hehugo.com/)**——风光储模板现已向所有用户开放，注册即可使用（某商业软件同类模块售价 10 万元）。
 
 ## ❤️ 赞助
 
