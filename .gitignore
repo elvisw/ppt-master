@@ -197,3 +197,5 @@ skills/ppt-master/templates/layouts/*/exports/
 
 .codegraph/
 .cortexkit/
+# Personal template library (preserved across repository updates)
+/skills/ppt-master/templates/local/
