@@ -586,6 +586,9 @@ Step 2 成功或进入已拥有的冲突解决状态才允许进入本步；非�
 停止，外来 merge 状态已经保留现场并停止，禁止手动解冲突后继续这些失败运行。成功后，核心原则是保留 fork 的 uvx 适配，合入上游的新功能。
 Python 文件按 hunk 和契约审查，不按整文件 allowlist 审查。保留下方清单中的 fork
 标记和必要 import，并合入其他上游功能与安全修复；用对应的聚焦测试验证行为。
+上游新增或修改的测试文件（`skills/ppt-master/scripts/tests/**`）必须与 target 逐字节
+一致：测试因 fork 适配失败时，在 fork 代码中补兼容（例如 `update_repo.py` 同时接受
+上游 `--skip-pip` 别名），禁止改写上游测试来迁就 fork。
 
 本步若需要启动独立 shell 代码块，不能引用前一代码块的普通变量。每个代码块都必须
 用 `git rev-parse --git-path ppt-master-sync` 重新取得状态目录及其状态文件，再读取并
@@ -619,7 +622,7 @@ Python 文件按 hunk 和契约审查，不按整文件 allowlist 审查。保�
 | `docs/roadmap.md` / `docs/zh/roadmap.md` | 接受上游内容后，uv 段落末尾重新插入 fork 注记（`> **Fork note**` / `> **Fork 注记**） |
 | `CONTRIBUTING.md` | 接受上游内容后，Setup 代码块后重新插入 fork 注记（`> **Fork note**`） |
 | `pyproject.toml` 依赖变更 | 手动审查，同步到两个 `pyproject.toml` |
-| `update_repo.py` | 保留 fork 的 uv 功能（`ensure_uv_available`、`uv sync`、`--skip-deps`），合入上游新功能 |
+| `update_repo.py` | 保留 fork 的 uv 功能（`ensure_uv_available`、`uv sync`、`--skip-deps`），同时保留上游 `--skip-pip` 兼容别名（上游测试与 fork 文档均使用），合入上游新功能 |
 | `generate_examples_index.py` | 确保内部字符串已替换为 `uvx` |
 | `attribution_guard.py` 冲突 | **保留 fork 的 `_SKILL_GATE_MARKER`（uvx 形式）**，合入上游其他改动；合并后必须运行 guard 验证（见 Step 4e 门禁 3） |
 

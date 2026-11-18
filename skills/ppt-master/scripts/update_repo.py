@@ -67,8 +67,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--skip-deps",
+        "--skip-pip",
+        dest="skip_deps",
         action="store_true",
-        help="Skip Python dependency sync even if the requirements include tree changed.",
+        help=(
+            "Skip Python dependency sync even if the requirements include tree "
+            "changed (--skip-pip is the upstream-compatible alias)."
+        ),
     )
     return parser.parse_args(argv)
 
