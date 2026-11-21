@@ -1609,7 +1609,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         child_env = os.environ.copy()
         child_env['PPT_MASTER_LAUNCH_TOKEN'] = launch_token
         try:
-            with log_path.open('a', encoding='utf-8') as log:
+            log = log_path.open('a', encoding='utf-8')
+        except OSError as exc:
+            logger.error('cannot write live preview log: %s (%s)', log_path, exc)
+            return 1
+        with log:
+            try:
                 proc = _popen_detached(
                     cmd,
                     stdout=log,
@@ -1618,9 +1623,9 @@ def main(argv: Optional[list[str]] = None) -> int:
                     env=child_env,
                     logger=logger,
                 )
-        except OSError as exc:
-            logger.error('cannot write live preview log: %s (%s)', log_path, exc)
-            return 1
+            except OSError as exc:
+                logger.error('failed to start live preview process: %s', exc)
+                return 1
         url = _server_url(port)
         server_pid = _wait_for_ready(
             port, proc, project_path, launch_token=launch_token
